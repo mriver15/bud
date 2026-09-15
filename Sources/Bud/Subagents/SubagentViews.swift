@@ -115,7 +115,7 @@ public struct SubagentPanel: View {
         HStack(spacing: Bud.Space.sm) {
             StateDot(color: color(for: run.state), pulsing: run.state == .running)
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: Bud.Space.xs) {
                 Text(run.title)
                     .font(Bud.Font.body)
                     .lineLimit(1)
@@ -142,7 +142,7 @@ public struct SubagentPanel: View {
             Spacer(minLength: 0)
 
             Image(systemName: "chevron.right")
-                .font(.system(size: 9, weight: .bold))
+                .font(Bud.Font.micro.weight(.bold))
                 .foregroundStyle(.tertiary)
                 .rotationEffect(.degrees(isExpanded ? 90 : 0))
         }
@@ -175,7 +175,7 @@ public struct SubagentPanel: View {
             if !run.reasoning.isEmpty {
                 DisclosureGroup {
                     Text(run.reasoning)
-                        .font(.system(size: 11.5))
+                        .font(Bud.Font.caption.weight(.regular))
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -215,9 +215,9 @@ public struct SubagentPanel: View {
         _ label: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: Bud.Space.xs) {
             Text(label.uppercased())
-                .font(.system(size: 9, weight: .bold))
+                .font(Bud.Font.micro.weight(.bold))
                 .tracking(0.6)
                 .foregroundStyle(.tertiary)
             content()

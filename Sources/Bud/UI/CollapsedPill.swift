@@ -44,7 +44,7 @@ struct CollapsedPill: View {
                 .shadow(color: .black.opacity(0.32), radius: 10, y: 3)
 
             Image(systemName: "sparkle")
-                .font(.system(size: 19, weight: .semibold))
+                .font(Bud.Font.hero)
                 .foregroundStyle(.white)
 
             if model.isStreaming {
@@ -101,7 +101,7 @@ private struct StreamingRing: View {
                     style: StrokeStyle(lineWidth: 2, lineCap: .round)
                 )
                 .rotationEffect(.degrees((turns - turns.rounded(.down)) * 360))
-                .padding(3)
+                .padding(Bud.Space.xs)
         }
         .allowsHitTesting(false)
     }

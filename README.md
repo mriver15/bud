@@ -242,6 +242,34 @@ To capture real pixels, grant Screen Recording to your terminal and use
 `screencapture -x out.png` — note that on macOS 26 `-l<windowid>` and `-R<x,y,w,h>`
 were both unreliable here, so capture the full screen and crop.
 
+### Design system
+
+Every gap and every type size comes from a constrained scale in
+`Sources/Bud/UI/GlassKit.swift`. A value off the scale is a bug: arbitrary
+numbers are what make a dense interface feel subtly unaligned, even when no
+single element looks wrong.
+
+| | |
+|---|---|
+| `Bud.Space` | `hairline` 2 · `xs` 4 · `snug` 6 · `sm` 8 · `md` 12 · `lg` 16 · `xl` 24 |
+| `Bud.Font` | `hero` 20 · `title` 15 · `body` 13 · `callout` 12 · `caption` 11 · `micro` 10 · `mono` 12 · `metric` 26 |
+
+Three rules follow from how the platform works, not from taste:
+
+- **Glass is for the navigation layer, never content.** Toolbars, floating
+  controls and the collapsed bubble use `.glassEffect`; message bubbles, cards,
+  list rows and tables use a material fill. Apple's guidance is explicit that
+  Liquid Glass floats *above* content — a chat bubble is content. Putting glass
+  on it also makes the transcript shimmer as the desktop moves behind the panel.
+- **Never stack glass on glass**, and group neighbouring glass controls in a
+  `GlassEffectContainer` so they share one sampling region.
+- **Tint only the primary action.** When everything is tinted, nothing stands out.
+
+The header is responsive through `ViewThatFits` rather than a measured
+threshold: it shows the full row, then drops the status words, then drops the tab
+labels, taking the first variant that fits. No magic number, and no state that
+can be one layout pass stale.
+
 ### Working without Xcode
 
 This project builds with the Command Line Tools alone. That has one consequence

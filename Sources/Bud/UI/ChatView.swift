@@ -188,7 +188,7 @@ private struct StarterPromptButton: View {
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(.tertiary)
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, Bud.Space.md)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {

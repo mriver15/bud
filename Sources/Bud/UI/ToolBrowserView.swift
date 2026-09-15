@@ -71,7 +71,7 @@ public struct ToolBrowserView: View {
 
             HStack(spacing: Bud.Space.xs) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(Bud.Font.caption.weight(.semibold))
                     .foregroundStyle(.tertiary)
                 TextField("Filter by name or description", text: $query)
                     .textFieldStyle(.plain)
@@ -81,14 +81,14 @@ public struct ToolBrowserView: View {
                         query = ""
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 11))
+                            .font(Bud.Font.caption.weight(.regular))
                             .foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, Bud.Space.sm)
-            .padding(.vertical, 6)
+            .padding(.vertical, Bud.Space.snug)
             .background {
                 RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)
                     .fill(.ultraThinMaterial)
@@ -195,11 +195,11 @@ private struct ToolRow: View {
                 Button(action: toggle) {
                     HStack(alignment: .top, spacing: Bud.Space.sm) {
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 9, weight: .bold))
+                            .font(Bud.Font.micro.weight(.bold))
                             .foregroundStyle(.secondary)
                             .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                            .padding(.top, 3)
-                        VStack(alignment: .leading, spacing: 3) {
+                            .padding(.top, Bud.Space.xs)
+                        VStack(alignment: .leading, spacing: Bud.Space.xs) {
                             Text(tool.name)
                                 .font(Bud.Font.mono)
                                 .foregroundStyle(.primary)

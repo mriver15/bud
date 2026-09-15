@@ -111,7 +111,7 @@ public struct MCPSettingsView: View {
                     )
                 }
             }
-            .padding(.vertical, 2)
+            .padding(.vertical, Bud.Space.hairline)
         }
     }
 
@@ -205,7 +205,7 @@ private struct ServerRow: View {
     }
 
     private var stateLine: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: Bud.Space.hairline) {
             HStack(spacing: Bud.Space.sm) {
                 Text(state.label)
                     .font(Bud.Font.caption)
@@ -251,11 +251,11 @@ private struct ServerRow: View {
             rowButton("Delete", symbol: "trash", tint: Bud.Palette.danger, action: onDelete)
             Spacer(minLength: 0)
             Button(action: toggleDiagnostics) {
-                HStack(spacing: 4) {
+                HStack(spacing: Bud.Space.xs) {
                     Text(isExpanded ? "Hide log" : "Log")
                         .font(Bud.Font.caption)
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 8, weight: .bold))
+                        .font(Bud.Font.micro.weight(.bold))
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 }
                 .contentShape(Rectangle())
@@ -272,8 +272,8 @@ private struct ServerRow: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
+            HStack(spacing: Bud.Space.xs) {
+                Image(systemName: symbol).font(Bud.Font.micro.weight(.semibold))
                 Text(title).font(Bud.Font.caption)
             }
             .contentShape(Rectangle())

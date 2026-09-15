@@ -14,20 +14,47 @@ public enum Bud {
         public static let control: CGFloat = 12
     }
 
+    /// A constrained scale, not a set of suggestions. Every gap in the app comes
+    /// from here; a value off this list is a bug, because an arbitrary number is
+    /// what makes a dense interface feel subtly unaligned.
+    ///
+    /// The steps are uneven on purpose — a 4pt rhythm where elements are close
+    /// enough to be compared, and larger jumps where the eye should read a break.
     public enum Space {
+        /// Between a glyph and the word it labels. Anything larger and the two
+        /// stop reading as one object.
+        public static let hairline: CGFloat = 2
         public static let xs: CGFloat = 4
+        /// Inside a control: chips in a row, rows in a tight list.
+        public static let snug: CGFloat = 6
         public static let sm: CGFloat = 8
+        /// Between groups that belong to the same block.
         public static let md: CGFloat = 12
         public static let lg: CGFloat = 16
+        /// Between blocks that should read as separate.
         public static let xl: CGFloat = 24
     }
 
+    /// The type scale. Every size is a whole point; half-point sizes are how a
+    /// hierarchy quietly drifts, because nothing on screen appears to change but
+    /// the rhythm stops being exact.
+    ///
+    /// The roles below are what call sites should ask for. Sizes are deliberately
+    /// close together — this is a 460pt panel, where a 2pt step is a real step.
     public enum Font {
+        /// A hero figure or greeting: the one thing on screen.
+        public static let hero = SwiftUI.Font.system(size: 20, weight: .semibold)
+        /// Section and card titles.
         public static let title = SwiftUI.Font.system(size: 15, weight: .semibold)
-        public static let body = SwiftUI.Font.system(size: 13.5)
-        public static let callout = SwiftUI.Font.system(size: 12.5)
+        /// Prose the user reads.
+        public static let body = SwiftUI.Font.system(size: 13)
+        public static let callout = SwiftUI.Font.system(size: 12)
+        /// Labels and metadata.
         public static let caption = SwiftUI.Font.system(size: 11, weight: .medium)
+        /// The smallest step, for text that is present but not being read.
+        public static let micro = SwiftUI.Font.system(size: 10, weight: .medium)
         public static let mono = SwiftUI.Font.system(size: 12, design: .monospaced)
+        /// Numerals that carry a figure — metrics, counts.
         public static let metric = SwiftUI.Font.system(size: 26, weight: .semibold, design: .rounded)
     }
 
@@ -165,7 +192,7 @@ public struct GlassChip: View {
         }
         .foregroundStyle(tint ?? (isActive ? .primary : .secondary))
         .padding(.horizontal, 8)
-        .padding(.vertical, 3)
+        .padding(.vertical, Bud.Space.xs)
         .background {
             Capsule(style: .continuous)
                 .fill((tint ?? Bud.Palette.accent).opacity(isActive ? 0.20 : 0.10))
@@ -303,8 +330,13 @@ public struct EmptyStateView: View {
         VStack(spacing: Bud.Space.sm) {
             Image(systemName: systemImage)
                 .font(.system(size: 26, weight: .light))
-                .foregroundStyle(.tertiary)
-            Text(title).font(Bud.Font.title).foregroundStyle(.secondary)
+                .foregroundStyle(Bud.Palette.accent.opacity(0.85))
+            // Title and body were both `.secondary`, so the block had no anchor —
+            // two greys of different sizes read as two paragraphs rather than a
+            // statement and its explanation.
+            Text(title)
+                .font(Bud.Font.hero)
+                .foregroundStyle(.primary)
             Text(message)
                 // Secondary rather than tertiary: the panel is glass over an
                 // arbitrary desktop, so the effective contrast varies and this

@@ -52,9 +52,9 @@ private struct TitleHeader: View {
     let title: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Bud.Space.snug) {
             Text(title)
-                .font(.system(size: 15, weight: .semibold))
+                .font(Bud.Font.title)
                 .foregroundStyle(.primary)
                 .textSelection(.enabled)
             Rectangle()
@@ -72,9 +72,9 @@ private struct SpecDiagnosticCard: View {
     var body: some View {
         GlassCard(tint: Bud.Palette.danger) {
             VStack(alignment: .leading, spacing: Bud.Space.sm) {
-                HStack(spacing: 6) {
+                HStack(spacing: Bud.Space.snug) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(Bud.Font.caption.weight(.semibold))
                         .foregroundStyle(Bud.Palette.warning)
                     Text("Interface spec could not be parsed")
                         .font(Bud.Font.title)
@@ -156,9 +156,9 @@ private struct TextComponent: View {
     var body: some View {
         switch style {
         case .title:
-            Text(value).font(.system(size: 15, weight: .semibold)).textSelection(.enabled)
+            Text(value).font(Bud.Font.title).textSelection(.enabled)
         case .heading:
-            Text(value).font(.system(size: 13.5, weight: .semibold)).textSelection(.enabled)
+            Text(value).font(Bud.Font.body.weight(.semibold)).textSelection(.enabled)
         case .body:
             Text(value).font(Bud.Font.body).textSelection(.enabled)
         case .caption:
@@ -203,7 +203,7 @@ private struct MetricCell: View {
     let metric: UIMetric
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
+        VStack(alignment: .leading, spacing: Bud.Space.hairline) {
             Text(metric.value)
                 .font(Bud.Font.metric)
                 .lineLimit(1)
@@ -228,9 +228,9 @@ private struct TrendBadge: View {
     let trend: UITrend
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: Bud.Space.hairline) {
             Image(systemName: trend.symbolName)
-                .font(.system(size: 8, weight: .bold))
+                .font(Bud.Font.micro.weight(.bold))
             Text(delta).font(Bud.Font.caption)
         }
         .foregroundStyle(trend.tint)
@@ -408,7 +408,7 @@ private struct CardComponent: View {
         GlassCard(padding: Bud.Space.md, tint: tintColor(tint)) {
             VStack(alignment: .leading, spacing: Bud.Space.sm) {
                 if title != nil || subtitle != nil {
-                    VStack(alignment: .leading, spacing: 1) {
+                    VStack(alignment: .leading, spacing: Bud.Space.hairline) {
                         if let title {
                             Text(title).font(Bud.Font.title).textSelection(.enabled)
                         }
@@ -456,12 +456,12 @@ private struct ListRow: View {
         HStack(alignment: .top, spacing: Bud.Space.sm) {
             if item.symbol != nil {
                 SymbolIcon(name: item.symbol)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(Bud.Font.caption)
                     .foregroundStyle(Bud.Palette.accent)
                     .frame(width: 14)
-                    .padding(.top, 2)
+                    .padding(.top, Bud.Space.hairline)
             }
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: Bud.Space.hairline) {
                 Text(item.title).font(Bud.Font.body).textSelection(.enabled)
                 if let subtitle = item.subtitle {
                     Text(subtitle).font(Bud.Font.caption).foregroundStyle(.secondary).textSelection(.enabled)
@@ -472,7 +472,7 @@ private struct ListRow: View {
                 GlassChip(badge, tint: Bud.Palette.accent, isActive: true)
             }
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, Bud.Space.snug)
     }
 }
 
@@ -494,7 +494,7 @@ private struct TableComponent: View {
                     cell(index < columns.count ? columns[index] : "", at: index, isHeader: true)
                 }
             }
-            .padding(.vertical, 5)
+            .padding(.vertical, Bud.Space.snug)
             Rectangle().fill(Color.white.opacity(0.10)).frame(height: 1)
             ForEach(rows.indices, id: \.self) { rowIndex in
                 HStack(alignment: .top, spacing: Bud.Space.sm) {
@@ -502,7 +502,7 @@ private struct TableComponent: View {
                         cell(cellText(rowIndex, index), at: index, isHeader: false)
                     }
                 }
-                .padding(.vertical, 5)
+                .padding(.vertical, Bud.Space.snug)
                 if rowIndex < rows.count - 1 {
                     Rectangle().fill(Color.white.opacity(0.05)).frame(height: 1)
                 }
@@ -663,7 +663,7 @@ private struct ChartComponent: View {
         for (index, point) in series.enumerated() {
             let label = context.resolve(
                 Text(point.label)
-                    .font(.system(size: 9))
+                    .font(Bud.Font.micro.weight(.regular))
                     .foregroundStyle(Color.white.opacity(0.55))
             )
             context.draw(label, at: CGPoint(x: anchors[index].x, y: plotHeight + 3), anchor: .top)
@@ -671,7 +671,7 @@ private struct ChartComponent: View {
             guard showValues else { continue }
             let value = context.resolve(
                 Text(formatted(point.value) + (unit ?? ""))
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(Bud.Font.micro.weight(.semibold))
                     .foregroundStyle(Color.white.opacity(0.75))
             )
             context.draw(value, at: CGPoint(x: anchors[index].x, y: max(anchors[index].y - 4, 0)), anchor: .bottom)
@@ -698,7 +698,7 @@ private struct ProgressComponent: View {
     let caption: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: Bud.Space.snug) {
             HStack(spacing: Bud.Space.sm) {
                 if let label {
                     Text(label).font(Bud.Font.callout).foregroundStyle(.secondary).lineLimit(1)
@@ -796,11 +796,11 @@ private struct CalloutComponent: View {
     var body: some View {
         HStack(alignment: .top, spacing: Bud.Space.sm) {
             Image(systemName: kind.symbolName)
-                .font(.system(size: 11, weight: .semibold))
+                .font(Bud.Font.caption.weight(.semibold))
                 .foregroundStyle(kind.tint)
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: Bud.Space.hairline) {
                 if let title {
-                    Text(title).font(.system(size: 13, weight: .semibold)).textSelection(.enabled)
+                    Text(title).font(Bud.Font.body.weight(.semibold)).textSelection(.enabled)
                 }
                 Text(value).font(Bud.Font.callout).foregroundStyle(.secondary).textSelection(.enabled)
             }
@@ -868,7 +868,7 @@ private struct ImageComponent: View {
     private var unavailable: some View {
         VStack(spacing: Bud.Space.xs) {
             Image(systemName: "photo")
-                .font(.system(size: 18, weight: .light))
+                .font(Bud.Font.hero.weight(.light))
                 .foregroundStyle(.tertiary)
             Text(altText)
                 .font(Bud.Font.caption)
@@ -908,7 +908,7 @@ private struct ButtonComponent: View {
     }
 
     private var labelView: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: Bud.Space.snug) {
             SymbolIcon(name: symbol)
             Text(label)
         }
@@ -1050,13 +1050,13 @@ private struct UnsupportedComponent: View {
     var body: some View {
         HStack(spacing: Bud.Space.xs) {
             Image(systemName: "questionmark.square.dashed")
-                .font(.system(size: 10, weight: .medium))
+                .font(Bud.Font.micro)
             Text("unsupported: \(type)")
                 .font(Bud.Font.caption)
         }
         .foregroundStyle(.tertiary)
         .padding(.horizontal, Bud.Space.sm)
-        .padding(.vertical, 5)
+        .padding(.vertical, Bud.Space.snug)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)

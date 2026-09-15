@@ -29,8 +29,8 @@ public struct SettingsView: View {
     // MARK: - Rail
 
     private var tabRail: some View {
-        GlassEffectContainer(spacing: 6) {
-            VStack(alignment: .leading, spacing: 6) {
+        GlassEffectContainer(spacing: Bud.Space.snug) {
+            VStack(alignment: .leading, spacing: Bud.Space.snug) {
                 ForEach(SettingsTab.allCases) { tab in
                     railButton(tab)
                 }
@@ -48,14 +48,14 @@ public struct SettingsView: View {
         } label: {
             HStack(spacing: Bud.Space.sm) {
                 Image(systemName: tab.symbol)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(Bud.Font.callout.weight(.medium))
                     .frame(width: 16)
                 Text(tab.label)
                     .font(Bud.Font.callout)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, Bud.Space.sm)
-            .padding(.vertical, 7)
+            .padding(.vertical, Bud.Space.sm)
             .contentShape(RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -158,14 +158,14 @@ private struct GeneralSettingsTab: View {
                     if !model.hasAPIKey {
                         HStack(spacing: Bud.Space.xs) {
                             Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.system(size: 10))
+                                .font(Bud.Font.micro.weight(.regular))
                                 .foregroundStyle(Bud.Palette.warning)
                             Text("No key yet — requests will fail with HTTP 401.")
                                 .font(Bud.Font.caption)
                                 .foregroundStyle(Bud.Palette.warning)
                         }
                     }
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: Bud.Space.hairline) {
                         provenanceRow("Resolved from", BudConfigLoader.configURL.path)
                         provenanceRow("DeepSeek key", environmentLine)
                         provenanceRow("oh-my-pi model", ompLine)
@@ -217,7 +217,7 @@ private struct GeneralSettingsTab: View {
                         .font(Bud.Font.caption)
                         .foregroundStyle(.tertiary)
                         .fixedSize(horizontal: false, vertical: true)
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: Bud.Space.hairline) {
                         provenanceRow(
                             "Glama key",
                             model.config.glamaAPIKey.isEmpty
@@ -315,7 +315,7 @@ private struct GeneralSettingsTab: View {
     private func probeLabel(_ message: String, symbol: String, color: Color) -> some View {
         HStack(alignment: .top, spacing: Bud.Space.xs) {
             Image(systemName: symbol)
-                .font(.system(size: 10, weight: .semibold))
+                .font(Bud.Font.micro.weight(.semibold))
                 .foregroundStyle(color)
             Text(message)
                 .font(Bud.Font.caption)
@@ -642,11 +642,11 @@ private struct AboutTab: View {
     private var masthead: some View {
         HStack(spacing: Bud.Space.md) {
             Image(systemName: "sparkles")
-                .font(.system(size: 26, weight: .light))
+                .font(Bud.Font.metric.weight(.light))
                 .foregroundStyle(Bud.Palette.accent)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: Bud.Space.hairline) {
                 Text("Bud")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(Bud.Font.hero)
                 Text("Version \(Self.version) · macOS \(ProcessInfo.processInfo.operatingSystemVersionString)")
                     .font(Bud.Font.caption)
                     .foregroundStyle(.secondary)
@@ -747,7 +747,7 @@ private struct AboutTab: View {
     }
 
     private func explainer(_ title: String, _ body: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: Bud.Space.hairline) {
             Text(title)
                 .font(Bud.Font.caption)
                 .foregroundStyle(Bud.Palette.accent)

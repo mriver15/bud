@@ -247,7 +247,7 @@ public struct ServerEditorView: View {
                     Image(systemName: bannerSymbol(status))
                         .foregroundStyle(bannerColor(status) ?? .secondary)
                 }
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: Bud.Space.hairline) {
                     Text(status?.state.label ?? "Connecting…")
                         .font(Bud.Font.callout)
                     if let error = status?.error, !error.isEmpty {
@@ -276,7 +276,7 @@ public struct ServerEditorView: View {
             if let message = validationMessage {
                 HStack(alignment: .top, spacing: Bud.Space.xs) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 10))
+                        .font(Bud.Font.micro.weight(.regular))
                         .foregroundStyle(Bud.Palette.warning)
                     Text(message)
                         .font(Bud.Font.caption)
@@ -606,7 +606,7 @@ private struct RowControls: View {
     let remove: () -> Void
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: Bud.Space.hairline) {
             if let move, let index {
                 iconButton("chevron.up", enabled: index > 0) { move(-1) }
                 iconButton("chevron.down", enabled: index < count - 1) { move(1) }
@@ -618,7 +618,7 @@ private struct RowControls: View {
     private func iconButton(_ symbol: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 10, weight: .semibold))
+                .font(Bud.Font.micro.weight(.semibold))
                 .frame(width: 20, height: 20)
                 .contentShape(Rectangle())
         }
