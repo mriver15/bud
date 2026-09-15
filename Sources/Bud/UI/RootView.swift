@@ -61,6 +61,7 @@ struct RootView: View {
         .padding(.horizontal, Bud.Space.md)
         .padding(.top, Bud.Space.md)
         .padding(.bottom, Bud.Space.sm)
+        .contentColumn()
     }
 
     /// Three groups, spaced so the grouping is unambiguous: identity, then the

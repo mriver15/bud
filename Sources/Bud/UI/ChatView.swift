@@ -179,19 +179,6 @@ public struct ChatView: View {
     }
 }
 
-/// Holds a row to the content measure and centres it in the panel.
-private struct ContentColumn: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-            .frame(maxWidth: Bud.contentMeasure, alignment: .leading)
-            .frame(maxWidth: .infinity)
-    }
-}
-
-extension View {
-    fileprivate func contentColumn() -> some View { modifier(ContentColumn()) }
-}
-
 // MARK: - Empty-state prompt
 
 private struct StarterPromptButton: View {

@@ -71,11 +71,30 @@ public enum Bud {
 
     /// How wide content is allowed to grow before it stops.
     ///
-    /// The panel is now wider than it is tall, so without a limit every line of
+    /// The panel is wider than it is tall, so without a limit every line of
     /// prose would run the full width of it and the eye loses its place on the
-    /// way back to the left margin. Wide surfaces — tables, generated UI — are
-    /// the reason the panel is this wide at all, and they set the ceiling.
+    /// way back to the left margin.
     public static let contentMeasure: CGFloat = 700
+}
+
+// MARK: - Content column
+
+/// Holds a row to the content measure and centres it in the panel.
+///
+/// Applied to the chrome as well as the content. The header used to run the full
+/// width at a 12pt inset while the transcript and composer sat in a centred
+/// 700pt column, so nothing in the panel shared a left edge with anything else —
+/// which reads as a margin that was forgotten rather than one that was chosen.
+struct ContentColumn: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: Bud.contentMeasure, alignment: .leading)
+            .frame(maxWidth: .infinity)
+    }
+}
+
+extension View {
+    func contentColumn() -> some View { modifier(ContentColumn()) }
 }
 
 // MARK: - Panel surface

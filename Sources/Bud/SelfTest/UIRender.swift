@@ -85,6 +85,11 @@ public enum UIRender {
                     }
                 }
                 .padding(Bud.Space.md)
+                // The same column the app puts these rows in. Rendered without
+                // it the harness showed a full-width transcript that the app
+                // never draws, which is worse than showing nothing.
+                .frame(maxWidth: Bud.contentMeasure, alignment: .leading)
+                .frame(maxWidth: .infinity)
             }
             .frame(width: Bud.panelWidth, height: Bud.panelHeight)
             .background(Color.black.opacity(0.30)),
