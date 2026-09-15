@@ -86,17 +86,12 @@ final class PanelController {
     private var dragOrigin: NSPoint?
 
     private static let frameAutosaveName = "BudFloatingPanel"
-    private static let collapsedKey = "bud.collapsed"
     private static let pillCornerKey = "bud.pillCorner"
     private static let pillDiameter: CGFloat = 56
     private static let pillInset: CGFloat = 18
 
     init(model: AppModel) {
         self.model = model
-        let defaults = UserDefaults.standard
-        if defaults.object(forKey: Self.collapsedKey) != nil {
-            isCollapsed = defaults.bool(forKey: Self.collapsedKey)
-        }
     }
 
     var isVisible: Bool {
@@ -125,7 +120,7 @@ final class PanelController {
         let size = NSSize(width: Bud.panelWidth, height: Bud.panelHeight)
         let panel = FloatingPanel(contentRect: NSRect(origin: .zero, size: size))
         panel.contentView = NSHostingView(rootView: RootView(model: model))
-        panel.onCancel = { [weak self] in self?.collapse() }
+        panel.onCancel = { [weak self] in self?.hide() }
         panel.setFrameAutosaveName(Self.frameAutosaveName)
         // `setFrameAutosaveName` gives no way to tell a restored frame from one
         // still sitting at the origin, so the restore is done explicitly and the
@@ -225,39 +220,46 @@ final class PanelController {
 
     func installHotKey() {
         guard hotKey == nil else { return }
-        // One shortcut for the whole cycle: hidden and collapsed both open, open
-        // collapses. Anything else would need the user to remember which shape
-        // Bud is currently in.
+        // One shortcut, one meaning: bring Bud up if it is not on screen, take it
+        // away if it is. The corner bubble is a deliberate choice made from the
+        // panel, so the summon shortcut can never land you in it.
         hotKey = GlobalHotKey.summon { [weak self] in
             self?.toggle()
         }
     }
 
     func toggle() {
-        if isCollapsed { expand() } else { collapse() }
+        if isVisible { hide() } else { show() }
     }
 
-    /// Shows Bud in whichever shape it was last left in.
+    /// Brings up the full panel.
+    ///
+    /// Always the panel, never the bubble: Bud starts hidden, so summoning it
+    /// should hand over the thing you can talk to rather than a 56pt circle you
+    /// then have to click a second time.
     func show() {
-        if isCollapsed {
-            makePillIfNeeded().orderFrontRegardless()
-        } else {
-            let panel = makePanelIfNeeded()
-            panel.makeKeyAndOrderFront(nil)
-            panel.orderFrontRegardless()
-        }
+        isCollapsed = false
+        let panel = makePanelIfNeeded()
+        pill?.orderOut(nil)
+        panel.makeKeyAndOrderFront(nil)
+        panel.orderFrontRegardless()
     }
 
+    /// Takes Bud off screen entirely. This is what Escape does, and what the
+    /// menu bar's Hide does — the resting state is now the menu bar, not a
+    /// window.
     func hide() {
         panel?.orderOut(nil)
         pill?.orderOut(nil)
     }
 
-    /// Collapses the full panel into the corner bubble.
+    /// Parks Bud in a screen corner as a bubble.
+    ///
+    /// Only ever reached from the panel's own collapse control. Nothing does this
+    /// on the user's behalf, because a window that puts itself back on screen
+    /// after being dismissed is the definition of intrusive.
     func collapse() {
-        guard !isCollapsed else { return }
         isCollapsed = true
-        UserDefaults.standard.set(true, forKey: Self.collapsedKey)
         let pill = makePillIfNeeded()
         panel?.orderOut(nil)
         pill.orderFrontRegardless()
@@ -266,17 +268,7 @@ final class PanelController {
     /// Restores the full panel and puts the caret in the composer, so a click on
     /// the bubble lands ready to type.
     func expand() {
-        guard isCollapsed else {
-            show()
-            model.focusComposer()
-            return
-        }
-        isCollapsed = false
-        UserDefaults.standard.set(false, forKey: Self.collapsedKey)
-        let panel = makePanelIfNeeded()
-        pill?.orderOut(nil)
-        panel.makeKeyAndOrderFront(nil)
-        panel.orderFrontRegardless()
+        show()
         model.focusComposer()
     }
 

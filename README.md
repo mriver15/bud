@@ -11,14 +11,17 @@ Built for macOS 26 with Swift 6 strict concurrency. No third-party packages.
 
 ## What it does
 
-**Floating glass panel, or a corner bubble.** An accessory app — no Dock icon.
-Summon it with `⌥⌘B` from anywhere, drag it by its header, and it stays on top
-across Spaces without stealing focus from whatever you were typing in.
+**Lives in the menu bar.** Bud is an accessory app with no Dock icon, and it puts
+**nothing on screen until you ask**. Launch it and you get a sparkle in the menu
+bar — no window, no corner bubble, nothing to dismiss. Summon the panel with
+`⌥⌘B`, from the menu bar, or with a `bud://` link; `Esc` or `⌥⌘B` puts it away
+again.
 
-When you are not reading it, Bud collapses to a small glass bubble parked in a
-screen corner — still visible, showing a spinning ring while it works, and one
-click from the composer. Drag the bubble to any corner and it snaps into place;
-the shape and corner are both remembered across launches.
+If you want it within reach while you work, the panel's collapse control parks it
+as a small glass bubble in a screen corner — showing a spinning ring while it
+streams, one click from the composer. Drag it to any corner and it snaps there.
+That state is only ever entered deliberately; nothing puts a window back on your
+screen after you have dismissed it.
 
 **Chat that shows its work.** Reasoning streams into a collapsed disclosure,
 tool calls appear as live rows with their arguments and results, and the answer
@@ -112,8 +115,9 @@ is picked up from the `:max` style suffix in your oh-my-pi config.
 
 | Action | How |
 |---|---|
-| Collapse to the corner bubble / expand | `⌥⌘B` |
-| Collapse to the bubble | `Esc` |
+| Show or hide the panel | `⌥⌘B` |
+| Put it away | `Esc` |
+| Park it in a corner as a bubble | The collapse control in the panel header |
 | Move the bubble to another corner | Drag it and release |
 | Send | `Enter` |
 | Newline | `Shift``Enter` |

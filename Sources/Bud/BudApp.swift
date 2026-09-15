@@ -70,6 +70,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = AppModel()
     private var panels: PanelController?
     private var toggleObserver: NSObjectProtocol?
+    private var hideObserver: NSObjectProtocol?
+    private var collapseObserver: NSObjectProtocol?
     private var isTerminating = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -80,7 +82,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let panels = PanelController(model: model)
         self.panels = panels
         panels.installHotKey()
-        panels.show()
+        // Deliberately no window at launch. Bud lives in the menu bar and puts
+        // nothing on screen until it is asked to — an assistant that reappears
+        // in the corner every time you log in is one you learn to resent.
+        // `⌥⌘B`, the menu bar, or a bud:// link bring it up.
 
         toggleObserver = NotificationCenter.default.addObserver(
             forName: .budTogglePanel,
@@ -88,6 +93,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.panels?.toggle() }
+        }
+
+        hideObserver = NotificationCenter.default.addObserver(
+            forName: .budHidePanel,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.panels?.hide() }
+        }
+
+        collapseObserver = NotificationCenter.default.addObserver(
+            forName: .budCollapsePanel,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.panels?.collapse() }
         }
 
         // `bud://` links arrive as Apple events. Handled here rather than through
