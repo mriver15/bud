@@ -118,22 +118,37 @@ models:
 | Anthropic Messages | Anthropic and gateways that resell Claude |
 | Google Generative AI | Gemini |
 
-Twenty-five are configured out of the box (DeepSeek, OpenAI, Anthropic, Gemini,
-OpenRouter, Groq, Mistral, xAI, Together, Cerebras, and the rest), plus Ollama,
-LM Studio and llama.cpp for local models. **Anything else works through the
-custom entry**, which needs nothing but a base URL and a key — that is the whole
-point of splitting the transport from the provider: a new OpenAI-compatible
-endpoint needs no code.
+Twenty-three hosted endpoints are configured out of the box (DeepSeek, OpenAI,
+Anthropic, Gemini, OpenRouter, Groq, Mistral, xAI, Together, Cerebras, and the
+rest — Bedrock counted twice, since AWS serves chat completions and Claude over
+different routes), plus Ollama, LM Studio and llama.cpp for local models.
+**Anything else works through the custom entry**, which needs nothing but a base
+URL and a key — that is the whole point of splitting the transport from the
+provider: a new OpenAI-compatible endpoint needs no code.
 
-Keys, base URL overrides and model choice are all stored **per provider**, so
-switching back and forth never asks you to re-enter anything, and never carries
-one vendor's model id to another. Keys resolve from stored config, then the
-environment, then your shell profile — the profile fallback is what makes a
-Finder launch work, since it inherits no shell environment.
+Keys, base URL overrides, model choice and region are all stored **per
+provider**, so switching back and forth never asks you to re-enter anything, and
+never carries one vendor's model id to another. Keys resolve from stored config,
+then the environment, then your shell profile — the profile fallback is what
+makes a Finder launch work, since it inherits no shell environment.
 
-Amazon Bedrock and Google Vertex are deliberately absent: both sign requests
-(SigV4 and OAuth) rather than taking a bearer token, which is a different problem
-from speaking a dialect.
+Amazon Bedrock is supported; Google Vertex is not, for different reasons.
+
+**Bedrock** is two entries, because AWS splits it. `Amazon Bedrock` speaks the
+OpenAI dialect on the `bedrock-runtime` endpoint, and `Amazon Bedrock (Claude)`
+speaks the Anthropic Messages dialect so Claude is reachable natively — AWS does
+not serve Claude over chat completions. Both take a Bedrock API key rather than
+AWS credentials, and both ask for a region, because the region is part of the
+host. Model IDs are cross-Region inference profiles, such as
+`us.openai.gpt-5.6-sol` or `us.anthropic.claude-sonnet-5`; which models speak
+chat completions at all is in [AWS's compatibility
+table](https://docs.aws.amazon.com/bedrock/latest/userguide/models-api-compatibility.html).
+
+**Vertex** is the one that genuinely does not fit. It accepts only Google Cloud
+credentials — an Application Default Credentials chain, or a service-account
+token that has to be exchanged and refreshed — and never a bearer key. That is an
+authentication problem rather than a dialect one, so it is a different feature
+from speaking a wire protocol.
 
 ---
 

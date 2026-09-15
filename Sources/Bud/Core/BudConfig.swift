@@ -29,6 +29,9 @@ public struct BudConfig: Sendable, Codable, Hashable {
     /// Per-provider base URL overrides. Required for the custom entry, and useful
     /// for routing a known provider through a proxy.
     public var providerBaseURLs: [String: String]
+    /// Per-provider region, for endpoints whose host names one. Empty means "use
+    /// the provider's default".
+    public var providerRegions: [String: String]
     /// Glama's API key, for browsing its MCP catalogue. Empty means "not
     /// configured", which the marketplace reports as a call to action.
     public var glamaAPIKey: String
@@ -66,6 +69,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         providerModels: [String: String] = [:],
         providerKeys: [String: String] = [:],
         providerBaseURLs: [String: String] = [:],
+        providerRegions: [String: String] = [:],
         glamaAPIKey: String = "",
         reasoningEffort: String? = nil,
         temperature: Double? = nil,
@@ -78,6 +82,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         self.providerModels = providerModels
         self.providerKeys = providerKeys
         self.providerBaseURLs = providerBaseURLs
+        self.providerRegions = providerRegions
         self.glamaAPIKey = glamaAPIKey
         self.reasoningEffort = reasoningEffort
         self.temperature = temperature
@@ -122,14 +127,24 @@ public struct BudConfig: Sendable, Codable, Hashable {
     }
 
     /// The base URL for the active provider: an override when one is set,
-    /// otherwise whatever the registry says.
+    /// otherwise the registry's endpoint resolved for the selected region.
     public var baseURL: String {
         get {
             let override = providerBaseURLs[provider]?.trimmingCharacters(in: .whitespacesAndNewlines)
             if let override, !override.isEmpty { return override }
-            return activeProvider.baseURL
+            return activeProvider.baseURL(region: region)
         }
         set { providerBaseURLs[provider] = newValue }
+    }
+
+    /// The region for the active provider. Empty means the provider's default.
+    ///
+    /// Stored per provider like the model and the key: moving between a Bedrock
+    /// endpoint in one region and a direct vendor in another should not reset
+    /// either one's settings.
+    public var region: String {
+        get { providerRegions[provider] ?? "" }
+        set { providerRegions[provider] = newValue }
     }
 
     /// Everything a backend needs for the current provider, with the key
@@ -137,7 +152,8 @@ public struct BudConfig: Sendable, Codable, Hashable {
     public var activeCredentials: ProviderCredentials {
         ProviderCredentials(
             apiKey: resolvedKey(for: activeProvider),
-            baseURL: providerBaseURLs[provider]
+            baseURL: providerBaseURLs[provider],
+            region: region
         )
     }
 
@@ -219,6 +235,7 @@ public enum BudConfigLoader {
         if let v = stored.providerModels { config.providerModels = v }
         if let v = stored.providerKeys { config.providerKeys = v }
         if let v = stored.providerBaseURLs { config.providerBaseURLs = v }
+        if let v = stored.providerRegions { config.providerRegions = v }
 
         // Migration from the single-provider shape. The key and URL used to
         // belong to DeepSeek implicitly, because DeepSeek was the only provider;
@@ -430,6 +447,7 @@ public enum BudConfigLoader {
         public var providerModels: [String: String]?
         public var providerKeys: [String: String]?
         public var providerBaseURLs: [String: String]?
+        public var providerRegions: [String: String]?
         public var glamaAPIKey: String?
         public var reasoningEffort: String?
         public var temperature: Double?
@@ -454,6 +472,7 @@ public enum BudConfigLoader {
             self.providerModels = config.providerModels
             self.providerKeys = config.providerKeys
             self.providerBaseURLs = config.providerBaseURLs
+            self.providerRegions = config.providerRegions
             self.glamaAPIKey = config.glamaAPIKey
             self.reasoningEffort = config.reasoningEffort
             self.temperature = config.temperature
@@ -469,6 +488,7 @@ public enum BudConfigLoader {
             providerModels: [String: String]? = nil,
             providerKeys: [String: String]? = nil,
             providerBaseURLs: [String: String]? = nil,
+            providerRegions: [String: String]? = nil,
             glamaAPIKey: String? = nil,
             reasoningEffort: String? = nil,
             temperature: Double? = nil,
@@ -484,6 +504,7 @@ public enum BudConfigLoader {
             self.providerModels = providerModels
             self.providerKeys = providerKeys
             self.providerBaseURLs = providerBaseURLs
+            self.providerRegions = providerRegions
             self.glamaAPIKey = glamaAPIKey
             self.reasoningEffort = reasoningEffort
             self.temperature = temperature

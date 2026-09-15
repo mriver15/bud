@@ -154,6 +154,21 @@ private struct GeneralSettingsTab: View {
                     }
                     .labelsHidden()
 
+                    if model.config.activeProvider.regions.count > 1 {
+                        HStack(spacing: Bud.Space.sm) {
+                            Text("Region")
+                                .font(Bud.Font.caption)
+                                .foregroundStyle(.secondary)
+                            Picker("Region", selection: regionBinding) {
+                                ForEach(model.config.activeProvider.regions, id: \.self) { region in
+                                    Text(region).tag(region)
+                                }
+                            }
+                            .labelsHidden()
+                            Spacer(minLength: 0)
+                        }
+                    }
+
                     HStack(spacing: Bud.Space.sm) {
                         GlassChip(
                             model.config.activeProvider.wireFormat.label,
@@ -192,6 +207,24 @@ private struct GeneralSettingsTab: View {
                 // The model is stored per provider, so switching lands on that
                 // provider's own last choice — or its suggested default — rather
                 // than carrying a model id the new API has never heard of.
+                model.persistConfig()
+            }
+        )
+    }
+
+    /// The region, defaulting to the provider's first so the popup never shows
+    /// blank. Storing the default explicitly would be harmless but noise: an
+    /// empty region already resolves to the same endpoint.
+    private var regionBinding: Binding<String> {
+        Binding(
+            get: {
+                let stored = model.config.region
+                if !stored.isEmpty { return stored }
+                return model.config.activeProvider.regions.first ?? ""
+            },
+            set: { newValue in
+                guard newValue != model.config.region else { return }
+                model.config.region = newValue
                 model.persistConfig()
             }
         )
@@ -371,9 +404,9 @@ private struct GeneralSettingsTab: View {
             GlassCard {
                 VStack(alignment: .leading, spacing: Bud.Space.sm) {
                     TextField(
-                        model.config.activeProvider.baseURL.isEmpty
+                        model.config.baseURL.isEmpty
                             ? "https://your-endpoint/v1"
-                            : model.config.activeProvider.baseURL,
+                            : model.config.baseURL,
                         text: baseURLBinding
                     )
                     .textFieldStyle(.roundedBorder)

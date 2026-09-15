@@ -46,6 +46,16 @@ public struct ProviderDescriptor: Sendable, Hashable, Identifiable {
     public var defaultModel: String?
     /// Shown in Settings, for anything a user should know before configuring it.
     public var note: String?
+    /// Template for an endpoint whose *host* names a region, with `{region}` as
+    /// the placeholder.
+    ///
+    /// Bedrock puts the region in the host, so a single fixed base URL would
+    /// strand every user outside whichever region Bud happened to pick — and the
+    /// only remedy would be hand-editing a URL, which is exactly the friction the
+    /// provider list exists to remove.
+    public var regionTemplate: String?
+    /// Regions offered for a templated endpoint. The first is the default.
+    public var regions: [String]
 
     public init(
         id: String,
@@ -56,7 +66,9 @@ public struct ProviderDescriptor: Sendable, Hashable, Identifiable {
         docURL: String? = nil,
         requiresKey: Bool = true,
         defaultModel: String? = nil,
-        note: String? = nil
+        note: String? = nil,
+        regionTemplate: String? = nil,
+        regions: [String] = []
     ) {
         self.id = id
         self.name = name
@@ -67,6 +79,22 @@ public struct ProviderDescriptor: Sendable, Hashable, Identifiable {
         self.requiresKey = requiresKey
         self.defaultModel = defaultModel
         self.note = note
+        self.regionTemplate = regionTemplate
+        self.regions = regions
+    }
+
+    /// The base URL for a given region.
+    ///
+    /// A stored region is honoured even when it is not in `regions`: the list is
+    /// a convenience, and clouds add regions faster than Bud ships builds.
+    /// Substituting a different region silently would send the request somewhere
+    /// the user never asked for, which is far worse than a DNS error naming the
+    /// host they did ask for.
+    public func baseURL(region: String?) -> String {
+        guard let template = regionTemplate else { return baseURL }
+        let stored = region?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let chosen = stored.isEmpty ? (regions.first ?? "") : stored
+        return template.replacingOccurrences(of: "{region}", with: chosen)
     }
 
     /// True for the entry that lets a user reach anything not listed here.
@@ -82,6 +110,18 @@ public struct ProviderDescriptor: Sendable, Hashable, Identifiable {
 /// which needs nothing but a base URL and a key.
 public enum ProviderRegistry {
     public static let customID = "custom"
+
+    /// Regions offered for the Bedrock endpoints.
+    ///
+    /// Not exhaustive, and deliberately not treated as authoritative: a region
+    /// already stored in a config is honoured even when it is missing here, so
+    /// this list only has to be a convenient starting set.
+    public static let bedrockRegions: [String] = [
+        "us-east-1", "us-east-2", "us-west-2", "ca-central-1",
+        "eu-west-1", "eu-west-2", "eu-central-1", "eu-north-1", "eu-south-1",
+        "ap-northeast-1", "ap-southeast-1", "ap-southeast-2", "ap-south-1",
+        "sa-east-1",
+    ]
 
     public static let all: [ProviderDescriptor] = [
         // MARK: OpenAI-compatible
@@ -191,6 +231,25 @@ public enum ProviderRegistry {
             id: "nanogpt", name: "NanoGPT", wireFormat: .openAICompatible,
             baseURL: "https://nano-gpt.com/api/v1", envKeys: ["NANO_GPT_API_KEY"],
             docURL: "https://docs.nano-gpt.com"
+        ),
+
+        ProviderDescriptor(
+            id: "bedrock", name: "Amazon Bedrock", wireFormat: .openAICompatible,
+            baseURL: "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1",
+            envKeys: ["AWS_BEARER_TOKEN_BEDROCK"],
+            docURL: "https://docs.aws.amazon.com/bedrock/latest/userguide/models-api-compatibility.html",
+            note: "Region-specific. Model IDs are cross-Region inference profiles such as `us.openai.gpt-5.6-sol`; which models speak chat completions at all is in AWS's API compatibility table.",
+            regionTemplate: "https://bedrock-runtime.{region}.amazonaws.com/openai/v1",
+            regions: bedrockRegions
+        ),
+        ProviderDescriptor(
+            id: "bedrock-claude", name: "Amazon Bedrock (Claude)", wireFormat: .anthropicMessages,
+            baseURL: "https://bedrock-runtime.us-east-1.amazonaws.com/anthropic",
+            envKeys: ["AWS_BEARER_TOKEN_BEDROCK"],
+            docURL: "https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html",
+            note: "Claude through Bedrock's native Messages route, authenticated with a Bedrock API key. Model IDs are inference profiles such as `us.anthropic.claude-sonnet-5`.",
+            regionTemplate: "https://bedrock-runtime.{region}.amazonaws.com/anthropic",
+            regions: bedrockRegions
         ),
 
         // MARK: Local runtimes

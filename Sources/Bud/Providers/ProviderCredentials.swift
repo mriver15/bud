@@ -13,22 +13,30 @@ public struct ProviderCredentials: Sendable, Hashable {
     /// Extra headers some gateways require (OpenRouter's attribution headers,
     /// for instance).
     public var extraHeaders: [String: String]
+    /// The region to build the endpoint from, for providers whose host names one.
+    ///
+    /// Carried here rather than read from config because a backend gets
+    /// credentials, not settings — and a backend that reached back into config
+    /// could not be tested against a second region.
+    public var region: String?
 
     public init(
         apiKey: String = "",
         baseURL: String? = nil,
-        extraHeaders: [String: String] = [:]
+        extraHeaders: [String: String] = [:],
+        region: String? = nil
     ) {
         self.apiKey = apiKey
         self.baseURL = baseURL
         self.extraHeaders = extraHeaders
+        self.region = region
     }
 
     /// The base URL to actually use: the override when present, otherwise the
-    /// provider's own.
+    /// provider's own, resolved for the selected region.
     public func resolvedBaseURL(for provider: ProviderDescriptor) -> String {
         let override = baseURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return override.isEmpty ? provider.baseURL : override
+        return override.isEmpty ? provider.baseURL(region: region) : override
     }
 }
 

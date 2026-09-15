@@ -936,6 +936,108 @@ public enum BudSelfTest {
             descriptor.baseURL
         )
 
+        // Regions are the one setting whose failure is silent and expensive: a
+        // templated endpoint with an unsubstituted or substituted-wrong region
+        // sends the request to a different continent, not to an error.
+        guard let bedrock = ProviderRegistry.provider(id: "bedrock"),
+              let bedrockClaude = ProviderRegistry.provider(id: "bedrock-claude") else {
+            c.check("bedrock is in the registry", false)
+            return c.report()
+        }
+        c.equal(
+            "bedrock defaults to us-east-1",
+            bedrock.baseURL(region: nil),
+            "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1"
+        )
+        c.equal(
+            "a chosen region is substituted into the host",
+            bedrock.baseURL(region: "eu-west-2"),
+            "https://bedrock-runtime.eu-west-2.amazonaws.com/openai/v1"
+        )
+        // Clouds add regions faster than Bud ships builds, so a region that is
+        // not in the offered list must still be honoured. Substituting the
+        // default instead would quietly bill the wrong region.
+        c.equal(
+            "an unlisted region is honoured rather than replaced",
+            bedrock.baseURL(region: "ap-east-1"),
+            "https://bedrock-runtime.ap-east-1.amazonaws.com/openai/v1"
+        )
+        c.equal(
+            "whitespace is not a region",
+            bedrock.baseURL(region: "   "),
+            bedrock.baseURL(region: nil)
+        )
+        c.equal(
+            "an untemplated provider ignores the region",
+            ProviderRegistry.provider(orFallback: "deepseek").baseURL(region: "eu-west-2"),
+            "https://api.deepseek.com/v1"
+        )
+
+        // The two Bedrock routes are only correct if the path Bud appends lands
+        // on the path AWS documents. These pin the contract, since neither can be
+        // exercised without AWS credentials.
+        c.equal(
+            "bedrock chat completions lands on the documented path",
+            bedrock.baseURL(region: "us-east-1") + "/chat/completions",
+            "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/chat/completions"
+        )
+        c.equal(
+            "bedrock Messages lands on the documented path",
+            bedrockClaude.baseURL(region: "us-east-1") + "/v1/messages",
+            "https://bedrock-runtime.us-east-1.amazonaws.com/anthropic/v1/messages"
+        )
+        c.equal(
+            "bedrock Messages is an Anthropic provider",
+            bedrockClaude.wireFormat,
+            .anthropicMessages
+        )
+        c.equal(
+            "both bedrock routes read the same key",
+            bedrock.envKeys,
+            bedrockClaude.envKeys
+        )
+
+        // The descriptor method is only correct if config actually routes through
+        // it — that is the path the settings pane and the backends take.
+        var regional = BudConfig()
+        regional.provider = "bedrock"
+        regional.providerRegions = ["bedrock": "eu-west-2"]
+        c.equal(
+            "config resolves the endpoint from the stored region",
+            regional.baseURL,
+            "https://bedrock-runtime.eu-west-2.amazonaws.com/openai/v1"
+        )
+        c.equal(
+            "credentials carry the region through to the backend",
+            regional.activeCredentials.resolvedBaseURL(for: bedrock),
+            "https://bedrock-runtime.eu-west-2.amazonaws.com/openai/v1"
+        )
+        regional.providerBaseURLs = ["bedrock": "https://proxy.internal/v1"]
+        c.equal(
+            "an explicit URL override still beats the region",
+            regional.baseURL,
+            "https://proxy.internal/v1"
+        )
+        c.equal(
+            "a provider with no region template keeps its fixed URL",
+            BudConfig().baseURL,
+            "https://api.deepseek.com/v1"
+        )
+
+        // A descriptor carries both a fixed URL and a template; if they disagree
+        // the settings pane and the request would show different endpoints.
+        for provider in ProviderRegistry.all where provider.regionTemplate != nil {
+            guard let first = provider.regions.first else {
+                c.check("\(provider.id) lists at least one region", false)
+                continue
+            }
+            c.equal(
+                "\(provider.id): the fixed URL matches the first region",
+                provider.baseURL,
+                provider.baseURL(region: first)
+            )
+        }
+
         // The whole point of the new shape is that it survives a save and a
         // reload. A projection that drops a field loses a credential silently and
         // only surfaces later as a 401, so this asserts the round trip directly.
@@ -943,6 +1045,7 @@ public enum BudSelfTest {
         saved.provider = "anthropic"
         saved.providerKeys = ["anthropic": "sk-a", "deepseek": "sk-d"]
         saved.providerBaseURLs = ["custom": "https://proxy.example/v1"]
+        saved.providerRegions = ["bedrock": "eu-west-2", "bedrock-claude": "ap-south-1"]
         saved.providerModels = ["anthropic": "claude-sonnet-4-6", "deepseek": "deepseek-v4-pro"]
         saved.glamaAPIKey = "glm-x"
         saved.reasoningEffort = "high"
@@ -959,6 +1062,7 @@ public enum BudSelfTest {
         c.equal("round trip: provider", restored.provider, "anthropic")
         c.equal("round trip: keys", restored.providerKeys, saved.providerKeys)
         c.equal("round trip: base URLs", restored.providerBaseURLs, saved.providerBaseURLs)
+        c.equal("round trip: regions", restored.providerRegions, saved.providerRegions)
         c.equal("round trip: models", restored.providerModels, saved.providerModels)
         c.equal("round trip: glama key", restored.glamaAPIKey, "glm-x")
         c.equal("round trip: active model", restored.model, "claude-sonnet-4-6")
