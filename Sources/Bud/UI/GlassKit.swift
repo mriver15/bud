@@ -66,8 +66,16 @@ public enum Bud {
         public static let reasoning = Color(red: 0.60, green: 0.58, blue: 0.98)
     }
 
-    public static let panelWidth: CGFloat = 460
-    public static let panelHeight: CGFloat = 660
+    public static let panelWidth: CGFloat = 880
+    public static let panelHeight: CGFloat = 560
+
+    /// How wide content is allowed to grow before it stops.
+    ///
+    /// The panel is now wider than it is tall, so without a limit every line of
+    /// prose would run the full width of it and the eye loses its place on the
+    /// way back to the left margin. Wide surfaces — tables, generated UI — are
+    /// the reason the panel is this wide at all, and they set the ceiling.
+    public static let contentMeasure: CGFloat = 700
 }
 
 // MARK: - Panel surface

@@ -86,6 +86,15 @@ final class PanelController {
     private var dragOrigin: NSPoint?
 
     private static let frameAutosaveName = "BudFloatingPanel"
+
+    /// Bumped whenever the panel's default shape changes.
+    ///
+    /// The saved frame is the user's, and normally deserves to win. But it was
+    /// saved against a different default, and someone who has opened Bud before
+    /// would otherwise never see the new one — their window would simply keep the
+    /// old proportions for ever.
+    private static let layoutVersion = 2
+    private static let layoutVersionKey = "BudPanelLayoutVersion"
     private static let pillCornerKey = "bud.pillCorner"
     private static let pillDiameter: CGFloat = 56
     private static let pillInset: CGFloat = 18
@@ -127,11 +136,29 @@ final class PanelController {
         // default placement only applies when there was genuinely nothing to
         // restore — or when what was restored is now off every screen, which
         // happens as soon as a display is unplugged.
-        let restored = panel.setFrameUsingName(Self.frameAutosaveName)
+        //
+        // A frame saved by an older layout describes a panel that no longer
+        // exists. Restoring it would pin the window to the old shape and make a
+        // changed default invisible to anyone who had ever opened the app before,
+        // which is exactly the person most likely to notice.
+        let shapeChanged = UserDefaults.standard.integer(forKey: Self.layoutVersionKey) != Self.layoutVersion
+        let restored = shapeChanged ? false : panel.setFrameUsingName(Self.frameAutosaveName)
+        // The size has to be set explicitly, not just left to the initial
+        // `contentRect`: `setFrameAutosaveName` above restores the saved frame on
+        // its own, so by this point the panel is already wearing the old shape
+        // and skipping the second restore does not undo it. `positionTopTrailing`
+        // only moves the window — it never resizes one.
+        if shapeChanged {
+            panel.setContentSize(size)
+        }
         if !restored || !isOnAnyScreen(panel.frame) {
             positionTopTrailing(panel, size: size)
         }
-        panel.minSize = NSSize(width: 380, height: 420)
+        if shapeChanged {
+            UserDefaults.standard.set(Self.layoutVersion, forKey: Self.layoutVersionKey)
+            panel.saveFrame(usingName: Self.frameAutosaveName)
+        }
+        panel.minSize = NSSize(width: 560, height: 380)
         self.panel = panel
         return panel
     }

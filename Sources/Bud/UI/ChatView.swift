@@ -27,18 +27,21 @@ public struct ChatView: View {
 
             if model.isStreaming {
                 statusStrip
+                    .contentColumn()
             }
 
             if let message = model.errorMessage, !message.isEmpty {
                 ErrorBanner(message: message) { model.errorMessage = nil }
                     .padding(.horizontal, Bud.Space.md)
                     .padding(.bottom, Bud.Space.xs)
+                    .contentColumn()
             }
 
             Composer(model: model)
                 .padding(.horizontal, Bud.Space.md)
                 .padding(.top, Bud.Space.xs)
                 .padding(.bottom, Bud.Space.md)
+                .contentColumn()
         }
     }
 
@@ -68,6 +71,11 @@ public struct ChatView: View {
                 }
                 .padding(.horizontal, Bud.Space.md)
                 .padding(.vertical, Bud.Space.md)
+                // The column is centred inside a full-width ScrollView rather
+                // than the ScrollView being narrowed, so the scroll bar stays at
+                // the panel edge instead of floating in the middle of it.
+                .frame(maxWidth: Bud.contentMeasure, alignment: .leading)
+                .frame(maxWidth: .infinity)
             }
             .scrollContentBackground(.hidden)
             .onScrollGeometryChange(for: Bool.self) { geometry in
@@ -144,7 +152,12 @@ public struct ChatView: View {
                     fills: false
                 )
 
-                VStack(spacing: 6) {
+                // Two up. Four stacked prompts do not fit the height of a
+                // landscape panel, and the extra width is otherwise unused.
+                LazyVGrid(
+                    columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)],
+                    spacing: 6
+                ) {
                     ForEach(Self.starterPrompts, id: \.self) { prompt in
                         StarterPromptButton(prompt: prompt) {
                             Task { await model.send(prompt) }
@@ -161,8 +174,22 @@ public struct ChatView: View {
 
             Spacer(minLength: Bud.Space.lg)
         }
+        .frame(maxWidth: Bud.contentMeasure)
         .frame(maxWidth: .infinity)
     }
+}
+
+/// Holds a row to the content measure and centres it in the panel.
+private struct ContentColumn: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: Bud.contentMeasure, alignment: .leading)
+            .frame(maxWidth: .infinity)
+    }
+}
+
+extension View {
+    fileprivate func contentColumn() -> some View { modifier(ContentColumn()) }
 }
 
 // MARK: - Empty-state prompt

@@ -8,6 +8,14 @@ import SwiftUI
 /// An offscreen `cacheDisplay` capture draws the view hierarchy through `drawRect`,
 /// so it reproduces layout, typography, spacing, colour and hierarchy faithfully.
 ///
+/// One surface does not capture at all: anything containing `Composer` comes out
+/// fully transparent, and the runner reports it as `BLANK`. Bisecting ruled out
+/// the obvious suspects — `EmptyStateView` captures, plain and `interactive()`
+/// glass both capture, and so do plain and self-focusing `TextField`s, so it is
+/// neither the material layer nor first-responder state. The cause is not
+/// isolated. The panel is captured from the live app with `screencapture`
+/// instead, which is a better test of it anyway.
+///
 /// What it cannot reproduce is compositor work: `CABackdropLayer` sampling the
 /// desktop, and therefore the Liquid Glass blur itself. Surfaces are drawn over a
 /// desktop-like backdrop so the glass tint and specular edge are still readable,
@@ -44,8 +52,8 @@ public enum UIRender {
             emit(
                 name,
                 TranscriptRow(turn: turn, model: model)
-                    .frame(width: Bud.panelWidth - 24),
-                width: Bud.panelWidth,
+                    .frame(width: Bud.contentMeasure - 24),
+                width: Bud.contentMeasure,
                 height: 360,
                 directory: directory,
                 into: &written
@@ -60,10 +68,10 @@ public enum UIRender {
         emit(
             "chat-empty",
             ChatView(model: model)
-                .frame(width: Bud.panelWidth, height: 620)
+                .frame(width: Bud.panelWidth, height: Bud.panelHeight)
                 .background(Color.black.opacity(0.30)),
             width: Bud.panelWidth,
-            height: 620,
+            height: Bud.panelHeight,
             directory: directory,
             into: &written
         )
@@ -78,10 +86,10 @@ public enum UIRender {
                 }
                 .padding(Bud.Space.md)
             }
-            .frame(width: Bud.panelWidth, height: 900)
+            .frame(width: Bud.panelWidth, height: Bud.panelHeight)
             .background(Color.black.opacity(0.30)),
             width: Bud.panelWidth,
-            height: 900,
+            height: Bud.panelHeight,
             directory: directory,
             into: &written
         )
@@ -380,3 +388,4 @@ public enum UIRender {
         ]
     }
 }
+
