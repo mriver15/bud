@@ -99,11 +99,13 @@ struct RootView: View {
 
                     // Collapsing is a first-class action, not a window control:
                     // the bubble is where Bud lives when it is not being read.
+                    // It is the only way into that state — Escape and the summon
+                    // shortcut both take Bud off screen instead.
                     GlassIconButton(
                         systemImage: "arrow.down.right.and.arrow.up.left",
-                        help: "Collapse to the corner (\(GlobalHotKey.summonShortcutLabel))"
+                        help: "Park in the corner"
                     ) {
-                        NotificationCenter.default.post(name: .budTogglePanel, object: nil)
+                        NotificationCenter.default.post(name: .budCollapsePanel, object: nil)
                     }
 
                     GlassIconButton(

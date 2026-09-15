@@ -52,11 +52,14 @@ struct MenuBarView: View {
     private var panelActions: some View {
         VStack(alignment: .leading, spacing: Bud.Space.hairline) {
             MenuActionRow(
-                symbol: "rectangle.compress.vertical",
-                title: "Collapse / Expand",
+                symbol: "macwindow",
+                title: "Open Bud",
                 shortcut: GlobalHotKey.summonShortcutLabel
             ) {
                 NotificationCenter.default.post(name: .budTogglePanel, object: nil)
+            }
+            MenuActionRow(symbol: "eye.slash", title: "Hide Bud") {
+                NotificationCenter.default.post(name: .budHidePanel, object: nil)
             }
             MenuActionRow(symbol: "square.and.pencil", title: "New chat") {
                 model.clearTranscript()
@@ -129,5 +132,11 @@ private struct MenuActionRow: View {
 }
 
 extension Notification.Name {
+    /// Show Bud if it is on screen, hide it if it is not.
     static let budTogglePanel = Notification.Name("bud.togglePanel")
+    /// Take Bud off screen.
+    static let budHidePanel = Notification.Name("bud.hidePanel")
+    /// Park Bud in a screen corner as the bubble. Only the panel's own collapse
+    /// control asks for this; nothing does it on the user's behalf.
+    static let budCollapsePanel = Notification.Name("bud.collapsePanel")
 }
