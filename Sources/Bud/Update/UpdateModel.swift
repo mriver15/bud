@@ -57,6 +57,17 @@ public final class UpdateModel {
     public private(set) var lastChecked: Date?
     public let currentVersion: BudVersion?
 
+    /// The feed the current `phase` came from.
+    ///
+    /// Kept so an install uses the same credential the check did. Rebuilding the
+    /// feed at install time would re-read settings that may have changed in
+    /// between, and a token that appeared after the check would not have been
+    /// used to fetch the manifest it is now authorising.
+    private var checkedFeed: UpdateFeed?
+    /// Where the archive is actually fetched from, when the feed needed an
+    /// authenticated route to reach it.
+    private var checkedDownloadURL: URL?
+
     /// Called to shut the app down once a relaunch helper is waiting for it.
     private let onQuit: (@MainActor () -> Void)?
 
@@ -94,12 +105,14 @@ public final class UpdateModel {
         }
 
         phase = .checking
+        checkedFeed = feed
         defer { lastChecked = Date() }
         do {
             switch try await UpdateChecker.check(feed: feed, current: current) {
             case .upToDate(let version):
                 phase = .upToDate(version)
-            case .available(let manifest):
+            case .available(let manifest, let downloadURL):
+                checkedDownloadURL = downloadURL
                 phase = .available(manifest)
             }
         } catch {
@@ -127,6 +140,8 @@ public final class UpdateModel {
             let staged = try await UpdateInstaller.stage(
                 manifest: manifest,
                 destination: destination,
+                token: checkedFeed?.token ?? "",
+                downloadURL: checkedDownloadURL,
                 progress: { [weak self] fraction in
                     Task { @MainActor in
                         guard let self, case .downloading = self.phase else { return }

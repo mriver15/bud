@@ -3,7 +3,13 @@ import Foundation
 /// What a check found.
 public enum UpdateCheckResult: Sendable {
     case upToDate(current: BudVersion)
-    case available(manifest: UpdateManifest)
+    /// - Parameter downloadURL: an authenticated route to the archive, when the
+    ///   signed URL cannot be fetched directly. A private repository's
+    ///   `browser_download_url` answers 404 to everyone, token or not — it is a
+    ///   URL for a browser session, not for an API client — so the bytes have to
+    ///   come from the asset API instead. The signed `url` and `sha256` still
+    ///   decide what is accepted; this only decides what is fetched.
+    case available(manifest: UpdateManifest, downloadURL: URL?)
 }
 
 /// Fetches a feed and decides whether it offers something worth installing.
@@ -17,9 +23,9 @@ public enum UpdateChecker {
         current: BudVersion,
         session: URLSession = .shared
     ) async throws -> UpdateCheckResult {
-        let manifest = try await fetchManifest(feed: feed, session: session)
-        try validate(manifest, feed: feed, current: current)
-        return .available(manifest: manifest)
+        let fetched = try await fetch(feed: feed, session: session)
+        try validate(fetched.manifest, feed: feed, current: current)
+        return .available(manifest: fetched.manifest, downloadURL: fetched.downloadURL)
     }
 
     /// Every gate between a fetched manifest and an install.
@@ -84,10 +90,20 @@ public enum UpdateChecker {
 
     // MARK: Fetching
 
-    private static func fetchManifest(feed: UpdateFeed, session: URLSession) async throws -> UpdateManifest {
+    /// A manifest, plus an authenticated route to its archive when there is one.
+    private struct Fetched {
+        var manifest: UpdateManifest
+        var downloadURL: URL?
+    }
+
+    private static func fetch(feed: UpdateFeed, session: URLSession) async throws -> Fetched {
         let bytes: Data
+        var downloadURL: URL?
+
         if feed.usesGitHubReleasesAPI {
-            bytes = try await fetchFromGitHubReleases(feed: feed, session: session)
+            let release = try await fetchFromGitHubReleases(feed: feed, session: session)
+            bytes = release.manifestBytes
+            downloadURL = release.downloadURL
         } else {
             guard let url = URL(string: feed.manifestURL) else {
                 throw UpdateError.malformedManifest("the feed URL is not a valid URL: \(feed.manifestURL)")
@@ -96,19 +112,28 @@ public enum UpdateChecker {
         }
 
         do {
-            return try JSONDecoder().decode(UpdateManifest.self, from: bytes)
+            return Fetched(
+                manifest: try JSONDecoder().decode(UpdateManifest.self, from: bytes),
+                downloadURL: downloadURL
+            )
         } catch {
             throw UpdateError.malformedManifest(error.localizedDescription)
         }
     }
 
-    /// Finds the newest release that matches the channel, then pulls the
-    /// `appcast.json` asset out of it.
+    private struct ReleaseFetch {
+        var manifestBytes: Data
+        /// The archive, addressed through the API, when that is the only route
+        /// that works. Nil for a public repository, where the signed URL is fine.
+        var downloadURL: URL?
+    }
+
+    /// Finds the newest matching release, pulls its `appcast.json`, and works out
+    /// how the archive will actually be fetched.
     ///
-    /// The asset's URL cannot be constructed from the tag — GitHub generates the
-    /// path and it changes with each upload — so it has to be discovered from the
-    /// release payload.
-    private static func fetchFromGitHubReleases(feed: UpdateFeed, session: URLSession) async throws -> Data {
+    /// Asset URLs cannot be constructed from the tag — GitHub generates the path
+    /// and it changes with each upload — so they have to be discovered.
+    private static func fetchFromGitHubReleases(feed: UpdateFeed, session: URLSession) async throws -> ReleaseFetch {
         let token = feed.token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: "https://api.github.com/repos/\(feed.repo)/releases?per_page=20") else {
             throw UpdateError.malformedManifest("the repository \(feed.repo) is not a valid owner/name pair")
@@ -131,19 +156,32 @@ public enum UpdateChecker {
                   let asset = appcast.objectValue
             else { continue }
 
-            // A private repository's browser_download_url is not publicly
-            // readable, so with a token the asset API is the only route that
-            // works. Without one, the plain URL is right, and lets a public fork
-            // work with no configuration at all.
+            let bytes: Data
             if !token.isEmpty,
                let apiURL = asset["url"]?.stringValue,
                let endpoint = URL(string: apiURL) {
-                return try await get(endpoint, token: token, accept: "application/octet-stream", session: session).data
+                bytes = try await get(endpoint, token: token, accept: "application/octet-stream", session: session).data
+            } else if let browserURL = asset["browser_download_url"]?.stringValue,
+                      let endpoint = URL(string: browserURL) {
+                bytes = try await get(endpoint, token: token.isEmpty ? nil : token, session: session).data
+            } else {
+                continue
             }
-            if let browserURL = asset["browser_download_url"]?.stringValue,
-               let endpoint = URL(string: browserURL) {
-                return try await get(endpoint, token: token.isEmpty ? nil : token, session: session).data
+
+            // The archive is addressed the same way as the manifest, and for the
+            // same reason: a private repository's browser_download_url answers 404
+            // to an API client whether or not it carries a token. That was worth
+            // discovering against a real private release rather than a stub.
+            var archive: URL?
+            if !token.isEmpty,
+               let manifest = try? JSONDecoder().decode(UpdateManifest.self, from: bytes),
+               let wanted = URL(string: manifest.url)?.lastPathComponent,
+               let match = assets.first(where: { $0.objectValue?["name"]?.stringValue == wanted }),
+               let assetURL = match.objectValue?["url"]?.stringValue {
+                archive = URL(string: assetURL)
             }
+
+            return ReleaseFetch(manifestBytes: bytes, downloadURL: archive)
         }
 
         throw UpdateError.malformedManifest("no \(feed.channel) release of \(feed.repo) carries an appcast.json asset")

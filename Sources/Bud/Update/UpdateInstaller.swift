@@ -30,6 +30,8 @@ public enum UpdateInstaller {
         manifest: UpdateManifest,
         destination: URL,
         session: URLSession = .shared,
+        token: String = "",
+        downloadURL: URL? = nil,
         progress: @escaping @Sendable (Double) -> Void = { _ in }
     ) async throws -> Staged {
         let parent = destination.deletingLastPathComponent()
@@ -43,10 +45,17 @@ public enum UpdateInstaller {
 
         do {
             let archive = staging.appendingPathComponent("Bud.zip")
-            guard let url = URL(string: manifest.url) else {
+            // The signed URL is the manifest's own, and it decides nothing about
+            // what is accepted — the checksum below does that. When the feed had
+            // to be reached through an API, the archive has to be too, and this
+            // is the route it was addressed by.
+            guard let url = downloadURL ?? URL(string: manifest.url) else {
                 throw UpdateError.insecureURL(manifest.url)
             }
-            try await download(url, to: archive, expectedSize: manifest.size, session: session, progress: progress)
+            try await download(
+                url, to: archive, expectedSize: manifest.size,
+                token: token, session: session, progress: progress
+            )
 
             let actualSize = try fileSize(archive)
             guard actualSize == manifest.size else {
@@ -283,6 +292,7 @@ public enum UpdateInstaller {
         _ url: URL,
         to destination: URL,
         expectedSize: Int,
+        token: String,
         session: URLSession,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
@@ -297,7 +307,20 @@ public enum UpdateInstaller {
         // fetch, even though the checksum would catch it.
         request.cachePolicy = .reloadIgnoringLocalCacheData
 
-        let monitor = TransferMonitor(limit: expectedSize, report: progress)
+        // A private repository's release asset is not readable without the
+        // token. GitHub answers 404 rather than 403 in that case, so a missing
+        // credential is indistinguishable from a missing file — which is why
+        // this only ever showed up against a real private release.
+        //
+        // The token is attached only for GitHub's own hosts. It is a credential
+        // for one service, and the download URL comes out of a signed manifest
+        // rather than from code.
+        let origin = url.host()?.lowercased()
+        if !token.isEmpty, origin == "github.com" || origin == "api.github.com" {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let monitor = TransferMonitor(limit: expectedSize, origin: origin, report: progress)
         let (temporary, response) = try await session.download(for: request, delegate: monitor)
 
         if let failure = monitor.failure {
@@ -400,11 +423,13 @@ public enum UpdateInstaller {
 private final class TransferMonitor: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private let limit: Int
+    private let origin: String?
     private let report: @Sendable (Double) -> Void
     private var storedFailure: UpdateError?
 
-    init(limit: Int, report: @escaping @Sendable (Double) -> Void) {
+    init(limit: Int, origin: String?, report: @escaping @Sendable (Double) -> Void) {
         self.limit = limit
+        self.origin = origin
         self.report = report
     }
 
@@ -412,6 +437,26 @@ private final class TransferMonitor: NSObject, URLSessionTaskDelegate, @unchecke
         lock.lock()
         defer { lock.unlock() }
         return storedFailure
+    }
+
+    /// Drops the credential the moment a download leaves GitHub.
+    ///
+    /// Release assets are served through a redirect to a CDN, so the request the
+    /// token authorised is not the request that carries the bytes. Relying on the
+    /// framework to strip the header is relying on a policy that is not part of
+    /// this program's contract; the check belongs where the redirect is decided.
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        var next = request
+        if let to = next.url?.host()?.lowercased(), to != origin {
+            next.setValue(nil, forHTTPHeaderField: "Authorization")
+        }
+        completionHandler(next)
     }
 
     func urlSession(
