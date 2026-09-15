@@ -20,13 +20,17 @@ public struct Composer: View {
     }
 
     public var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: Bud.Space.snug) {
             if isCommandMenuVisible {
                 commandMenu
             }
 
-            GlassCard(cornerRadius: Bud.Radius.card, padding: 10) {
-                VStack(alignment: .leading, spacing: Bud.Space.sm) {
+            GlassCard(cornerRadius: Bud.Radius.card, padding: Bud.Space.md) {
+                // The gap between the field and its controls is deliberately wider
+                // than the gaps inside the control row. When both are the same,
+                // the chips read as part of the text field rather than as
+                // controls below it.
+                VStack(alignment: .leading, spacing: Bud.Space.md) {
                     if isKeyMissing {
                         KeyMissingBanner { model.openSettings(tab: .general) }
                     }
@@ -83,7 +87,7 @@ public struct Composer: View {
     // MARK: - Toolbar
 
     private var toolbar: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: Bud.Space.snug) {
             GlassChip(model.config.model, systemImage: "cpu")
 
             Button {
@@ -96,8 +100,8 @@ public struct Composer: View {
 
             Spacer(minLength: 0)
 
-            GlassEffectContainer(spacing: 8) {
-                HStack(spacing: 6) {
+            GlassEffectContainer(spacing: Bud.Space.sm) {
+                HStack(spacing: Bud.Space.snug) {
                     GlassIconButton(systemImage: "command", help: "Slash commands") {
                         openCommandMenu()
                     }
@@ -218,7 +222,7 @@ public struct Composer: View {
                             .lineLimit(1)
                         Spacer(minLength: 0)
                     }
-                    .padding(.horizontal, 10)
+                    .padding(.horizontal, Bud.Space.md)
                     .padding(.vertical, 6)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background {

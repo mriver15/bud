@@ -83,20 +83,20 @@ public struct MarketplaceView: View {
     /// glass draws over the header above.
     private var sourcePicker: some View {
         VStack(alignment: .leading, spacing: Bud.Space.xs) {
-            GlassEffectContainer(spacing: 2) {
-                HStack(spacing: 2) {
+            GlassEffectContainer(spacing: Bud.Space.hairline) {
+                HStack(spacing: Bud.Space.hairline) {
                     ForEach(MarketplaceSource.allCases) { option in
                         Button {
                             withAnimation(.snappy(duration: 0.18)) { store.source = option }
                         } label: {
-                            HStack(spacing: 4) {
+                            HStack(spacing: Bud.Space.xs) {
                                 Image(systemName: symbol(for: option))
-                                    .font(.system(size: 10, weight: .medium))
+                                    .font(Bud.Font.micro)
                                 Text(option.label)
                                     .font(Bud.Font.caption)
                             }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
+                            .padding(.horizontal, Bud.Space.sm)
+                            .padding(.vertical, Bud.Space.xs)
                             .contentShape(Capsule())
                         }
                         .buttonStyle(.plain)
@@ -135,10 +135,10 @@ public struct MarketplaceView: View {
                 _ = NSWorkspace.shared.open(url)
             }
         } label: {
-            HStack(spacing: 3) {
+            HStack(spacing: Bud.Space.xs) {
                 Text("MCP data from Glama")
                 Image(systemName: "arrow.up.right")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(Bud.Font.micro.weight(.semibold))
             }
             .font(Bud.Font.caption)
             .foregroundStyle(Bud.Palette.accent)
@@ -175,7 +175,7 @@ public struct MarketplaceView: View {
         GlassCard(padding: Bud.Space.sm) {
             HStack(spacing: Bud.Space.sm) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(Bud.Font.callout.weight(.semibold))
                     .foregroundStyle(.secondary)
 
                 TextField(
@@ -199,7 +199,7 @@ public struct MarketplaceView: View {
                         store.query = ""
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 12))
+                            .font(Bud.Font.callout)
                             .foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.plain)
@@ -212,7 +212,7 @@ public struct MarketplaceView: View {
     private func errorBanner(_ message: String) -> some View {
         HStack(alignment: .top, spacing: Bud.Space.sm) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 12, weight: .semibold))
+                .font(Bud.Font.callout.weight(.semibold))
                 .foregroundStyle(Bud.Palette.warning)
             Text(message)
                 .font(Bud.Font.callout)
@@ -265,7 +265,7 @@ public struct MarketplaceView: View {
                         }
                     }
                 }
-                .padding(.vertical, 2)
+                .padding(.vertical, Bud.Space.hairline)
             }
         }
     }
@@ -342,9 +342,9 @@ private struct ServerCard: View {
         Button {
             _ = NSWorkspace.shared.open(url)
         } label: {
-            HStack(spacing: 3) {
+            HStack(spacing: Bud.Space.xs) {
                 Image(systemName: "arrow.up.right.square")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(Bud.Font.micro.weight(.semibold))
                 Text("View on Glama")
                     .font(Bud.Font.caption)
                     .underline()
@@ -453,7 +453,7 @@ private struct ServerCard: View {
 
     private var fallbackIcon: some View {
         Image(systemName: "shippingbox")
-            .font(.system(size: 15, weight: .medium))
+            .font(Bud.Font.title.weight(.medium))
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.white.opacity(0.06))
@@ -547,7 +547,7 @@ private struct RegistryServerInspector: View {
                 dismiss()
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(Bud.Font.caption.weight(.semibold))
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
@@ -557,7 +557,7 @@ private struct RegistryServerInspector: View {
 
     private var fallbackHeaderIcon: some View {
         Image(systemName: "shippingbox")
-            .font(.system(size: 18, weight: .medium))
+            .font(Bud.Font.hero.weight(.medium))
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.white.opacity(0.06))
@@ -652,7 +652,7 @@ private struct RegistryServerInspector: View {
             VStack(alignment: .leading, spacing: Bud.Space.sm) {
                 HStack(spacing: Bud.Space.xs) {
                     Image(systemName: option.transport.symbol)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(Bud.Font.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     Text(option.transport.label)
                         .font(Bud.Font.caption)
@@ -705,7 +705,7 @@ private struct RegistryServerInspector: View {
     /// value ends up is `makeConfig`'s call, not this view's: `env` for a child
     /// process, `headers` for an HTTP endpoint.
     private func credentialField(_ name: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: Bud.Space.hairline) {
             Text(name)
                 .font(Bud.Font.caption)
                 .foregroundStyle(.secondary)

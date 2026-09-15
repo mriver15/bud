@@ -58,13 +58,12 @@ public struct MarkdownView: View {
     private func blockView(_ block: MarkdownBlock, caret: Bool) -> some View {
         switch block {
         case .heading(let level, let text):
-            let size = Self.headingSize(level)
-            Text(MarkdownInline.attributed(text, size: size, weight: .semibold, caret: caret))
+            Text(MarkdownInline.attributed(text, font: Self.headingFont(level), weight: .semibold, caret: caret))
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, level <= 2 ? Bud.Space.xs : 0)
 
         case .paragraph(let text):
-            Text(MarkdownInline.attributed(text, size: 13.5, caret: caret))
+            Text(MarkdownInline.attributed(text, font: Bud.Font.body, caret: caret))
                 .fixedSize(horizontal: false, vertical: true)
 
         case .code(let language, let body):
@@ -80,7 +79,7 @@ public struct MarkdownView: View {
             VStack(alignment: .leading, spacing: Bud.Space.xs) {
                 ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
                     let isLast = caret && index == lines.count - 1
-                    Text(MarkdownInline.attributed(line, size: 13.5, caret: isLast))
+                    Text(MarkdownInline.attributed(line, font: Bud.Font.body, caret: isLast))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -88,7 +87,7 @@ public struct MarkdownView: View {
             // Drawn as a background rather than as an HStack sibling: a bare
             // Rectangle is vertically greedy and would stretch to the whole
             // proposed height, not the height of the quote.
-            .padding(.leading, 10)
+            .padding(.leading, Bud.Space.md)
             .background(alignment: .leading) {
                 Rectangle()
                     .fill(Bud.Palette.accent.opacity(0.55))
@@ -103,11 +102,11 @@ public struct MarkdownView: View {
         }
     }
 
-    private static func headingSize(_ level: Int) -> CGFloat {
+    private static func headingFont(_ level: Int) -> Font {
         switch level {
-        case 1: return 17
-        case 2: return 15
-        default: return 13.5
+        case 1: return Bud.Font.hero
+        case 2: return Bud.Font.title
+        default: return Bud.Font.body
         }
     }
 
@@ -128,12 +127,12 @@ private struct MarkdownListView: View {
         VStack(alignment: .leading, spacing: Bud.Space.xs) {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                 let isLast = caret && index == items.count - 1
-                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                HStack(alignment: .firstTextBaseline, spacing: Bud.Space.sm) {
                     Text(marker(at: index))
                         .font(Bud.Font.caption)
                         .foregroundStyle(Bud.Palette.accent.opacity(0.85))
                         .frame(minWidth: 14, alignment: .trailing)
-                    Text(MarkdownInline.attributed(item.text, size: 13.5, caret: isLast))
+                    Text(MarkdownInline.attributed(item.text, font: Bud.Font.body, caret: isLast))
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.leading, CGFloat(item.depth) * 14)
@@ -159,7 +158,7 @@ private struct MarkdownCodeBlock: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: Bud.Space.sm) {
                 Text(languageLabel)
-                    .font(.system(size: 9.5, weight: .semibold))
+                    .font(Bud.Font.micro.weight(.semibold))
                     .tracking(0.6)
                     .foregroundStyle(.tertiary)
                 Spacer(minLength: 0)
@@ -172,7 +171,7 @@ private struct MarkdownCodeBlock: View {
                     }
                 }
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, Bud.Space.md)
             .frame(height: 28)
 
             ScrollView(.horizontal, showsIndicators: true) {
@@ -180,8 +179,8 @@ private struct MarkdownCodeBlock: View {
                     .font(Bud.Font.mono)
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: true, vertical: true)
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 10)
+                    .padding(.horizontal, Bud.Space.md)
+                    .padding(.bottom, Bud.Space.md)
             }
         }
         .background {
@@ -218,7 +217,10 @@ private enum MarkdownInline {
     /// the end of the final wrapped line instead of at the trailing margin.
     static let caretGlyph = "\u{258C}"
 
-    static func attributed(_ text: String, size: CGFloat, weight: Font.Weight = .regular, caret: Bool = false) -> AttributedString {
+    /// The base type comes from the scale as a `Font`; the size the emphasis
+    /// runs below need is re-derived by `Font.weight(_:)`/`italic()` rather than
+    /// from a raw point size.
+    static func attributed(_ text: String, font: Font, weight: Font.Weight = .regular, caret: Bool = false) -> AttributedString {
         let source = neutralizeDanglingMarkers(text)
         var options = AttributedString.MarkdownParsingOptions()
         options.interpretedSyntax = .inlineOnlyPreservingWhitespace
@@ -227,7 +229,7 @@ private enum MarkdownInline {
         // Traits are applied explicitly instead of leaning on
         // `inlinePresentationIntent`, which a `font` set on the enclosing `Text`
         // would otherwise flatten.
-        attributed.font = .system(size: size, weight: weight)
+        attributed.font = font.weight(weight)
         let runs = attributed.runs.map { (range: $0.range, intent: $0.inlinePresentationIntent) }
         for run in runs {
             guard let intent = run.intent else { continue }
@@ -235,17 +237,17 @@ private enum MarkdownInline {
                 attributed[run.range].font = Bud.Font.mono
                 attributed[run.range].backgroundColor = Color.white.opacity(0.10)
             } else if intent.contains(.stronglyEmphasized), intent.contains(.emphasized) {
-                attributed[run.range].font = .system(size: size, weight: .semibold).italic()
+                attributed[run.range].font = font.weight(.semibold).italic()
             } else if intent.contains(.stronglyEmphasized) {
-                attributed[run.range].font = .system(size: size, weight: .semibold)
+                attributed[run.range].font = font.weight(.semibold)
             } else if intent.contains(.emphasized) {
-                attributed[run.range].font = .system(size: size).italic()
+                attributed[run.range].font = font.italic()
             }
         }
 
         if caret {
             var marker = AttributedString(caretGlyph)
-            marker.font = .system(size: size)
+            marker.font = font
             marker.foregroundColor = Bud.Palette.accent
             attributed.append(marker)
         }

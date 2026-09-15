@@ -42,12 +42,25 @@ public struct TranscriptRow: View {
                 .font(Bud.Font.body)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .glassEffect(
-                    .regular.tint(Bud.Palette.accent.opacity(0.35)),
-                    in: .rect(cornerRadius: Bud.Radius.control)
-                )
+                .padding(.horizontal, Bud.Space.md)
+                .padding(.vertical, Bud.Space.sm)
+                // A material fill, not glass. Apple's rule is that Liquid Glass
+                // belongs to the navigation layer that floats above content —
+                // a message bubble *is* content, and putting glass on it both
+                // breaks that rule and makes the transcript shimmer as the
+                // desktop moves behind the panel while you are reading it.
+                .background {
+                    RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)
+                                .fill(Bud.Palette.accent.opacity(0.20))
+                        }
+                        .overlay {
+                            RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)
+                                .strokeBorder(Bud.Palette.accent.opacity(0.28), lineWidth: 0.6)
+                        }
+                }
                 .frame(maxWidth: max(160, rowWidth * 0.78), alignment: .trailing)
         }
     }
@@ -231,7 +244,7 @@ private struct ToolActivityRow: View {
         HStack(alignment: .center, spacing: Bud.Space.sm) {
             stateIndicator
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: Bud.Space.xs) {
                 HStack(spacing: 6) {
                     Text(call.name)
                         .font(Bud.Font.mono)
@@ -375,7 +388,7 @@ private struct NoticeBanner: View {
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, Bud.Space.md)
         .padding(.vertical, 8)
         .background {
             RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)
@@ -421,7 +434,7 @@ private struct TurnErrorNote: View {
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, Bud.Space.md)
         .padding(.vertical, 8)
         .background {
             RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)

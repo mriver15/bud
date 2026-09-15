@@ -26,18 +26,18 @@ struct MenuBarView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: Bud.Space.xs) {
+            HStack(spacing: Bud.Space.snug) {
                 Image(systemName: "sparkle")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(Bud.Font.callout.weight(.semibold))
                     .foregroundStyle(Bud.Palette.accent)
-                Text("Bud").font(.system(size: 13, weight: .semibold))
+                Text("Bud").font(Bud.Font.body.weight(.semibold))
                 Spacer()
                 if model.isStreaming {
                     StreamingIndicator()
                 }
             }
-            HStack(spacing: 6) {
+            HStack(spacing: Bud.Space.snug) {
                 Text(model.config.model)
                 Text("·")
                 Text("\(model.availableTools.count) tools")
@@ -50,7 +50,7 @@ struct MenuBarView: View {
     }
 
     private var panelActions: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: Bud.Space.hairline) {
             MenuActionRow(
                 symbol: "rectangle.compress.vertical",
                 title: "Collapse / Expand",
@@ -71,7 +71,7 @@ struct MenuBarView: View {
     }
 
     private var settingsActions: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: Bud.Space.hairline) {
             ForEach(SettingsTab.allCases) { tab in
                 MenuActionRow(symbol: tab.symbol, title: tab.label) {
                     model.openSettings(tab: tab)
@@ -83,7 +83,7 @@ struct MenuBarView: View {
     }
 
     private var footer: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: Bud.Space.hairline) {
             HStack {
                 Text(model.usageSummary).font(Bud.Font.caption).foregroundStyle(.tertiary)
                 Spacer()
@@ -105,9 +105,9 @@ private struct MenuActionRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            HStack(spacing: Bud.Space.sm) {
                 Image(systemName: symbol)
-                    .font(.system(size: 11))
+                    .font(Bud.Font.caption.weight(.regular))
                     .frame(width: 16)
                 Text(title).font(Bud.Font.body)
                 Spacer()
@@ -115,8 +115,8 @@ private struct MenuActionRow: View {
                     Text(shortcut).font(Bud.Font.caption).foregroundStyle(.tertiary)
                 }
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
+            .padding(.horizontal, Bud.Space.snug)
+            .padding(.vertical, Bud.Space.xs)
             .contentShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)

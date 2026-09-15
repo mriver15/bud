@@ -15,9 +15,9 @@ public struct StreamingIndicator: View {
     }
 
     public var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: Bud.Space.snug) {
             TimelineView(.periodic(from: .now, by: 0.05)) { context in
-                HStack(spacing: 3) {
+                HStack(spacing: Bud.Space.xs) {
                     ForEach(0..<3, id: \.self) { index in
                         Circle()
                             .fill(Bud.Palette.accent)
@@ -96,16 +96,16 @@ public struct ToolCountBadge: View {
     }
 
     public var body: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: Bud.Space.snug) {
             Image(systemName: "wrench.and.screwdriver")
-                .font(.system(size: 10, weight: .semibold))
+                .font(Bud.Font.micro.weight(.semibold))
             // The noun matters: a bare numeral next to an icon leaves the reader
             // guessing whether it counts tools, tokens or messages.
             Text(count == 1 ? "1 tool" : "\(count) tools").font(Bud.Font.caption)
         }
         .foregroundStyle(isActive ? Bud.Palette.accent : Color.secondary)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
+        .padding(.horizontal, Bud.Space.sm)
+        .padding(.vertical, Bud.Space.xs)
         .background {
             Capsule(style: .continuous)
                 .fill((isActive ? Bud.Palette.accent : Color.white).opacity(isActive ? 0.18 : 0.08))
@@ -134,7 +134,7 @@ public struct ErrorBanner: View {
     public var body: some View {
         HStack(alignment: .top, spacing: Bud.Space.sm) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11, weight: .semibold))
+                .font(Bud.Font.caption.weight(.semibold))
                 .foregroundStyle(Bud.Palette.danger)
             Text(message)
                 .font(Bud.Font.callout)
@@ -144,7 +144,7 @@ public struct ErrorBanner: View {
             Spacer(minLength: 0)
             GlassIconButton(systemImage: "xmark", help: "Dismiss", action: onDismiss)
         }
-        .padding(10)
+        .padding(Bud.Space.md)
         .background {
             RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)
                 .fill(Bud.Palette.danger.opacity(0.14))
@@ -167,9 +167,9 @@ public struct KeyMissingBanner: View {
     public var body: some View {
         HStack(alignment: .center, spacing: Bud.Space.sm) {
             Image(systemName: "key.fill")
-                .font(.system(size: 11, weight: .semibold))
+                .font(Bud.Font.caption.weight(.semibold))
                 .foregroundStyle(Bud.Palette.warning)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: Bud.Space.hairline) {
                 Text("DeepSeek API key required")
                     .font(Bud.Font.caption)
                     .foregroundStyle(.primary)
@@ -185,7 +185,7 @@ public struct KeyMissingBanner: View {
             .controlSize(.small)
             .tint(Bud.Palette.accent)
         }
-        .padding(10)
+        .padding(Bud.Space.md)
         .background {
             RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)
                 .fill(Bud.Palette.warning.opacity(0.12))
