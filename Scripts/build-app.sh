@@ -4,13 +4,69 @@
 # There is no .xcodeproj: this machine has only the Command Line Tools, so the
 # bundle is assembled by hand. That is also why the bundle is ad-hoc signed —
 # it is a locally-built app, not a distributed one.
+#
+# This script is the only thing that writes Info.plist, so --version/--build
+# stamp CFBundleShortVersionString and CFBundleVersion right here. The updater
+# decides whether to offer an update by comparing those values against the
+# signed appcast, so they are release-critical and must not be patched into the
+# bundle afterwards — a second writer would leave the plist and the ad-hoc
+# signature describing different builds. Defaults keep the historical
+# no-argument behaviour intact.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONFIG="${1:-release}"
+CONFIG="release"
 APP_NAME="Bud"
 BUNDLE_ID="com.bud.assistant"
 VERSION="1.0.0"
+# An integer, because the build number is what orders two releases and an
+# updater that cannot order them cannot refuse a downgrade. It used to mirror
+# VERSION, which meant the default bundle declared "1.0.0" where every consumer
+# of a build number expects a monotonic integer — including this app's own
+# updater, which would have refused every update as unreadable.
+BUILD_NUMBER="1"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --version)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --version needs a value" >&2
+        exit 1
+      fi
+      VERSION="$2"
+      shift 2
+      ;;
+    --build)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --build needs a value" >&2
+        exit 1
+      fi
+      BUILD_NUMBER="$2"
+      shift 2
+      ;;
+    -*)
+      echo "error: unknown option: $1" >&2
+      exit 1
+      ;;
+    *)
+      CONFIG="$1"
+      shift
+      ;;
+  esac
+done
+
+# A malformed stamp ships a bundle that can never be updated, so reject it
+# before paying for a build.
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "error: version must be X.Y.Z (got: $VERSION)" >&2
+  exit 1
+fi
+# Integers only. A dotted build number sorts lexically, so "1.10" would be read
+# as older than "1.9" and the updater would offer a downgrade.
+if [[ ! "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
+  echo "error: build must be an integer (got: $BUILD_NUMBER)" >&2
+  exit 1
+fi
 
 cd "$ROOT"
 
@@ -41,7 +97,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleDisplayName</key><string>$APP_NAME</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
-    <key>CFBundleVersion</key><string>$VERSION</string>
+    <key>CFBundleVersion</key><string>$BUILD_NUMBER</string>
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>LSUIElement</key><true/>
     <key>CFBundleURLTypes</key>

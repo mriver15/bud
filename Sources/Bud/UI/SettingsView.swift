@@ -770,6 +770,7 @@ private struct AboutTab: View {
             VStack(alignment: .leading, spacing: Bud.Space.lg) {
                 masthead
                 stats
+                UpdateSettingsSection(model: model)
                 sourceCard
                 architectureCard
             }

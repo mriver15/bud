@@ -150,6 +150,73 @@ token that has to be exchanged and refreshed — and never a bearer key. That is
 authentication problem rather than a dialect one, so it is a different feature
 from speaking a wire protocol.
 
+### Updates
+
+Bud replaces itself. The About pane checks a release feed, verifies what it finds,
+and swaps the app in place.
+
+**A signature, not just TLS.** Every manifest is Ed25519-signed and the public half
+is compiled into the app. Encryption alone cannot decide whether to run code: a
+manifest arrives over the network and then says *what to execute*, so it is
+verified before any field inside it is read. The signature covers a flat,
+line-oriented field list rather than the JSON document — signing re-encoded JSON
+would require the signer and the verifier to agree on key order, whitespace,
+number formatting and Unicode escaping, which are four independent ways to
+produce a signature that is valid but does not verify. The release notes are
+covered too, by hash, since they contain newlines.
+
+**What is checked before anything is replaced:**
+
+| Gate | What it prevents |
+|---|---|
+| Ed25519 signature | A forged manifest |
+| Schema | Fields this build would silently disregard |
+| Channel | Handing a stable user a prerelease |
+| `minOS` | Installing something that will not run here |
+| Build number | Sideways and backwards moves, so a replayed manifest cannot downgrade |
+| Download host | Turning a leaked signing key into an arbitrary download |
+| SHA-256 | Bytes other than the ones that were signed |
+| Bundle identifier | An archive containing something that is not Bud |
+| Code signature | A bundle macOS will refuse to launch |
+| Same-filesystem staging | A half-installed app |
+
+Staging happens beside the destination and both moves are renames, so the window
+in which no app exists is a single syscall — and if the second rename fails the
+first is undone, because leaving no app at all is worse than leaving the old one.
+
+**Publishing a release.** Generate the signing key once:
+
+```
+Scripts/bud-update-keygen.sh
+```
+
+Paste the public key it prints into `UpdateTrust.publicKey`, then:
+
+```
+Scripts/bud-release.sh --version 1.1.0 --build 3 --notes notes.md            # build + sign
+Scripts/bud-release.sh --version 1.1.0 --build 3 --publish                   # …and upload
+```
+
+The private key stays in `~/.bud/keys/update-signing.key`, never in the repo. If
+it is lost no future release can be signed, and already-installed copies will
+refuse everything.
+
+**Driving it without the UI:**
+
+```
+Bud --check-update   --feed https://example.com/appcast.json
+Bud --install-update --feed http://127.0.0.1:8000/appcast.json
+```
+
+The updater replaces the bundle it is running from, so the only convincing test is
+to let it do exactly that to a real copy of the app.
+
+**Settings.** `updateRepo`, `updateFeedURL` (for a feed that is not GitHub),
+`updateToken` (a private repo's token, falling back to `GH_TOKEN`, `GITHUB_TOKEN`
+or `BUD_UPDATE_TOKEN`), `updateChannel`, and `autoCheckUpdates`. A background check
+is silent when it fails — a laptop that is offline should not open with an error
+nobody asked for — but a check the user asked for always reports.
+
 ---
 
 ## Usage
