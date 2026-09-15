@@ -48,4 +48,15 @@ if let index = arguments.firstIndex(of: "--render-ui") {
     UIRender.run(outputDirectory: path)
 }
 
+// Checks the update feed, and optionally installs what it finds.
+//
+// The updater replaces the bundle it is running from, so the only honest way to
+// test it is to let it do exactly that to a real copy of the app — driving it
+// through the UI would prove the same thing more slowly and less reliably.
+if arguments.contains("--check-update") || arguments.contains("--install-update") {
+    let install = arguments.contains("--install-update")
+    let ok = await UpdateCLI.run(install: install, arguments: arguments)
+    exit(ok ? 0 : 1)
+}
+
 BudApp.main()

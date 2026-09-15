@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Dependency-free assertion harness.
@@ -73,6 +74,7 @@ public enum BudSelfTest {
             jsonValue,
             toolNaming,
             providers,
+            selfUpdate,
             mcpConfigMapping,
             glamaMapping,
             toolTruncation,
@@ -1074,6 +1076,385 @@ public enum BudSelfTest {
         c.nilValue("a saved config omits the legacy key", decoded.apiKey)
         c.nilValue("a saved config omits the legacy URL", decoded.baseURL)
         c.nilValue("a saved config omits the legacy model", decoded.model)
+
+        return c.report()
+    }
+
+    // MARK: Update
+
+    /// The updater is the one subsystem whose mistakes install arbitrary code, so
+    /// these pin decisions rather than plumbing: what counts as newer, what the
+    /// signature actually covers, and which manifests are refused before a single
+    /// byte is downloaded.
+    static func selfUpdate() -> SelfTestReport {
+        let c = Checker(suite: "update")
+
+        let key = Curve25519.Signing.PrivateKey()
+        let signingKey = key.publicKey.rawRepresentation.base64EncodedString()
+
+        func manifest(
+            schema: Int = UpdateManifest.supportedSchema,
+            channel: String = "stable",
+            version: String = "1.3.0",
+            build: Int = 13,
+            minOS: String = "26.0",
+            notes: String = "Fixes the thing.",
+            url: String = "https://github.com/mriver15/bud/releases/download/v1.3.0/Bud.zip",
+            size: Int = 9_500_000,
+            sha256: String = String(repeating: "a", count: 64),
+            signature: String = ""
+        ) -> UpdateManifest {
+            UpdateManifest(
+                schema: schema,
+                channel: channel,
+                version: version,
+                build: build,
+                minOS: minOS,
+                published: "2026-08-01T10:00:00Z",
+                notes: notes,
+                url: url,
+                size: size,
+                sha256: sha256,
+                signature: signature
+            )
+        }
+
+        /// Signs a manifest that already carries every field, so the signed bytes
+        /// are the ones a real release would cover.
+        func signed(_ base: UpdateManifest) -> UpdateManifest {
+            let signature = (try? key.signature(for: Data(base.signingPayload.utf8))) ?? Data()
+            return manifest(
+                schema: base.schema,
+                channel: base.channel,
+                version: base.version,
+                build: base.build,
+                minOS: base.minOS,
+                notes: base.notes,
+                url: base.url,
+                size: base.size,
+                sha256: base.sha256,
+                signature: signature.base64EncodedString()
+            )
+        }
+
+        func feed(channel: String = "stable", key: String) -> UpdateFeed {
+            UpdateFeed(channel: channel, publicKey: key)
+        }
+
+        // MARK: Version ordering
+
+        // Ordering is by build first, so the version string only ever breaks a
+        // tie; a build number alone has to be able to decide an upgrade.
+        c.check(
+            "a higher build wins over a lower version string",
+            BudVersion(version: "0.9", build: 12).isNewer(than: BudVersion(version: "2.0", build: 11))
+        )
+        c.check(
+            "a lower build is never newer",
+            !BudVersion(version: "9.9", build: 11).isNewer(than: BudVersion(version: "0.1", build: 12))
+        )
+        // The tie-break has to be numeric: "1.10" sorts before "1.9" as text, and
+        // a lexical compare would refuse a legitimate upgrade for ever.
+        c.check(
+            "equal builds order versions numerically",
+            BudVersion(version: "1.10.0", build: 7).isNewer(than: BudVersion(version: "1.9.0", build: 7))
+        )
+        c.check(
+            "equal builds do not invert the comparison",
+            !BudVersion(version: "1.9.0", build: 7).isNewer(than: BudVersion(version: "1.10.0", build: 7))
+        )
+        c.check(
+            "the running release is not newer than itself",
+            !BudVersion(version: "1.10.0", build: 7).isNewer(than: BudVersion(version: "1.10.0", build: 7))
+        )
+
+        // MARK: What the signature covers
+
+        let base = manifest()
+        let payload = base.signingPayload
+        // The format tag is what stops an update signature being replayed as a
+        // signature over some other Bud protocol.
+        c.check("the payload names its own format", payload.hasPrefix("bud-update-v1\n"))
+
+        // Every one of these fields decides whether code gets installed, so a
+        // field that can change without changing the payload is a field an
+        // attacker can rewrite in flight.
+        let signedFields: [(String, UpdateManifest)] = [
+            ("url", manifest(url: "https://github.com/mriver15/bud/releases/download/v1.3.0/Other.zip")),
+            ("size", manifest(size: 1)),
+            ("sha256", manifest(sha256: String(repeating: "b", count: 64))),
+            ("build", manifest(build: 14)),
+            ("version", manifest(version: "1.4.0")),
+            ("channel", manifest(channel: "prerelease")),
+            ("minOS", manifest(minOS: "26.1")),
+        ]
+        for (field, changed) in signedFields {
+            c.check("changing \(field) changes the signed payload", changed.signingPayload != payload)
+        }
+
+        // `notes` is outside the signed bytes — markdown is not something the
+        // signer should have to normalise — but its hash is inside, so the wording
+        // the user reads cannot be rewritten after signing.
+        let reworded = manifest(notes: "A completely different note.")
+        let payloadLines = payload.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let rewordedLines = reworded.signingPayload
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+        let differing = zip(payloadLines, rewordedLines).filter { $0 != $1 }
+        c.equal("a reworded note touches exactly one payload line", differing.count, 1)
+        c.check(
+            "the touched line is the notes hash",
+            payloadLines.last?.hasPrefix("notes_sha256=") == true
+                && rewordedLines.last != payloadLines.last
+        )
+        c.check(
+            "the notes hash is the hash of the manifest's notes",
+            payload.contains("notes_sha256=\(UpdateSignature.hexDigest(of: base.notes))")
+        )
+
+        // MARK: Real signatures
+
+        func verificationFailure(_ candidate: UpdateManifest, using key: String) -> UpdateError? {
+            do {
+                try UpdateSignature.verify(candidate, publicKey: key)
+                return nil
+            } catch let error as UpdateError {
+                return error
+            } catch {
+                return nil
+            }
+        }
+
+        let genuine = signed(base)
+        c.nilValue("a correctly signed manifest verifies", verificationFailure(genuine, using: signingKey))
+
+        if let raw = Data(base64Encoded: genuine.signature) {
+            var bytes = Array(raw)
+            bytes[bytes.count / 2] ^= 0x01
+            c.equal(
+                "one flipped signature byte is refused",
+                verificationFailure(
+                    manifest(signature: Data(bytes).base64EncodedString()),
+                    using: signingKey
+                ),
+                .signatureInvalid
+            )
+        } else {
+            c.check("the signer produced a base64 signature", false)
+        }
+
+        c.equal(
+            "a signature does not cover a tampered field",
+            verificationFailure(
+                manifest(sha256: String(repeating: "b", count: 64), signature: genuine.signature),
+                using: signingKey
+            ),
+            .signatureInvalid
+        )
+        c.equal(
+            "notes cannot be reworded after signing",
+            verificationFailure(
+                manifest(notes: "Rewritten in the middle.", signature: genuine.signature),
+                using: signingKey
+            ),
+            .signatureInvalid
+        )
+        c.equal(
+            "a signature that is not base64 is invalid",
+            verificationFailure(manifest(signature: "!!!"), using: signingKey),
+            .signatureInvalid
+        )
+
+        // An absent key is a refusal, not a skip: a build that cannot tell a real
+        // manifest from a forged one must not install either.
+        c.equal(
+            "an absent key refuses rather than skipping the check",
+            verificationFailure(genuine, using: ""),
+            .signingKeyMissing
+        )
+        c.equal(
+            "whitespace is not a key",
+            verificationFailure(genuine, using: " \n "),
+            .signingKeyMissing
+        )
+        c.equal(
+            "a wrong-length key is malformed",
+            verificationFailure(genuine, using: Data(repeating: 0x41, count: 31).base64EncodedString()),
+            .signingKeyMalformed
+        )
+        c.equal(
+            "a key that is not base64 is malformed",
+            verificationFailure(genuine, using: "not a key"),
+            .signingKeyMalformed
+        )
+
+        // MARK: The gates between a manifest and an install
+
+        func refusal(
+            _ candidate: UpdateManifest,
+            feed: UpdateFeed,
+            current: BudVersion = BudVersion(version: "1.2.0", build: 12),
+            runningOS: String = "26.0"
+        ) -> UpdateError? {
+            do {
+                try UpdateChecker.validate(candidate, feed: feed, current: current, runningOS: runningOS)
+                return nil
+            } catch let error as UpdateError {
+                return error
+            } catch {
+                return nil
+            }
+        }
+
+        let running = BudVersion(version: "1.2.0", build: 12)
+        let stable = feed(key: signingKey)
+
+        c.nilValue("a newer, signed, well-formed manifest is accepted", refusal(signed(manifest()), feed: stable))
+
+        // Replaying the running release, or one before it, is how a stale feed
+        // would otherwise reinstall over whatever the user is running.
+        c.equal(
+            "replaying the running release is refused",
+            refusal(signed(manifest(version: running.version, build: running.build)), feed: stable),
+            .notNewer(current: running.display, offered: running.display)
+        )
+        c.equal(
+            "an older version on the same build is refused",
+            refusal(signed(manifest(version: "1.1.9", build: running.build)), feed: stable),
+            .notNewer(current: running.display, offered: "1.1.9 · build 12")
+        )
+        c.equal(
+            "a lower build is refused even with a higher version string",
+            refusal(signed(manifest(version: "9.9.9", build: 11)), feed: stable),
+            .notNewer(current: running.display, offered: "9.9.9 · build 11")
+        )
+        c.equal(
+            "a prerelease is refused on the stable feed",
+            refusal(signed(manifest(channel: "prerelease")), feed: stable),
+            .channelMismatch(expected: "stable", offered: "prerelease")
+        )
+        // Taking a stable build while on the prerelease channel is an upgrade out
+        // of the channel, not a mismatch.
+        c.nilValue(
+            "a prerelease feed accepts a stable manifest",
+            refusal(signed(manifest()), feed: feed(channel: "prerelease", key: signingKey))
+        )
+        c.equal(
+            "a schema this build cannot read is refused",
+            refusal(signed(manifest(schema: UpdateManifest.supportedSchema + 1)), feed: stable),
+            .unsupportedSchema(UpdateManifest.supportedSchema + 1)
+        )
+        c.equal(
+            "an OS below the manifest's minimum is refused",
+            refusal(signed(manifest(minOS: "26.1")), feed: stable, runningOS: "26.0"),
+            .unsupportedOS(required: "26.1", running: "26.0")
+        )
+        c.equal(
+            "plain HTTP off the machine is refused",
+            refusal(signed(manifest(url: "http://github.com/mriver15/bud/Bud.zip")), feed: stable),
+            .insecureURL("http://github.com/mriver15/bud/Bud.zip")
+        )
+        c.equal(
+            "a host Bud does not download from is refused",
+            refusal(signed(manifest(url: "https://evil.example/x.zip")), feed: stable),
+            .hostNotAllowed("evil.example")
+        )
+        c.equal(
+            "a URL that does not parse is refused",
+            refusal(signed(manifest(url: "not a url")), feed: stable),
+            .insecureURL("not a url")
+        )
+        // Userinfo and suffixed hosts are how a URL check that looks for the
+        // allowed name in the string instead of in the host gets walked past.
+        c.equal(
+            "an allowed name in the userinfo does not admit another host",
+            refusal(signed(manifest(url: "https://github.com@evil.example/x.zip")), feed: stable),
+            .hostNotAllowed("evil.example")
+        )
+        c.equal(
+            "a host that merely ends in an allowed name is refused",
+            refusal(signed(manifest(url: "https://github.com.evil.example/x.zip")), feed: stable),
+            .hostNotAllowed("github.com.evil.example")
+        )
+        // Plain HTTP is allowed back to this machine only, which is how the update
+        // path is exercised end to end against a local feed.
+        c.nilValue(
+            "plain HTTP to loopback is accepted",
+            refusal(signed(manifest(url: "http://127.0.0.1:8099/Bud.zip")), feed: stable)
+        )
+        // The signature is verified first because until it passes, every other
+        // field is attacker-written text — so a manifest that would also fail a
+        // later gate has to fail as unsigned.
+        c.equal(
+            "an unsigned manifest fails on the signature, not a later gate",
+            refusal(manifest(channel: "prerelease"), feed: stable),
+            .signatureInvalid
+        )
+
+        // MARK: OS comparison
+
+        c.check("26.10 satisfies a 26.9 requirement", UpdateChecker.osAtLeast("26.9", running: "26.10"))
+        c.check("26.0 does not satisfy a 26.1 requirement", !UpdateChecker.osAtLeast("26.1", running: "26.0"))
+        c.check("26.10 does not satisfy a 26.11 requirement", !UpdateChecker.osAtLeast("26.11", running: "26.10"))
+        c.check("an equal version satisfies the requirement", UpdateChecker.osAtLeast("26.10", running: "26.10"))
+        c.check("a bare major is satisfied by any minor of it", UpdateChecker.osAtLeast("26", running: "26.0"))
+        c.check("a higher major is refused", !UpdateChecker.osAtLeast("27.0", running: "26.10"))
+        c.check("a lower major is accepted", UpdateChecker.osAtLeast("25.6", running: "26.0"))
+
+        // MARK: Bundle identity
+
+        // Anything the installer is about to move into place has to prove it is
+        // Bud, and a directory that cannot answer that question must be refused
+        // rather than read as an empty identifier.
+        func refusesUnreadableBundle(_ bundle: URL) -> Bool {
+            do {
+                _ = try UpdateInstaller.bundleIdentifier(of: bundle)
+                return false
+            } catch let error as UpdateError {
+                if case .archiveShape = error { return true }
+                return false
+            } catch {
+                return false
+            }
+        }
+
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bud-selftest-bundles-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+
+        func makeBundle(named name: String, identifier: String?) -> URL {
+            let bundle = scratch.appendingPathComponent(name)
+            let contents = bundle.appendingPathComponent("Contents")
+            try? FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+            let entry = identifier.map { "<key>CFBundleIdentifier</key><string>\($0)</string>" } ?? ""
+            let plist = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0"><dict>\(entry)</dict></plist>
+            """
+            try? Data(plist.utf8).write(to: contents.appendingPathComponent("Info.plist"))
+            return bundle
+        }
+
+        let plainDirectory = scratch.appendingPathComponent("plain-directory")
+        try? FileManager.default.createDirectory(at: plainDirectory, withIntermediateDirectories: true)
+
+        c.check(
+            "a directory that is not a bundle is refused",
+            refusesUnreadableBundle(plainDirectory)
+        )
+        c.check(
+            "a bundle with no CFBundleIdentifier is refused",
+            refusesUnreadableBundle(makeBundle(named: "Unnamed.app", identifier: nil))
+        )
+        // The refusal above is only meaningful if a real bundle still reports its
+        // identity — otherwise the installer would reject every update.
+        c.equal(
+            "a real bundle reports its identifier",
+            try? UpdateInstaller.bundleIdentifier(of: makeBundle(named: "Bud.app", identifier: "com.mriver15.bud")),
+            "com.mriver15.bud"
+        )
 
         return c.report()
     }

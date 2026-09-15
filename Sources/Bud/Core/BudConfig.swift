@@ -42,6 +42,21 @@ public struct BudConfig: Sendable, Codable, Hashable {
     public var maxToolRounds: Int
     public var allowParallelSubagents: Int
 
+    // MARK: Updates
+
+    /// The GitHub repository whose releases carry the update feed.
+    public var updateRepo: String
+    /// An explicit manifest URL, for a feed that is not GitHub. Empty means the
+    /// repository above.
+    public var updateFeedURL: String
+    /// Token for a private repository. Empty falls back to the environment.
+    public var updateToken: String
+    /// `stable` or `prerelease`.
+    public var updateChannel: String
+    /// Whether Bud looks for updates on its own. Checking is silent; nothing is
+    /// ever downloaded without the user asking.
+    public var autoCheckUpdates: Bool
+
     public static let defaultSystemPrompt = """
     You are Bud, a native macOS assistant living in a floating Liquid Glass panel.
 
@@ -76,7 +91,12 @@ public struct BudConfig: Sendable, Codable, Hashable {
         maxTokens: Int? = nil,
         systemPrompt: String = BudConfig.defaultSystemPrompt,
         maxToolRounds: Int = 24,
-        allowParallelSubagents: Int = 6
+        allowParallelSubagents: Int = 6,
+        updateRepo: String = BudConfig.defaultUpdateRepo,
+        updateFeedURL: String = "",
+        updateToken: String = "",
+        updateChannel: String = "stable",
+        autoCheckUpdates: Bool = true
     ) {
         self.provider = provider
         self.providerModels = providerModels
@@ -90,6 +110,11 @@ public struct BudConfig: Sendable, Codable, Hashable {
         self.systemPrompt = systemPrompt
         self.maxToolRounds = maxToolRounds
         self.allowParallelSubagents = allowParallelSubagents
+        self.updateRepo = updateRepo
+        self.updateFeedURL = updateFeedURL
+        self.updateToken = updateToken
+        self.updateChannel = updateChannel
+        self.autoCheckUpdates = autoCheckUpdates
     }
 
     public var displayModel: String { model }
@@ -166,6 +191,40 @@ public struct BudConfig: Sendable, Codable, Hashable {
         return BudConfigLoader.resolveKey(for: provider)
     }
 
+    public static let defaultUpdateRepo = "mriver15/bud"
+
+    /// The repository's token, from settings or the environment.
+    ///
+    /// Both variable names are read because `gh` uses `GH_TOKEN` while most CI
+    /// sets `GITHUB_TOKEN`, and a user who has exported either should not have to
+    /// find out which one Bud wanted.
+    public var resolvedUpdateToken: String {
+        let stored = updateToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !stored.isEmpty { return stored }
+        for name in ["BUD_UPDATE_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"] {
+            let value = BudConfigLoader.resolveKey(named: name)
+            if !value.isEmpty { return value }
+        }
+        return ""
+    }
+
+    /// Everything the updater needs, resolved.
+    ///
+    /// The signing key is compiled in rather than configurable: a key that could
+    /// be edited alongside the config would let anything that can write that file
+    /// install anything it likes.
+    public var updateFeed: UpdateFeed {
+        UpdateFeed(
+            repo: updateRepo.trimmingCharacters(in: .whitespaces).isEmpty
+                ? Self.defaultUpdateRepo
+                : updateRepo,
+            manifestURL: updateFeedURL,
+            token: resolvedUpdateToken,
+            channel: updateChannel,
+            publicKey: UpdateTrust.publicKey
+        )
+    }
+
     /// True when the active provider wants a key and does not have one.
     public var activeProviderNeedsKey: Bool {
         activeProvider.requiresKey && resolvedKey(for: activeProvider).isEmpty
@@ -236,6 +295,11 @@ public enum BudConfigLoader {
         if let v = stored.providerKeys { config.providerKeys = v }
         if let v = stored.providerBaseURLs { config.providerBaseURLs = v }
         if let v = stored.providerRegions { config.providerRegions = v }
+        if let v = stored.updateRepo { config.updateRepo = v }
+        if let v = stored.updateFeedURL { config.updateFeedURL = v }
+        if let v = stored.updateToken { config.updateToken = v }
+        if let v = stored.updateChannel { config.updateChannel = v }
+        if let v = stored.autoCheckUpdates { config.autoCheckUpdates = v }
 
         // Migration from the single-provider shape. The key and URL used to
         // belong to DeepSeek implicitly, because DeepSeek was the only provider;
@@ -448,6 +512,11 @@ public enum BudConfigLoader {
         public var providerKeys: [String: String]?
         public var providerBaseURLs: [String: String]?
         public var providerRegions: [String: String]?
+        public var updateRepo: String?
+        public var updateFeedURL: String?
+        public var updateToken: String?
+        public var updateChannel: String?
+        public var autoCheckUpdates: Bool?
         public var glamaAPIKey: String?
         public var reasoningEffort: String?
         public var temperature: Double?
@@ -473,6 +542,11 @@ public enum BudConfigLoader {
             self.providerKeys = config.providerKeys
             self.providerBaseURLs = config.providerBaseURLs
             self.providerRegions = config.providerRegions
+            self.updateRepo = config.updateRepo
+            self.updateFeedURL = config.updateFeedURL
+            self.updateToken = config.updateToken
+            self.updateChannel = config.updateChannel
+            self.autoCheckUpdates = config.autoCheckUpdates
             self.glamaAPIKey = config.glamaAPIKey
             self.reasoningEffort = config.reasoningEffort
             self.temperature = config.temperature
@@ -489,6 +563,11 @@ public enum BudConfigLoader {
             providerKeys: [String: String]? = nil,
             providerBaseURLs: [String: String]? = nil,
             providerRegions: [String: String]? = nil,
+            updateRepo: String? = nil,
+            updateFeedURL: String? = nil,
+            updateToken: String? = nil,
+            updateChannel: String? = nil,
+            autoCheckUpdates: Bool? = nil,
             glamaAPIKey: String? = nil,
             reasoningEffort: String? = nil,
             temperature: Double? = nil,
@@ -505,6 +584,11 @@ public enum BudConfigLoader {
             self.providerKeys = providerKeys
             self.providerBaseURLs = providerBaseURLs
             self.providerRegions = providerRegions
+            self.updateRepo = updateRepo
+            self.updateFeedURL = updateFeedURL
+            self.updateToken = updateToken
+            self.updateChannel = updateChannel
+            self.autoCheckUpdates = autoCheckUpdates
             self.glamaAPIKey = glamaAPIKey
             self.reasoningEffort = reasoningEffort
             self.temperature = temperature

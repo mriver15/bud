@@ -41,6 +41,7 @@ public final class AppModel {
     public let mcp: MCPManager
     public let marketplace: MarketplaceStore
     public let subagents: SubagentSupervisor
+    public let update: UpdateModel
 
     // MARK: UI state
 
@@ -90,6 +91,7 @@ public final class AppModel {
         self.mcp = MCPManager()
         self.marketplace = MarketplaceStore()
         self.subagents = SubagentSupervisor(env: env)
+        self.update = UpdateModel()
     }
 
     // MARK: Derived state
@@ -147,6 +149,18 @@ public final class AppModel {
         await refreshTools()
         await mcp.connectAllAutoStart()
         await refreshTools()
+
+        // Anything an earlier update left behind is unreachable the moment this
+        // process started, so the tidy-up costs nothing here.
+        if let bundle = update.installedBundle {
+            UpdateInstaller.cleanupStaleBackups(beside: bundle)
+        }
+        // After the tools are up, so a slow network never delays a usable app.
+        if config.autoCheckUpdates {
+            Task { [update, config] in
+                await update.check(feed: config.updateFeed, background: true)
+            }
+        }
 
         Task { await marketplace.loadInitial() }
     }

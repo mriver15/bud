@@ -16,6 +16,7 @@ struct MenuBarView: View {
             header
             Divider().opacity(0.3)
             panelActions
+            updateActions
             Divider().opacity(0.3)
             settingsActions
             Divider().opacity(0.3)
@@ -70,6 +71,30 @@ struct MenuBarView: View {
                     model.stop()
                 }
             }
+        }
+    }
+
+    /// Shown only when there is something the user can do.
+    ///
+    /// Bud starts hidden and the menu bar is where it gets noticed, so an
+    /// available update has to surface here rather than only behind a settings
+    /// tab nobody opens on a hunch. A permanent "up to date" row would be noise
+    /// in a menu that is otherwise entirely actions.
+    @ViewBuilder
+    private var updateActions: some View {
+        switch model.update.phase {
+        case .available(let manifest):
+            Divider().opacity(0.3)
+            MenuActionRow(symbol: "arrow.down.circle", title: "Update to \(manifest.version)…") {
+                model.openSettings(tab: .about)
+            }
+        case .installed:
+            Divider().opacity(0.3)
+            MenuActionRow(symbol: "arrow.clockwise.circle", title: "Restart to finish updating") {
+                model.update.relaunch()
+            }
+        default:
+            EmptyView()
         }
     }
 

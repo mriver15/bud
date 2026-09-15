@@ -19,3 +19,10 @@ Package.resolved
 
 # Local harness used for isolated compile checks
 harness/
+
+# Update signing material. The key lives in ~/.bud/keys, outside the repo, so
+# these are a backstop against a copy ever being dragged in by hand: a committed
+# private key would let anyone sign an update this app would install.
+*.key
+keys/
+update-signing*
