@@ -98,7 +98,13 @@ public final class AppModel {
     public var isStreaming: Bool { runtime.isStreaming }
     public var statusText: String { runtime.statusText }
     public var modelName: String { config.model }
-    public var hasAPIKey: Bool { !config.apiKey.isEmpty }
+    /// True when the active provider has everything it needs to be called.
+    ///
+    /// Local runtimes need no key, the custom entry needs a base URL, and every
+    /// provider needs a model — so "has an API key" stopped being the same
+    /// question as "is configured". Delegated to the config so the composer and
+    /// the settings pane cannot disagree about it.
+    public var hasAPIKey: Bool { config.setupProblem == nil }
 
     public var usageSummary: String {
         let u = env.usage
@@ -212,5 +218,20 @@ public final class AppModel {
         config.model = model
         env.config = config
         BudConfigLoader.save(config)
+    }
+
+    /// Switches provider.
+    ///
+    /// The model needs no handling: it is stored per provider, so this
+    /// automatically lands on whatever was last chosen for the new one — or its
+    /// suggested default — instead of carrying a model id the new API has never
+    /// heard of.
+    public func selectProvider(_ id: String) {
+        guard id != config.provider else { return }
+        config.provider = id
+        env.config = config
+        BudConfigLoader.save(config)
+        errorMessage = nil
+        Task { await refreshTools() }
     }
 }

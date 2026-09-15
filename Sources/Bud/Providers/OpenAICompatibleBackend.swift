@@ -1,16 +1,25 @@
 import Foundation
 
-/// DeepSeek chat-completions client.
+/// Client for the OpenAI chat-completions dialect.
 ///
-/// Speaks the OpenAI-compatible streaming protocol that DeepSeek exposes, with
-/// two vendor specifics: `reasoning_content` on the delta (chain-of-thought,
-/// which must be displayed but never sent back), and tool calls that stream as
-/// argument fragments keyed by index.
-public struct DeepSeekClient: ChatBackend {
-    private let config: BudConfig
+/// This one type covers the overwhelming majority of providers: of the 217 in
+/// the models.dev catalogue, 175 are served by an OpenAI-compatible endpoint,
+/// including several that have nothing to do with OpenAI. Anything that speaks
+/// `POST {base}/chat/completions` with server-sent events works here, which is
+/// also why the custom-endpoint escape hatch costs nothing to support.
+///
+/// Two vendor conventions ride on top of the base protocol and are handled here
+/// because they are widely implemented rather than OpenAI-specific:
+/// `reasoning_content` on the delta (chain-of-thought, which is displayed but
+/// never sent back), and tool calls that stream as argument fragments keyed by
+/// index.
+public struct OpenAICompatibleBackend: ChatBackend {
+    private let provider: ProviderDescriptor
+    private let credentials: ProviderCredentials
 
-    public init(config: BudConfig) {
-        self.config = config
+    public init(provider: ProviderDescriptor, credentials: ProviderCredentials) {
+        self.provider = provider
+        self.credentials = credentials
     }
 
     private static let session: URLSession = {
@@ -47,13 +56,22 @@ public struct DeepSeekClient: ChatBackend {
         _ request: ChatRequest,
         into continuation: AsyncThrowingStream<StreamEvent, Error>.Continuation
     ) async throws {
-        guard !config.apiKey.isEmpty else { throw ChatBackendError.missingAPIKey }
+        // Local runtimes such as Ollama take anonymous callers, so absence of a
+        // key is only fatal when the provider actually wants one.
+        if provider.requiresKey, credentials.apiKey.isEmpty {
+            throw ChatBackendError.missingKey(provider: provider.name)
+        }
 
         let url = try endpoint()
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
+        if !credentials.apiKey.isEmpty {
+            req.setValue("Bearer \(credentials.apiKey)", forHTTPHeaderField: "Authorization")
+        }
+        for (name, value) in credentials.extraHeaders {
+            req.setValue(value, forHTTPHeaderField: name)
+        }
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         req.httpBody = try body(for: request)
 
@@ -82,10 +100,13 @@ public struct DeepSeekClient: ChatBackend {
     }
 
     private func endpoint() throws -> URL {
-        var base = config.baseURL
+        var base = credentials.baseURL ?? provider.baseURL
         while base.hasSuffix("/") { base.removeLast() }
+        guard !base.isEmpty else {
+            throw ChatBackendError.transport("No base URL set for \(provider.name).")
+        }
         guard let url = URL(string: base + "/chat/completions") else {
-            throw ChatBackendError.transport("Invalid base URL: \(config.baseURL)")
+            throw ChatBackendError.transport("Invalid base URL: \(base)")
         }
         return url
     }
@@ -93,11 +114,13 @@ public struct DeepSeekClient: ChatBackend {
     private func body(for request: ChatRequest) throws -> Data {
         var payload: [String: JSONValue] = [
             "model": .string(request.model),
-            "messages": .array(request.messages.map(\.wireRepresentation)),
+            "messages": .array(request.messages.map(\.openAIWireRepresentation)),
             "stream": .bool(request.stream),
         ]
         if !request.tools.isEmpty {
-            payload["tools"] = .array(request.tools)
+            // The dialect's own tool shape, produced here rather than by the
+            // caller — Anthropic and Google need a different object.
+            payload["tools"] = .array(request.tools.map(\.openAIToolDefinition))
             payload["tool_choice"] = .string("auto")
         }
         if let t = request.temperature { payload["temperature"] = .number(t) }

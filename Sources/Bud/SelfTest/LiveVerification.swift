@@ -22,20 +22,41 @@ public enum BudLiveVerification {
 
         // MARK: Configuration
 
-        let config = BudConfigLoader.load()
-        c.check("config: API key resolved", !config.apiKey.isEmpty)
-        c.check("config: model resolved", !config.model.isEmpty)
-        c.check("config: base URL is https", config.baseURL.hasPrefix("https://"))
+        // `--provider <id>` retargets the whole live suite at another provider,
+        // so a newly configured one can be exercised without editing config.
+        var config = BudConfigLoader.load()
+        if let index = CommandLine.arguments.firstIndex(of: "--provider"),
+           CommandLine.arguments.count > index + 1 {
+            let requested = CommandLine.arguments[index + 1]
+            if let descriptor = ProviderRegistry.provider(id: requested) {
+                config.provider = descriptor.id
+            } else {
+                c.check("config: unknown provider '\(requested)'", false)
+                return c.report()
+            }
+        }
 
-        guard !config.apiKey.isEmpty else {
-            c.check("config: cannot continue without an API key", false)
+        let provider = config.activeProvider
+        c.check("config: provider is \(provider.name)", !config.provider.isEmpty)
+        c.check("config: model resolved (\(config.model))", !config.model.isEmpty)
+        c.check("config: base URL set", !config.baseURL.isEmpty)
+
+        let key = config.resolvedKey(for: provider)
+        c.check("config: key resolved for \(provider.name)", !key.isEmpty || !provider.requiresKey)
+
+        guard !key.isEmpty || !provider.requiresKey else {
+            c.check("config: cannot continue without a key for \(provider.name)", false)
+            return c.report()
+        }
+        guard !config.customProviderNeedsBaseURL else {
+            c.check("config: the custom provider needs a base URL", false)
             return c.report()
         }
 
         let env = AppEnvironment(config: config)
         let backend = env.makeBackend()
 
-        // MARK: DeepSeek streaming
+        // MARK: Streaming
 
         var streamedText = ""
         var streamedReasoning = ""
@@ -55,28 +76,36 @@ public enum BudLiveVerification {
                 }
             }
         } catch {
-            c.check("deepseek: stream completed (\(error.localizedDescription))", false)
+            c.check("\(provider.id): stream completed (\(error.localizedDescription))", false)
         }
-        c.check("deepseek: produced text", streamedText.lowercased().contains("pong"))
-        c.check("deepseek: produced reasoning", !streamedReasoning.isEmpty)
-        c.check("deepseek: reported finish", sawFinish)
+        c.check("\(provider.id): produced text", streamedText.lowercased().contains("pong"))
+        // Reasoning is a model capability, not a provider one — a
+        // non-reasoning model legitimately emits none. Asserted only for the
+        // families whose defaults always think, so the parser stays covered
+        // without failing a model that was never going to emit thinking.
+        if ["deepseek", "anthropic", "google"].contains(provider.id) {
+            c.check("\(provider.id): produced reasoning", !streamedReasoning.isEmpty)
+        }
+        c.check("\(provider.id): reported finish", sawFinish)
 
         // MARK: DeepSeek tool call
 
-        let echoSchema: JSONValue = .object([
-            "type": .string("function"),
-            "function": .object([
-                "name": .string("get_weather"),
-                "description": .string("Get the weather for a city."),
-                "parameters": .object([
-                    "type": .string("object"),
-                    "properties": .object([
-                        "city": .object(["type": .string("string")]),
-                    ]),
-                    "required": .array([.string("city")]),
+        // Carried as a descriptor, not as a pre-formatted OpenAI object: each
+        // dialect formats its own tool schema, and this fixture has to work
+        // against whichever provider the suite is pointed at.
+        let weatherTool = ToolDescriptor(
+            name: "get_weather",
+            description: "Get the weather for a city.",
+            schema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "city": .object(["type": .string("string")]),
                 ]),
+                "required": .array([.string("city")]),
             ]),
-        ])
+            providerID: "verify",
+            providerName: "Verification"
+        )
 
         var calls: [ToolCall] = []
         var finishReason: String?
@@ -84,7 +113,7 @@ public enum BudLiveVerification {
             let request = ChatRequest(
                 model: config.model,
                 messages: [ChatMessage(role: .user, content: "What is the weather in Paris? Use the tool.")],
-                tools: [echoSchema],
+                tools: [weatherTool],
                 maxTokens: 2048
             )
             var pending: [Int: (id: String, name: String, args: String)] = [:]
@@ -105,14 +134,14 @@ public enum BudLiveVerification {
                 return ToolCall(id: e.id, name: e.name, arguments: e.args)
             }
         } catch {
-            c.check("deepseek: tool request completed (\(error.localizedDescription))", false)
+            c.check("\(provider.id): tool request completed (\(error.localizedDescription))", false)
         }
-        c.check("deepseek: requested a tool", !calls.isEmpty)
-        c.check("deepseek: finish reason is tool_calls", finishReason == "tool_calls")
+        c.check("\(provider.id): requested a tool", !calls.isEmpty)
+        c.check("\(provider.id): finish reason is tool_calls", finishReason == "tool_calls")
         if let first = calls.first {
-            c.equal("deepseek: correct tool chosen", first.name, "get_weather")
-            c.check("deepseek: arguments are valid JSON", first.parsedArguments.objectValue != nil)
-            c.check("deepseek: argument carries the city", first.parsedArguments["city"] != nil)
+            c.equal("\(provider.id): correct tool chosen", first.name, "get_weather")
+            c.check("\(provider.id): arguments are valid JSON", first.parsedArguments.objectValue != nil)
+            c.check("\(provider.id): argument carries the city", first.parsedArguments["city"] != nil)
         }
 
         // MARK: Tool result round trip
@@ -127,16 +156,16 @@ public enum BudLiveVerification {
                         ChatMessage(role: .assistant, content: "", toolCalls: [first]),
                         ChatMessage(role: .tool, content: "18C and sunny", toolCallID: first.id, name: first.name),
                     ],
-                    tools: [echoSchema],
+                    tools: [weatherTool],
                     maxTokens: 2048
                 )
                 for try await event in backend.stream(request) {
                     if case .contentDelta(let d) = event { finalText += d }
                 }
             } catch {
-                c.check("deepseek: tool round trip (\(error.localizedDescription))", false)
+                c.check("\(provider.id): tool round trip (\(error.localizedDescription))", false)
             }
-            c.check("deepseek: answered using the tool result", finalText.contains("18"))
+            c.check("\(provider.id): answered using the tool result", finalText.contains("18"))
         }
 
         // MARK: MCP registry (live network)

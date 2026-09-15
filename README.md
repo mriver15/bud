@@ -1,7 +1,7 @@
 # Bud
 
 A native macOS assistant that lives in a floating Liquid Glass panel. Chat with
-DeepSeek, connect any MCP server, browse a marketplace of them, delegate to
+any provider, connect any MCP server, browse a marketplace of them, delegate to
 subagents, and let the model draw its own interface when prose is the wrong
 shape.
 
@@ -65,7 +65,7 @@ anything.
 
 - macOS 26.0 or later (Liquid Glass)
 - Swift 6.2+ toolchain
-- A DeepSeek API key
+- An API key for a hosted provider, or a local runtime such as Ollama (no key)
 
 No Xcode required — the build uses SwiftPM and assembles the app bundle directly.
 
@@ -106,8 +106,34 @@ from the stored config, then `GLAMA_API_KEY`, then your shell profile. Without
 it the Glama pane shows a call to action rather than an error; the official
 registry needs no key and works regardless.
 
-Models: `deepseek-v4-flash` (fast) and `deepseek-v4-pro` (deep). Reasoning effort
-is picked up from the `:max` style suffix in your oh-my-pi config.
+### Providers
+
+Bud speaks three wire protocols, which between them cover roughly 85% of the
+providers in the [models.dev](https://models.dev) catalogue and ~92% of its
+models:
+
+| Dialect | Providers |
+|---|---|
+| OpenAI-compatible | 175 of 217 — including several with nothing to do with OpenAI |
+| Anthropic Messages | Anthropic and gateways that resell Claude |
+| Google Generative AI | Gemini |
+
+Twenty-five are configured out of the box (DeepSeek, OpenAI, Anthropic, Gemini,
+OpenRouter, Groq, Mistral, xAI, Together, Cerebras, and the rest), plus Ollama,
+LM Studio and llama.cpp for local models. **Anything else works through the
+custom entry**, which needs nothing but a base URL and a key — that is the whole
+point of splitting the transport from the provider: a new OpenAI-compatible
+endpoint needs no code.
+
+Keys, base URL overrides and model choice are all stored **per provider**, so
+switching back and forth never asks you to re-enter anything, and never carries
+one vendor's model id to another. Keys resolve from stored config, then the
+environment, then your shell profile — the profile fallback is what makes a
+Finder launch work, since it inherits no shell environment.
+
+Amazon Bedrock and Google Vertex are deliberately absent: both sign requests
+(SigV4 and OAuth) rather than taking a bearer token, which is a different problem
+from speaking a dialect.
 
 ---
 
@@ -154,14 +180,19 @@ Sources/Bud/
 ├── BudApp.swift              app scenes, menu bar, lifecycle
 ├── AppModel.swift            root observable state, subsystem wiring
 ├── Core/
-│   ├── BudConfig.swift       config resolution (oh-my-pi + local override)
+│   ├── BudConfig.swift       config resolution, per-provider keys and models
 │   ├── JSONValue.swift       dynamic JSON used by every wire format
 │   ├── Domain.swift          transcript model: Turn / Segment / ChatMessage
-│   ├── ChatBackend.swift     streaming backend contract
-│   ├── DeepSeekClient.swift  SSE client, reasoning + tool-call deltas
+│   ├── ChatBackend.swift     the streaming contract every dialect implements
 │   ├── AgentRuntime.swift    the agent loop: stream, call tools, repeat
 │   ├── ToolProvider.swift    tool contract + namespacing registry
 │   └── NativeTools.swift     file, shell and web tools
+├── Providers/
+│   ├── ProviderRegistry.swift          known providers, dialects, env vars
+│   ├── ProviderCredentials.swift       resolved credentials + the factory
+│   ├── OpenAICompatibleBackend.swift   175 of 217 providers
+│   ├── AnthropicMessagesBackend.swift  Anthropic Messages
+│   └── GoogleGenerativeAIBackend.swift Gemini
 ├── MCP/                      JSON-RPC, stdio + HTTP transports, manager
 ├── Marketplace/              registry client, store, browser UI
 ├── Subagents/                concurrent supervisor + roster UI
@@ -202,11 +233,12 @@ swift build
 
 **`--self-test`** covers the surfaces where a silent bug is expensive: SSE frame
 decoding (including the terminal frame that carries `finish_reason` *and* `usage`
-together), the DeepSeek wire shape, JSON number encoding, MCP tool namespacing,
+together), the OpenAI wire shape, provider registry integrity, the
+single-provider config migration and its round trip, MCP tool namespacing,
 oh-my-pi config parsing, glob semantics, HTML-to-text extraction.
 
 **`--verify-live`** drives the real `AppModel`, `MCPManager`, `ToolRegistry` and
-`AgentRuntime` against the live DeepSeek API, the live MCP registry, and a real
+`AgentRuntime` against the live provider API, the live MCP registry, and a real
 MCP server process. The MCP half runs against this binary's own
 `--mcp-echo-server` mode, so it needs no npx, uvx, node or python — it exercises
 process spawning, JSON-RPC framing, the initialize handshake, tool discovery,

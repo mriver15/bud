@@ -156,7 +156,7 @@ public final class AgentRuntime {
 
     private func streamRound(into turn: inout Turn, turnIndex: Int) async -> RoundOutcome {
         let config = env.config
-        let tools = await env.registry.wireToolDefinitions()
+        let tools = await env.registry.descriptors()
         let request = ChatRequest(
             model: config.model,
             messages: [systemMessage()] + history,

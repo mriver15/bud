@@ -31,8 +31,8 @@ public struct Composer: View {
                 // the chips read as part of the text field rather than as
                 // controls below it.
                 VStack(alignment: .leading, spacing: Bud.Space.md) {
-                    if isKeyMissing {
-                        KeyMissingBanner { model.openSettings(tab: .general) }
+                    if let problem = model.config.setupProblem {
+                        KeyMissingBanner(problem: problem) { model.openSettings(tab: .general) }
                     }
                     input
                     toolbar
@@ -286,8 +286,10 @@ public struct Composer: View {
 
     // MARK: - Sending
 
+    /// True when the active provider cannot be called yet — a missing key, a
+    /// missing base URL for the custom entry, or no model chosen.
     private var isKeyMissing: Bool {
-        model.config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        model.config.setupProblem != nil
     }
 
     private var canSend: Bool {

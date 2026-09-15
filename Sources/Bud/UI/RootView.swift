@@ -85,7 +85,7 @@ struct RootView: View {
             // What Bud is running on, as one unit. Kept tight internally so it
             // reads as a single fact rather than two competing chips.
             HStack(spacing: Bud.Space.xs) {
-                modelMenu
+                providerMenu
                 connectionPill(showsText: showsStatusText)
             }
 
@@ -119,23 +119,36 @@ struct RootView: View {
         }
     }
 
-    private var modelMenu: some View {
+    /// The provider control, which also shows the active model.
+    ///
+    /// It was a model picker listing DeepSeek's two models — meaningless once
+    /// another provider is selected, and actively wrong to offer. Switching
+    /// provider is the more useful quick action, and the model follows from the
+    /// per-provider choice automatically.
+    private var providerMenu: some View {
         Menu {
-            ForEach(BudApp.selectableModels, id: \.id) { option in
-                Button {
-                    model.setModel(option.id)
-                } label: {
-                    if option.id == model.config.model {
-                        Label(option.label, systemImage: "checkmark")
-                    } else {
-                        Text(option.label)
+            ForEach(ProviderRegistry.groups, id: \.title) { group in
+                Section(group.title) {
+                    ForEach(group.providers) { descriptor in
+                        Button {
+                            model.selectProvider(descriptor.id)
+                        } label: {
+                            if descriptor.id == model.config.provider {
+                                Label(descriptor.name, systemImage: "checkmark")
+                            } else {
+                                Text(descriptor.name)
+                            }
+                        }
                     }
                 }
             }
+            Divider()
+            Button("Set model…") { model.openSettings(tab: .general) }
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: Bud.Space.xs) {
                 Text(shortModelName)
                     .font(Bud.Font.caption)
+                    .lineLimit(1)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 7, weight: .bold))
             }
@@ -144,11 +157,16 @@ struct RootView: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Model: \(model.config.model)")
+        .help("\(model.config.activeProvider.name) · \(model.config.model)")
     }
 
+    /// The model, shortened for a 460pt header.
+    ///
+    /// Derived rather than looked up: with arbitrary providers there is no
+    /// catalogue to map ids to friendly names, and inventing one would go stale.
     private var shortModelName: String {
         let name = model.config.model
+        if name.isEmpty { return model.config.activeProvider.name }
         if name.contains("pro") { return "Pro" }
         if name.contains("flash") { return "Flash" }
         return name

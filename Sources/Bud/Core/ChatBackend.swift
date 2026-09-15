@@ -5,7 +5,9 @@ import Foundation
 public struct ChatRequest: Sendable {
     public var model: String
     public var messages: [ChatMessage]
-    public var tools: [JSONValue]
+    /// Carried as descriptors, not as a pre-formatted array: each dialect has its
+    /// own tool schema, so the backend does the formatting, not the caller.
+    public var tools: [ToolDescriptor]
     public var temperature: Double?
     public var maxTokens: Int?
     public var reasoningEffort: String?
@@ -14,7 +16,7 @@ public struct ChatRequest: Sendable {
     public init(
         model: String,
         messages: [ChatMessage],
-        tools: [JSONValue] = [],
+        tools: [ToolDescriptor] = [],
         temperature: Double? = nil,
         maxTokens: Int? = nil,
         reasoningEffort: String? = nil,
@@ -40,6 +42,9 @@ public enum StreamEvent: Sendable {
 }
 
 public enum ChatBackendError: Error, LocalizedError, Sendable {
+    /// No credential for a provider that needs one. Names the provider, because
+    /// with several configured "the API key is missing" is not actionable.
+    case missingKey(provider: String)
     case missingAPIKey
     case http(status: Int, body: String)
     case transport(String)
@@ -47,11 +52,13 @@ public enum ChatBackendError: Error, LocalizedError, Sendable {
 
     public var errorDescription: String? {
         switch self {
+        case .missingKey(let provider):
+            return "No API key for \(provider). Add one in Settings → General."
         case .missingAPIKey:
-            return "No DeepSeek API key. Set DEEPSEEK_API_KEY or add it in Settings."
+            return "No API key. Set DEEPSEEK_API_KEY or add it in Settings."
         case .http(let status, let body):
             let trimmed = body.count > 400 ? String(body.prefix(400)) + "…" : body
-            return "DeepSeek returned HTTP \(status): \(trimmed)"
+            return "The provider returned HTTP \(status): \(trimmed)"
         case .transport(let m):
             return "Network error: \(m)"
         case .decoding(let m):
