@@ -26,10 +26,15 @@ public final class AppEnvironment: @unchecked Sendable {
 
     public var model: String { config.model }
 
-    /// Builds a backend from the *current* config. Callers get a fresh client per
-    /// turn so a mid-session model change takes effect on the next request.
+    /// Builds a backend for the *current* provider. Callers get a fresh client per
+    /// turn so a mid-session model or provider change takes effect on the next
+    /// request without any further plumbing.
     public func makeBackend() -> any ChatBackend {
-        DeepSeekClient(config: config)
+        let config = self.config
+        return ProviderBackendFactory.make(
+            provider: config.activeProvider,
+            credentials: config.activeCredentials
+        )
     }
 
     // MARK: Usage accounting

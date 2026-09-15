@@ -4,12 +4,6 @@ import SwiftUI
 public struct BudApp: App {
     public static let settingsWindowID = "bud-settings"
 
-    /// Models offered in the header picker. DeepSeek accepts other aliases and
-    /// silently maps unknown names to flash, so the Settings field stays free-text.
-    public static let selectableModels: [(id: String, label: String)] = [
-        ("deepseek-v4-flash", "DeepSeek V4 Flash"),
-        ("deepseek-v4-pro", "DeepSeek V4 Pro"),
-    ]
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
@@ -19,7 +13,12 @@ public struct BudApp: App {
         MenuBarExtra {
             MenuBarView(model: delegate.model)
         } label: {
-            Image(systemName: "sparkle")
+            // The label is the one view that exists from launch, so the settings
+            // handler has to be registered here. Registering it in the panel
+            // instead — as it was — meant `bud://settings` silently did nothing
+            // until the panel had been opened at least once, because the panel
+            // is now created lazily and Bud starts hidden.
+            BudMenuBarLabel(model: delegate.model)
         }
         .menuBarExtraStyle(.window)
 
@@ -41,6 +40,23 @@ public struct BudApp: App {
                     .keyboardShortcut("n", modifiers: .command)
             }
         }
+    }
+}
+
+/// The menu bar icon, which also wires up settings presentation.
+private struct BudMenuBarLabel: View {
+    let model: AppModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Image(systemName: "sparkle")
+            .task {
+                model.onPresentSettings = { tab in
+                    model.settingsTab = tab
+                    openWindow(id: BudApp.settingsWindowID)
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+            }
     }
 }
 

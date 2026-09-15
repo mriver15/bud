@@ -72,6 +72,7 @@ public enum BudSelfTest {
             chatWireFormat,
             jsonValue,
             toolNaming,
+            providers,
             mcpConfigMapping,
             glamaMapping,
             toolTruncation,
@@ -238,7 +239,7 @@ public enum BudSelfTest {
 
     static func streamDecoding() -> SelfTestReport {
         let c = Checker(suite: "stream")
-        func d(line: String) -> StreamEvent? { DeepSeekClient.decode(line: line) }
+        func d(line: String) -> StreamEvent? { OpenAICompatibleBackend.decode(line: line) }
 
         if case .reasoningDelta(let t)? = d(line: #"data: {"choices":[{"delta":{"reasoning_content":"think"}}]}"#) {
             c.equal("reasoning delta", t, "think")
@@ -299,7 +300,7 @@ public enum BudSelfTest {
         // DeepSeek puts `finish_reason` and `usage` in the SAME terminal frame.
         // Emitting only one of them silently loses the finish reason, and the
         // agent loop keys off it to know a round is over.
-        let combined = DeepSeekClient.decodeEvents(
+        let combined = OpenAICompatibleBackend.decodeEvents(
             line: #"data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":5,"completion_tokens":1}}"#
         )
         c.equal("terminal frame yields usage and finish", combined.count, 2)
@@ -315,13 +316,13 @@ public enum BudSelfTest {
         }
 
         // A usage-only frame carries no choices at all and must still be read.
-        let usageOnly = DeepSeekClient.decodeEvents(
+        let usageOnly = OpenAICompatibleBackend.decodeEvents(
             line: #"data: {"usage":{"prompt_tokens":7,"completion_tokens":2}}"#
         )
         c.equal("usage-only frame is emitted", usageOnly.count, 1)
 
         // Several calls can be pipelined into one frame; each is its own call.
-        let multi = DeepSeekClient.decodeEvents(
+        let multi = OpenAICompatibleBackend.decodeEvents(
             line: #"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"x","arguments":"{}"}},{"index":1,"id":"b","function":{"name":"y","arguments":"{}"}}]}}]}"#
         )
         c.equal("pipelined tool calls all emitted", multi.count, 2)
@@ -334,7 +335,7 @@ public enum BudSelfTest {
     static func chatWireFormat() -> SelfTestReport {
         let c = Checker(suite: "wire")
 
-        let plain = ChatMessage(role: .user, content: "hi").wireRepresentation
+        let plain = ChatMessage(role: .user, content: "hi").openAIWireRepresentation
         c.equal("role", plain["role"]?.stringValue, "user")
         c.equal("content", plain["content"]?.stringValue, "hi")
         c.nilValue("no tool_calls on plain message", plain["tool_calls"])
@@ -343,7 +344,7 @@ public enum BudSelfTest {
             role: .assistant,
             content: "",
             toolCalls: [ToolCall(id: "call_1", name: "get_weather", arguments: #"{"city":"Paris"}"#)]
-        ).wireRepresentation
+        ).openAIWireRepresentation
         c.check("empty content becomes null", toolCall["content"]?.isNull ?? false)
         c.equal("tool call count", toolCall["tool_calls"]?.arrayValue?.count, 1)
         c.equal("tool call id", toolCall["tool_calls"]?[0]?["id"]?.stringValue, "call_1")
@@ -356,13 +357,13 @@ public enum BudSelfTest {
 
         // The API returns reasoning but rejects it on input.
         let withReasoning = ChatMessage(role: .assistant, content: "done", reasoning: "secret plan")
-            .wireRepresentation
+            .openAIWireRepresentation
         c.nilValue("reasoning not echoed", withReasoning["reasoning_content"])
         c.check("reasoning text absent", !withReasoning.encodedString().contains("secret"))
 
         let toolResult = ChatMessage(
             role: .tool, content: "18C", toolCallID: "call_1", name: "get_weather"
-        ).wireRepresentation
+        ).openAIWireRepresentation
         c.equal("tool role", toolResult["role"]?.stringValue, "tool")
         c.equal("tool_call_id links back", toolResult["tool_call_id"]?.stringValue, "call_1")
 
@@ -773,6 +774,306 @@ public enum BudSelfTest {
             c.check("unexpected status is an http error", false)
         }
         c.check("raw body is not shown to the user", !gateway.localizedDescription.contains("Bad Gateway"))
+
+        return c.report()
+    }
+
+    /// The provider registry is data, and data of this shape fails quietly: a
+    /// duplicate id silently shadows a provider, a missing base URL only shows up
+    /// as a request to nowhere, and a botched migration loses a credential the
+    /// user already supplied.
+    static func providers() -> SelfTestReport {
+        let c = Checker(suite: "providers")
+
+        let all = ProviderRegistry.all
+        c.check("registry is not empty", !all.isEmpty)
+        c.equal(
+            "provider ids are unique",
+            Set(all.map(\.id)).count,
+            all.count
+        )
+        c.check(
+            "every provider has a name",
+            all.allSatisfy { !$0.name.isEmpty }
+        )
+        // The custom entry is the only one allowed to have no endpoint: it is
+        // defined by whatever the user types.
+        c.check(
+            "every built-in provider has a base URL",
+            all.filter { !$0.isCustom }.allSatisfy { !$0.baseURL.isEmpty }
+        )
+        c.check(
+            "the custom provider has no base URL of its own",
+            all.first(where: \.isCustom)?.baseURL.isEmpty ?? false
+        )
+        c.check(
+            "local runtimes need no key",
+            all.filter { $0.baseURL.hasPrefix("http://localhost") }.allSatisfy { !$0.requiresKey }
+        )
+        c.check(
+            "hosted providers declare at least one key variable",
+            all.filter { $0.requiresKey && !$0.isCustom }.allSatisfy { !$0.envKeys.isEmpty }
+        )
+
+        // Every dialect the factory can build must be reachable from the
+        // registry, or the backends are dead code.
+        let usedFormats = Set(all.map(\.wireFormat))
+        c.check(
+            "all three dialects are represented (\(usedFormats.count))",
+            usedFormats.count == WireFormat.allCases.count
+        )
+
+        c.equal(
+            "an unknown provider id falls back",
+            ProviderRegistry.provider(orFallback: "no-such-provider").id,
+            ProviderRegistry.fallback.id
+        )
+        c.equal(
+            "a known provider id resolves",
+            ProviderRegistry.provider(orFallback: "anthropic").wireFormat,
+            .anthropicMessages
+        )
+        c.equal(
+            "google uses its own dialect",
+            ProviderRegistry.provider(orFallback: "google").wireFormat,
+            .googleGenerativeAI
+        )
+        c.nilValue("lookup of a missing id is nil", ProviderRegistry.provider(id: "nope"))
+
+        // MARK: Per-provider storage
+
+        var config = BudConfig()
+        config.provider = "deepseek"
+        config.model = "deepseek-v4-pro"
+        config.provider = "anthropic"
+        config.model = "claude-sonnet-4-6"
+        c.equal(
+            "each provider remembers its own model",
+            config.providerModels,
+            ["deepseek": "deepseek-v4-pro", "anthropic": "claude-sonnet-4-6"]
+        )
+        c.equal("the active model follows the provider", config.model, "claude-sonnet-4-6")
+        config.provider = "deepseek"
+        c.equal("switching back restores the model", config.model, "deepseek-v4-pro")
+
+        config.apiKey = "sk-anthropic"
+        config.baseURL = "https://proxy.example/v1"
+        c.equal(
+            "keys are stored per provider",
+            config.providerKeys["deepseek"],
+            "sk-anthropic"
+        )
+        c.equal(
+            "base URLs are stored per provider",
+            config.providerBaseURLs["deepseek"],
+            "https://proxy.example/v1"
+        )
+        config.provider = "groq"
+        c.equal("an unconfigured provider reports no key", config.apiKey, "")
+        c.equal(
+            "an unconfigured provider falls back to the registry URL",
+            config.baseURL,
+            ProviderRegistry.provider(orFallback: "groq").baseURL
+        )
+        c.equal(
+            "an unconfigured provider suggests its default model",
+            config.model,
+            ProviderRegistry.provider(orFallback: "groq").defaultModel ?? ""
+        )
+
+        // MARK: Migration
+
+        let legacy = BudConfigLoader.StoredConfig(
+            model: "deepseek-v4-flash",
+            apiKey: "sk-legacy",
+            baseURL: "https://legacy.example/v1"
+        )
+        let migrated = BudConfigLoader.apply(legacy, to: BudConfig())
+        c.equal("legacy key migrates to deepseek", migrated.providerKeys["deepseek"], "sk-legacy")
+        c.equal(
+            "legacy base URL migrates to deepseek",
+            migrated.providerBaseURLs["deepseek"],
+            "https://legacy.example/v1"
+        )
+        c.equal(
+            "legacy model migrates to deepseek",
+            migrated.providerModels["deepseek"],
+            "deepseek-v4-flash"
+        )
+
+        // A config that already has per-provider values must not be overwritten
+        // by the legacy fields, which are still present in the same file.
+        var existing = BudConfig()
+        existing.providerKeys["deepseek"] = "sk-new"
+        let notClobbered = BudConfigLoader.apply(legacy, to: existing)
+        c.equal(
+            "migration does not overwrite a newer key",
+            notClobbered.providerKeys["deepseek"],
+            "sk-new"
+        )
+
+        // MARK: Credentials
+
+        let descriptor = ProviderRegistry.provider(orFallback: "groq")
+        let credentials = ProviderCredentials(apiKey: "k", baseURL: nil)
+        c.equal(
+            "credentials fall back to the provider URL",
+            credentials.resolvedBaseURL(for: descriptor),
+            descriptor.baseURL
+        )
+        let overridden = ProviderCredentials(apiKey: "k", baseURL: "https://proxy/v1")
+        c.equal(
+            "an override wins over the registry URL",
+            overridden.resolvedBaseURL(for: descriptor),
+            "https://proxy/v1"
+        )
+        // An empty override is what a cleared text field produces, and treating
+        // it as a URL would send every request to nowhere.
+        let blank = ProviderCredentials(apiKey: "k", baseURL: "   ")
+        c.equal(
+            "a blank override falls back rather than blanking the URL",
+            blank.resolvedBaseURL(for: descriptor),
+            descriptor.baseURL
+        )
+
+        // Regions are the one setting whose failure is silent and expensive: a
+        // templated endpoint with an unsubstituted or substituted-wrong region
+        // sends the request to a different continent, not to an error.
+        guard let bedrock = ProviderRegistry.provider(id: "bedrock"),
+              let bedrockClaude = ProviderRegistry.provider(id: "bedrock-claude") else {
+            c.check("bedrock is in the registry", false)
+            return c.report()
+        }
+        c.equal(
+            "bedrock defaults to us-east-1",
+            bedrock.baseURL(region: nil),
+            "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1"
+        )
+        c.equal(
+            "a chosen region is substituted into the host",
+            bedrock.baseURL(region: "eu-west-2"),
+            "https://bedrock-runtime.eu-west-2.amazonaws.com/openai/v1"
+        )
+        // Clouds add regions faster than Bud ships builds, so a region that is
+        // not in the offered list must still be honoured. Substituting the
+        // default instead would quietly bill the wrong region.
+        c.equal(
+            "an unlisted region is honoured rather than replaced",
+            bedrock.baseURL(region: "ap-east-1"),
+            "https://bedrock-runtime.ap-east-1.amazonaws.com/openai/v1"
+        )
+        c.equal(
+            "whitespace is not a region",
+            bedrock.baseURL(region: "   "),
+            bedrock.baseURL(region: nil)
+        )
+        c.equal(
+            "an untemplated provider ignores the region",
+            ProviderRegistry.provider(orFallback: "deepseek").baseURL(region: "eu-west-2"),
+            "https://api.deepseek.com/v1"
+        )
+
+        // The two Bedrock routes are only correct if the path Bud appends lands
+        // on the path AWS documents. These pin the contract, since neither can be
+        // exercised without AWS credentials.
+        c.equal(
+            "bedrock chat completions lands on the documented path",
+            bedrock.baseURL(region: "us-east-1") + "/chat/completions",
+            "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/chat/completions"
+        )
+        c.equal(
+            "bedrock Messages lands on the documented path",
+            bedrockClaude.baseURL(region: "us-east-1") + "/v1/messages",
+            "https://bedrock-runtime.us-east-1.amazonaws.com/anthropic/v1/messages"
+        )
+        c.equal(
+            "bedrock Messages is an Anthropic provider",
+            bedrockClaude.wireFormat,
+            .anthropicMessages
+        )
+        c.equal(
+            "both bedrock routes read the same key",
+            bedrock.envKeys,
+            bedrockClaude.envKeys
+        )
+
+        // The descriptor method is only correct if config actually routes through
+        // it — that is the path the settings pane and the backends take.
+        var regional = BudConfig()
+        regional.provider = "bedrock"
+        regional.providerRegions = ["bedrock": "eu-west-2"]
+        c.equal(
+            "config resolves the endpoint from the stored region",
+            regional.baseURL,
+            "https://bedrock-runtime.eu-west-2.amazonaws.com/openai/v1"
+        )
+        c.equal(
+            "credentials carry the region through to the backend",
+            regional.activeCredentials.resolvedBaseURL(for: bedrock),
+            "https://bedrock-runtime.eu-west-2.amazonaws.com/openai/v1"
+        )
+        regional.providerBaseURLs = ["bedrock": "https://proxy.internal/v1"]
+        c.equal(
+            "an explicit URL override still beats the region",
+            regional.baseURL,
+            "https://proxy.internal/v1"
+        )
+        c.equal(
+            "a provider with no region template keeps its fixed URL",
+            BudConfig().baseURL,
+            "https://api.deepseek.com/v1"
+        )
+
+        // A descriptor carries both a fixed URL and a template; if they disagree
+        // the settings pane and the request would show different endpoints.
+        for provider in ProviderRegistry.all where provider.regionTemplate != nil {
+            guard let first = provider.regions.first else {
+                c.check("\(provider.id) lists at least one region", false)
+                continue
+            }
+            c.equal(
+                "\(provider.id): the fixed URL matches the first region",
+                provider.baseURL,
+                provider.baseURL(region: first)
+            )
+        }
+
+        // The whole point of the new shape is that it survives a save and a
+        // reload. A projection that drops a field loses a credential silently and
+        // only surfaces later as a 401, so this asserts the round trip directly.
+        var saved = BudConfig()
+        saved.provider = "anthropic"
+        saved.providerKeys = ["anthropic": "sk-a", "deepseek": "sk-d"]
+        saved.providerBaseURLs = ["custom": "https://proxy.example/v1"]
+        saved.providerRegions = ["bedrock": "eu-west-2", "bedrock-claude": "ap-south-1"]
+        saved.providerModels = ["anthropic": "claude-sonnet-4-6", "deepseek": "deepseek-v4-pro"]
+        saved.glamaAPIKey = "glm-x"
+        saved.reasoningEffort = "high"
+        saved.temperature = 0.4
+        saved.maxToolRounds = 12
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(BudConfigLoader.StoredConfig(from: saved)),
+              let decoded = try? JSONDecoder().decode(BudConfigLoader.StoredConfig.self, from: data) else {
+            c.check("a saved config decodes again", false)
+            return c.report()
+        }
+        let restored = BudConfigLoader.apply(decoded, to: BudConfig())
+        c.equal("round trip: provider", restored.provider, "anthropic")
+        c.equal("round trip: keys", restored.providerKeys, saved.providerKeys)
+        c.equal("round trip: base URLs", restored.providerBaseURLs, saved.providerBaseURLs)
+        c.equal("round trip: regions", restored.providerRegions, saved.providerRegions)
+        c.equal("round trip: models", restored.providerModels, saved.providerModels)
+        c.equal("round trip: glama key", restored.glamaAPIKey, "glm-x")
+        c.equal("round trip: active model", restored.model, "claude-sonnet-4-6")
+        c.equal("round trip: reasoning effort", restored.reasoningEffort, "high")
+        c.equal("round trip: temperature", restored.temperature, 0.4)
+        c.equal("round trip: tool rounds", restored.maxToolRounds, 12)
+        // The legacy fields must not be written back, or a migrated install would
+        // carry two copies of the same credential for ever.
+        c.nilValue("a saved config omits the legacy key", decoded.apiKey)
+        c.nilValue("a saved config omits the legacy URL", decoded.baseURL)
+        c.nilValue("a saved config omits the legacy model", decoded.model)
 
         return c.report()
     }

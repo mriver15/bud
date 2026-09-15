@@ -58,9 +58,10 @@ public struct ChatMessage: Sendable, Codable, Hashable, Identifiable {
         self.name = name
     }
 
-    /// Serialises to the shape DeepSeek expects. `reasoning` is deliberately
+    /// Serialises to the OpenAI chat-completions message shape, which DeepSeek and
+    /// some 175 other providers speak. `reasoning` is deliberately
     /// dropped: the API returns it for display but rejects it on input.
-    public var wireRepresentation: JSONValue {
+    public var openAIWireRepresentation: JSONValue {
         var o: [String: JSONValue] = ["role": .string(role.rawValue)]
         if role == .assistant, !toolCalls.isEmpty {
             o["content"] = content.isEmpty ? .null : .string(content)
@@ -106,8 +107,10 @@ public struct ToolDescriptor: Sendable, Hashable, Identifiable {
         self.providerName = providerName
     }
 
-    /// DeepSeek function definition. Names are pre-sanitised by each provider.
-    public var wireRepresentation: JSONValue {
+    /// The OpenAI function-definition shape. Anthropic and Google need different
+    /// shapes from the same descriptor, so each backend formats its own rather
+    /// than sharing one pre-baked object.
+    public var openAIToolDefinition: JSONValue {
         .object([
             "type": "function",
             "function": .object([

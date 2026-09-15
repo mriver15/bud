@@ -158,9 +158,15 @@ public struct ErrorBanner: View {
 
 /// Shown in place of the composer when Bud has no credential to talk to the model.
 public struct KeyMissingBanner: View {
+    private let problem: String
     private let onOpenSettings: () -> Void
 
-    public init(onOpenSettings: @escaping () -> Void) {
+    /// - Parameter problem: what is actually wrong, in the user's terms. It is
+    ///   passed in rather than assumed because a missing key is only one of the
+    ///   three ways a provider can be unconfigured, and the other two are not
+    ///   fixed by adding a key.
+    public init(problem: String, onOpenSettings: @escaping () -> Void) {
+        self.problem = problem
         self.onOpenSettings = onOpenSettings
     }
 
@@ -170,15 +176,15 @@ public struct KeyMissingBanner: View {
                 .font(Bud.Font.caption.weight(.semibold))
                 .foregroundStyle(Bud.Palette.warning)
             VStack(alignment: .leading, spacing: Bud.Space.hairline) {
-                Text("DeepSeek API key required")
+                Text("Not configured yet")
                     .font(Bud.Font.caption)
                     .foregroundStyle(.primary)
-                Text("Bud needs a key before it can reach the model.")
+                Text(problem)
                     .font(Bud.Font.caption)
                     .foregroundStyle(.tertiary)
             }
             Spacer(minLength: 0)
-            Button("Add your DeepSeek API key in Settings") {
+            Button("Open Settings") {
                 onOpenSettings()
             }
             .buttonStyle(.glass)

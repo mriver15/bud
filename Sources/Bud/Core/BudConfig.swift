@@ -18,9 +18,20 @@ import Foundation
 /// search. Skipping the profile search would strand a key that is already
 /// exported in `~/.zshrc`, which is where keys usually live.
 public struct BudConfig: Sendable, Codable, Hashable {
-    public var model: String
-    public var baseURL: String
-    public var apiKey: String
+    /// The provider the session runs against. See `ProviderRegistry`.
+    public var provider: String
+    /// The model chosen for each provider, keyed by provider id.
+    public var providerModels: [String: String]
+    /// Per-provider credentials, keyed by provider id. Storing one key per
+    /// provider is what makes switching cheap — configure a provider once, then
+    /// move between them without re-entering anything.
+    public var providerKeys: [String: String]
+    /// Per-provider base URL overrides. Required for the custom entry, and useful
+    /// for routing a known provider through a proxy.
+    public var providerBaseURLs: [String: String]
+    /// Per-provider region, for endpoints whose host names one. Empty means "use
+    /// the provider's default".
+    public var providerRegions: [String: String]
     /// Glama's API key, for browsing its MCP catalogue. Empty means "not
     /// configured", which the marketplace reports as a call to action.
     public var glamaAPIKey: String
@@ -54,9 +65,11 @@ public struct BudConfig: Sendable, Codable, Hashable {
     """
 
     public init(
-        model: String = "deepseek-v4-flash",
-        baseURL: String = "https://api.deepseek.com/v1",
-        apiKey: String = "",
+        provider: String = "deepseek",
+        providerModels: [String: String] = [:],
+        providerKeys: [String: String] = [:],
+        providerBaseURLs: [String: String] = [:],
+        providerRegions: [String: String] = [:],
         glamaAPIKey: String = "",
         reasoningEffort: String? = nil,
         temperature: Double? = nil,
@@ -65,9 +78,11 @@ public struct BudConfig: Sendable, Codable, Hashable {
         maxToolRounds: Int = 24,
         allowParallelSubagents: Int = 6
     ) {
-        self.model = model
-        self.baseURL = baseURL
-        self.apiKey = apiKey
+        self.provider = provider
+        self.providerModels = providerModels
+        self.providerKeys = providerKeys
+        self.providerBaseURLs = providerBaseURLs
+        self.providerRegions = providerRegions
         self.glamaAPIKey = glamaAPIKey
         self.reasoningEffort = reasoningEffort
         self.temperature = temperature
@@ -79,6 +94,111 @@ public struct BudConfig: Sendable, Codable, Hashable {
 
     public var displayModel: String { model }
     public var host: String { URL(string: baseURL)?.host() ?? baseURL }
+
+    // MARK: Active provider
+
+    /// The provider the settings currently point at.
+    public var activeProvider: ProviderDescriptor {
+        ProviderRegistry.provider(orFallback: provider)
+    }
+
+    /// The model for the active provider.
+    ///
+    /// Computed over `providerModels` so call sites read naturally while each
+    /// provider keeps its own choice underneath. Falls back to the provider's
+    /// suggested model so a freshly selected provider is never blank.
+    public var model: String {
+        get {
+            let stored = providerModels[provider]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !stored.isEmpty { return stored }
+            return activeProvider.defaultModel ?? ""
+        }
+        set { providerModels[provider] = newValue }
+    }
+
+    /// The API key for the active provider.
+    ///
+    /// A computed property rather than a stored one so that existing call sites —
+    /// and the verification suites — keep reading naturally, while storage stays
+    /// per provider underneath.
+    public var apiKey: String {
+        get { providerKeys[provider] ?? "" }
+        set { providerKeys[provider] = newValue }
+    }
+
+    /// The base URL for the active provider: an override when one is set,
+    /// otherwise the registry's endpoint resolved for the selected region.
+    public var baseURL: String {
+        get {
+            let override = providerBaseURLs[provider]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let override, !override.isEmpty { return override }
+            return activeProvider.baseURL(region: region)
+        }
+        set { providerBaseURLs[provider] = newValue }
+    }
+
+    /// The region for the active provider. Empty means the provider's default.
+    ///
+    /// Stored per provider like the model and the key: moving between a Bedrock
+    /// endpoint in one region and a direct vendor in another should not reset
+    /// either one's settings.
+    public var region: String {
+        get { providerRegions[provider] ?? "" }
+        set { providerRegions[provider] = newValue }
+    }
+
+    /// Everything a backend needs for the current provider, with the key
+    /// resolved from storage, the environment, or the shell profile.
+    public var activeCredentials: ProviderCredentials {
+        ProviderCredentials(
+            apiKey: resolvedKey(for: activeProvider),
+            baseURL: providerBaseURLs[provider],
+            region: region
+        )
+    }
+
+    /// Resolves a provider's credential, in the order that makes a
+    /// Finder-launched app work: what the user typed, then the process
+    /// environment, then their shell profile.
+    public func resolvedKey(for provider: ProviderDescriptor) -> String {
+        let stored = providerKeys[provider.id]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !stored.isEmpty { return stored }
+        return BudConfigLoader.resolveKey(for: provider)
+    }
+
+    /// True when the active provider wants a key and does not have one.
+    public var activeProviderNeedsKey: Bool {
+        activeProvider.requiresKey && resolvedKey(for: activeProvider).isEmpty
+    }
+
+    /// True when the custom provider is selected but has no endpoint to call.
+    public var customProviderNeedsBaseURL: Bool {
+        activeProvider.isCustom && baseURL.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// The first thing standing between the user and a working request, or nil
+    /// when the provider is ready.
+    ///
+    /// Reported as a sentence rather than as booleans because there are now three
+    /// distinct reasons Bud cannot send — a missing key, a missing base URL for
+    /// the custom entry, and a missing model — and a single "add your API key"
+    /// message is wrong for two of them.
+    public var setupProblem: String? {
+        if customProviderNeedsBaseURL {
+            return "\(activeProvider.name) needs a base URL before Bud can send anything."
+        }
+        if activeProviderNeedsKey {
+            return "No API key for \(activeProvider.name)."
+        }
+        if model.trimmingCharacters(in: .whitespaces).isEmpty {
+            let suggested = activeProvider.defaultModel.map { " Try \($0)." } ?? ""
+            return "No model set for \(activeProvider.name).\(suggested)"
+        }
+        return nil
+    }
+
+    /// Short label for the button that fixes the problem.
+    public var setupAction: String { "Open Settings" }
 }
 
 // MARK: - Loading
@@ -103,6 +223,50 @@ public enum BudConfigLoader {
         )
     }
 
+    /// Folds a stored config onto a base one.
+    ///
+    /// Pure and separate from `load()` so the migration can be tested without a
+    /// real config file on disk. Getting this wrong loses a credential the user
+    /// already gave us, which is the kind of failure that only shows up as a 401
+    /// much later.
+    static func apply(_ stored: StoredConfig, to config: BudConfig) -> BudConfig {
+        var config = config
+        if let v = stored.provider, !v.isEmpty { config.provider = v }
+        if let v = stored.providerModels { config.providerModels = v }
+        if let v = stored.providerKeys { config.providerKeys = v }
+        if let v = stored.providerBaseURLs { config.providerBaseURLs = v }
+        if let v = stored.providerRegions { config.providerRegions = v }
+
+        // Migration from the single-provider shape. The key and URL used to
+        // belong to DeepSeek implicitly, because DeepSeek was the only provider;
+        // fold them into the per-provider maps so an existing install keeps
+        // working and nobody is asked to re-enter a credential.
+        if let legacyKey = stored.apiKey, !legacyKey.isEmpty,
+           config.providerKeys["deepseek"]?.isEmpty ?? true {
+            config.providerKeys["deepseek"] = legacyKey
+        }
+        if let legacyURL = stored.baseURL, !legacyURL.isEmpty,
+           config.providerBaseURLs["deepseek"]?.isEmpty ?? true {
+            config.providerBaseURLs["deepseek"] = legacyURL
+        }
+
+        // The pre-provider shape stored the model as a plain string. It belongs
+        // to whichever provider was the only one at the time.
+        if let legacyModel = stored.model, !legacyModel.isEmpty,
+           config.providerModels["deepseek"]?.isEmpty ?? true {
+            config.providerModels["deepseek"] = legacyModel
+        }
+
+        if let v = stored.glamaAPIKey, !v.isEmpty { config.glamaAPIKey = v }
+        if let v = stored.reasoningEffort { config.reasoningEffort = v }
+        if let v = stored.temperature { config.temperature = v }
+        if let v = stored.maxTokens { config.maxTokens = v }
+        if let v = stored.systemPrompt, !v.isEmpty { config.systemPrompt = v }
+        if let v = stored.maxToolRounds { config.maxToolRounds = v }
+        if let v = stored.allowParallelSubagents { config.allowParallelSubagents = v }
+        return config
+    }
+
     /// Reads and caches. Failure is never fatal — a missing key surfaces in the UI
     /// as a first-run prompt rather than a crash.
     public static func load() -> BudConfig {
@@ -111,26 +275,16 @@ public enum BudConfigLoader {
 
         // 2. The user's oh-my-pi configuration wins over built-in defaults.
         if let (model, effort) = readOMPModelRole() {
-            config.model = model
+            config.providerModels["deepseek"] = model
             config.reasoningEffort = effort
         }
 
         // 1. Bud-local override wins over everything on disk.
         if let data = try? Data(contentsOf: configURL),
            let stored = try? JSONDecoder().decode(StoredConfig.self, from: data) {
-            if let v = stored.model, !v.isEmpty { config.model = v }
-            if let v = stored.baseURL, !v.isEmpty { config.baseURL = v }
-            if let v = stored.apiKey, !v.isEmpty { config.apiKey = v }
-            if let v = stored.glamaAPIKey, !v.isEmpty { config.glamaAPIKey = v }
-            if let v = stored.reasoningEffort { config.reasoningEffort = v }
-            if let v = stored.temperature { config.temperature = v }
-            if let v = stored.maxTokens { config.maxTokens = v }
-            if let v = stored.systemPrompt, !v.isEmpty { config.systemPrompt = v }
-            if let v = stored.maxToolRounds { config.maxToolRounds = v }
-            if let v = stored.allowParallelSubagents { config.allowParallelSubagents = v }
+            config = apply(stored, to: config)
         }
 
-        if config.apiKey.isEmpty { config.apiKey = resolveKey(named: "DEEPSEEK_API_KEY") }
         // A Finder launch inherits no environment, so the profile search is what
         // actually finds a key that is exported in ~/.zshrc.
         if config.glamaAPIKey.isEmpty { config.glamaAPIKey = resolveKey(named: "GLAMA_API_KEY") }
@@ -139,18 +293,7 @@ public enum BudConfigLoader {
 
     public static func save(_ config: BudConfig) {
         ensureDirectory()
-        let stored = StoredConfig(
-            model: config.model,
-            baseURL: config.baseURL,
-            apiKey: config.apiKey,
-            glamaAPIKey: config.glamaAPIKey,
-            reasoningEffort: config.reasoningEffort,
-            temperature: config.temperature,
-            maxTokens: config.maxTokens,
-            systemPrompt: config.systemPrompt,
-            maxToolRounds: config.maxToolRounds,
-            allowParallelSubagents: config.allowParallelSubagents
-        )
+        let stored = StoredConfig(from: config)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(stored) else { return }
@@ -241,6 +384,19 @@ public enum BudConfigLoader {
         return ""
     }
 
+    /// Tries each variable the provider publishes, in the order it lists them.
+    ///
+    /// Providers ship more than one name for the same credential — Google accepts
+    /// both `GEMINI_API_KEY` and `GOOGLE_GENERATIVE_AI_API_KEY` — and which one a
+    /// user exported is not something they should have to think about.
+    static func resolveKey(for provider: ProviderDescriptor) -> String {
+        for variable in provider.envKeys {
+            let value = resolveKey(named: variable)
+            if !value.isEmpty { return value }
+        }
+        return ""
+    }
+
     /// A Finder-launched app sees none of the shell environment, so the key is
     /// recovered from the profile that defines it.
     static func readKeyFromShellProfiles(named variable: String) -> String? {
@@ -283,9 +439,15 @@ public enum BudConfigLoader {
     }
 
     public struct StoredConfig: Codable, Sendable {
+        /// Every field is optional so a config written by an older build still
+        /// decodes, and a config written by this build can be read by one that
+        /// only knows some of it.
+        public var provider: String?
         public var model: String?
-        public var baseURL: String?
-        public var apiKey: String?
+        public var providerModels: [String: String]?
+        public var providerKeys: [String: String]?
+        public var providerBaseURLs: [String: String]?
+        public var providerRegions: [String: String]?
         public var glamaAPIKey: String?
         public var reasoningEffort: String?
         public var temperature: Double?
@@ -294,16 +456,55 @@ public enum BudConfigLoader {
         public var maxToolRounds: Int?
         public var allowParallelSubagents: Int?
 
+        /// The single-provider shape Bud used before it supported more than
+        /// DeepSeek. Read once and folded into `providerKeys`, never written.
+        public var apiKey: String?
+        public var baseURL: String?
+
+        /// Projects a live config onto the persisted shape.
+        ///
+        /// The legacy single-provider fields are deliberately left nil: they are
+        /// read once for migration and never written again, so a saved file has
+        /// exactly one representation of where a credential lives.
+        public init(from config: BudConfig) {
+            self.provider = config.provider
+            self.model = nil
+            self.providerModels = config.providerModels
+            self.providerKeys = config.providerKeys
+            self.providerBaseURLs = config.providerBaseURLs
+            self.providerRegions = config.providerRegions
+            self.glamaAPIKey = config.glamaAPIKey
+            self.reasoningEffort = config.reasoningEffort
+            self.temperature = config.temperature
+            self.maxTokens = config.maxTokens
+            self.systemPrompt = config.systemPrompt
+            self.maxToolRounds = config.maxToolRounds
+            self.allowParallelSubagents = config.allowParallelSubagents
+        }
+
         public init(
-            model: String? = nil, baseURL: String? = nil, apiKey: String? = nil,
+            provider: String? = nil,
+            model: String? = nil,
+            providerModels: [String: String]? = nil,
+            providerKeys: [String: String]? = nil,
+            providerBaseURLs: [String: String]? = nil,
+            providerRegions: [String: String]? = nil,
             glamaAPIKey: String? = nil,
-            reasoningEffort: String? = nil, temperature: Double? = nil,
-            maxTokens: Int? = nil, systemPrompt: String? = nil,
-            maxToolRounds: Int? = nil, allowParallelSubagents: Int? = nil
+            reasoningEffort: String? = nil,
+            temperature: Double? = nil,
+            maxTokens: Int? = nil,
+            systemPrompt: String? = nil,
+            maxToolRounds: Int? = nil,
+            allowParallelSubagents: Int? = nil,
+            apiKey: String? = nil,
+            baseURL: String? = nil
         ) {
+            self.provider = provider
             self.model = model
-            self.baseURL = baseURL
-            self.apiKey = apiKey
+            self.providerModels = providerModels
+            self.providerKeys = providerKeys
+            self.providerBaseURLs = providerBaseURLs
+            self.providerRegions = providerRegions
             self.glamaAPIKey = glamaAPIKey
             self.reasoningEffort = reasoningEffort
             self.temperature = temperature
@@ -311,6 +512,8 @@ public enum BudConfigLoader {
             self.systemPrompt = systemPrompt
             self.maxToolRounds = maxToolRounds
             self.allowParallelSubagents = allowParallelSubagents
+            self.apiKey = apiKey
+            self.baseURL = baseURL
         }
     }
 }

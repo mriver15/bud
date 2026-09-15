@@ -204,9 +204,7 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         // `spawn_subagents` is withheld on purpose: nested fan-out would multiply
         // the pool past its cap and every slot could end up waiting on children.
         let tools = spec.allowTools
-            ? await env.registry.descriptors()
-                .filter { $0.name != spawnToolName }
-                .map(\.wireRepresentation)
+            ? await env.registry.descriptors().filter { $0.name != spawnToolName }
             : []
 
         var answer = ""

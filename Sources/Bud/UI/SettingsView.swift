@@ -99,15 +99,14 @@ private struct GeneralSettingsTab: View {
 
     @BudState private var probe: Probe = .idle
     @BudState private var ompLine = "checking…"
-    @BudState private var environmentLine = "checking…"
 
-    private static let presetModels = ["deepseek-v4-flash", "deepseek-v4-pro"]
     private static let knownEfforts = ["low", "medium", "high", "max"]
     private static let glamaKeysURLString = "https://glama.ai/settings/api-keys"
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Bud.Space.lg) {
+                providerSection
                 credentialsSection
                 glamaSection
                 endpointSection
@@ -130,11 +129,133 @@ private struct GeneralSettingsTab: View {
             } else {
                 ompLine = "no modelRoles.default in ~/.omp/agent/config.yml"
             }
-            let env = ProcessInfo.processInfo.environment["DEEPSEEK_API_KEY"]
-            environmentLine = (env?.isEmpty == false)
-                ? "DEEPSEEK_API_KEY is set in the launch environment"
-                : "DEEPSEEK_API_KEY is not set"
         }
+    }
+
+    // MARK: Provider
+
+    private var providerSection: some View {
+        VStack(alignment: .leading, spacing: Bud.Space.sm) {
+            SectionHeader(
+                "Provider",
+                subtitle: "Anything speaking the OpenAI, Anthropic or Google dialect.",
+                systemImage: "cpu"
+            )
+            GlassCard {
+                VStack(alignment: .leading, spacing: Bud.Space.sm) {
+                    Picker("Provider", selection: providerBinding) {
+                        ForEach(ProviderRegistry.groups, id: \.title) { group in
+                            Section(group.title) {
+                                ForEach(group.providers) { descriptor in
+                                    Text(descriptor.name).tag(descriptor.id)
+                                }
+                            }
+                        }
+                    }
+                    .labelsHidden()
+
+                    if model.config.activeProvider.regions.count > 1 {
+                        HStack(spacing: Bud.Space.sm) {
+                            Text("Region")
+                                .font(Bud.Font.caption)
+                                .foregroundStyle(.secondary)
+                            Picker("Region", selection: regionBinding) {
+                                ForEach(model.config.activeProvider.regions, id: \.self) { region in
+                                    Text(region).tag(region)
+                                }
+                            }
+                            .labelsHidden()
+                            Spacer(minLength: 0)
+                        }
+                    }
+
+                    HStack(spacing: Bud.Space.sm) {
+                        GlassChip(
+                            model.config.activeProvider.wireFormat.label,
+                            systemImage: "arrow.left.arrow.right"
+                        )
+                        if let saved = model.config.providerKeys[model.config.provider], !saved.isEmpty {
+                            GlassChip("Key saved", systemImage: "key.fill", tint: Bud.Palette.success, isActive: true)
+                        } else if let source = environmentVariableName(for: model.config.activeProvider) {
+                            GlassChip("Using $\(source)", systemImage: "terminal", tint: Bud.Palette.warning, isActive: true)
+                        }
+                        Spacer(minLength: 0)
+                        if let doc = model.config.activeProvider.docURL, let url = URL(string: doc) {
+                            Button("Docs") { NSWorkspace.shared.open(url) }
+                                .buttonStyle(.link)
+                                .font(Bud.Font.caption)
+                        }
+                    }
+
+                    if let note = model.config.activeProvider.note {
+                        Text(note)
+                            .font(Bud.Font.caption)
+                            .foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+    }
+
+    private var providerBinding: Binding<String> {
+        Binding(
+            get: { model.config.provider },
+            set: { newValue in
+                guard newValue != model.config.provider else { return }
+                model.config.provider = newValue
+                // The model is stored per provider, so switching lands on that
+                // provider's own last choice — or its suggested default — rather
+                // than carrying a model id the new API has never heard of.
+                model.persistConfig()
+            }
+        )
+    }
+
+    /// The region, defaulting to the provider's first so the popup never shows
+    /// blank. Storing the default explicitly would be harmless but noise: an
+    /// empty region already resolves to the same endpoint.
+    private var regionBinding: Binding<String> {
+        Binding(
+            get: {
+                let stored = model.config.region
+                if !stored.isEmpty { return stored }
+                return model.config.activeProvider.regions.first ?? ""
+            },
+            set: { newValue in
+                guard newValue != model.config.region else { return }
+                model.config.region = newValue
+                model.persistConfig()
+            }
+        )
+    }
+
+    /// The variable a key is being read from, when it is not stored in Bud.
+    ///
+    /// Shown because "I already exported this" and "Bud cannot see it" look
+    /// identical otherwise — the difference is whether the app was launched from
+    /// Finder, which inherits no shell environment.
+    private func environmentVariableName(for provider: ProviderDescriptor) -> String? {
+        for variable in provider.envKeys where !BudConfigLoader.resolveKey(named: variable).isEmpty {
+            return variable
+        }
+        return nil
+    }
+
+    /// Where the active provider's key is coming from — or that there is none.
+    ///
+    /// Worth showing explicitly: a key exported in a shell profile and a key Bud
+    /// cannot see look identical from the outside, and the difference matters
+    /// because an app launched from Finder inherits no shell environment.
+    private func environmentLine(for provider: ProviderDescriptor) -> String {
+        if provider.envKeys.isEmpty { return "no key needed" }
+        if model.config.resolvedKey(for: provider).isEmpty {
+            return "not set — add a key above"
+        }
+        if let variable = environmentVariableName(for: provider) {
+            return "\(variable) (environment or shell profile)"
+        }
+        return "saved in Bud"
     }
 
     // MARK: Credentials
@@ -142,32 +263,49 @@ private struct GeneralSettingsTab: View {
     private var credentialsSection: some View {
         VStack(alignment: .leading, spacing: Bud.Space.sm) {
             SectionHeader(
-                "Credentials",
+                "\(model.config.activeProvider.name) credentials",
                 subtitle: "Kept in ~/.bud/config.json with owner-only permissions.",
                 systemImage: "key"
             )
             GlassCard {
                 VStack(alignment: .leading, spacing: Bud.Space.sm) {
-                    Text("DeepSeek API key")
-                        .font(Bud.Font.caption)
-                        .foregroundStyle(.secondary)
-                    SecureField("sk-…", text: apiKeyBinding)
-                        .textFieldStyle(.roundedBorder)
-                        .font(Bud.Font.mono)
-                        .onSubmit { model.persistConfig() }
-                    if !model.hasAPIKey {
+                    if model.config.activeProvider.requiresKey {
+                        Text("API key")
+                            .font(Bud.Font.caption)
+                            .foregroundStyle(.secondary)
+                        SecureField("Paste the key for \(model.config.activeProvider.name)", text: apiKeyBinding)
+                            .textFieldStyle(.roundedBorder)
+                            .font(Bud.Font.mono)
+                            .onSubmit { model.persistConfig() }
+                        if model.config.activeProviderNeedsKey {
+                            HStack(spacing: Bud.Space.xs) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(Bud.Font.micro.weight(.regular))
+                                    .foregroundStyle(Bud.Palette.warning)
+                                Text("No key yet — requests will fail with HTTP 401.")
+                                    .font(Bud.Font.caption)
+                                    .foregroundStyle(Bud.Palette.warning)
+                            }
+                        }
+                    } else {
                         HStack(spacing: Bud.Space.xs) {
-                            Image(systemName: "exclamationmark.triangle.fill")
+                            Image(systemName: "checkmark.seal.fill")
                                 .font(Bud.Font.micro.weight(.regular))
-                                .foregroundStyle(Bud.Palette.warning)
-                            Text("No key yet — requests will fail with HTTP 401.")
+                                .foregroundStyle(Bud.Palette.success)
+                            Text("\(model.config.activeProvider.name) runs on this Mac and needs no key.")
                                 .font(Bud.Font.caption)
-                                .foregroundStyle(Bud.Palette.warning)
+                                .foregroundStyle(.secondary)
                         }
                     }
+
                     VStack(alignment: .leading, spacing: Bud.Space.hairline) {
                         provenanceRow("Resolved from", BudConfigLoader.configURL.path)
-                        provenanceRow("DeepSeek key", environmentLine)
+                        if !model.config.activeProvider.envKeys.isEmpty {
+                            provenanceRow(
+                                model.config.activeProvider.name,
+                                environmentLine(for: model.config.activeProvider)
+                            )
+                        }
                         provenanceRow("oh-my-pi model", ompLine)
                     }
                     .padding(.top, Bud.Space.xs)
@@ -265,10 +403,25 @@ private struct GeneralSettingsTab: View {
             SectionHeader("Endpoint", systemImage: "network")
             GlassCard {
                 VStack(alignment: .leading, spacing: Bud.Space.sm) {
-                    TextField("https://api.deepseek.com/v1", text: baseURLBinding)
-                        .textFieldStyle(.roundedBorder)
-                        .font(Bud.Font.mono)
-                        .onSubmit { model.persistConfig() }
+                    TextField(
+                        model.config.baseURL.isEmpty
+                            ? "https://your-endpoint/v1"
+                            : model.config.baseURL,
+                        text: baseURLBinding
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .font(Bud.Font.mono)
+                    .onSubmit { model.persistConfig() }
+                    if model.config.customProviderNeedsBaseURL {
+                        HStack(spacing: Bud.Space.xs) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(Bud.Font.micro.weight(.regular))
+                                .foregroundStyle(Bud.Palette.warning)
+                            Text("The custom provider needs a base URL before it can be used.")
+                                .font(Bud.Font.caption)
+                                .foregroundStyle(Bud.Palette.warning)
+                        }
+                    }
                     HStack(spacing: Bud.Space.sm) {
                         Button {
                             Task { await testConnection() }
@@ -328,69 +481,60 @@ private struct GeneralSettingsTab: View {
     /// A real round trip, not a URL check: the only evidence that a key, base URL
     /// and model name work together is the API accepting a request. One token is
     /// the cheapest possible proof.
+    ///
+    /// Sent through the provider's actual backend rather than a hand-rolled
+    /// request. A hand-rolled probe can only ever confirm the dialect it was
+    /// written for — it would report success or failure for the wrong reasons on
+    /// the other two, which is worse than not testing at all.
     private func testConnection() async {
         probe = .running
-        guard !model.config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            probe = .failed("No API key to test with.")
+
+        let provider = model.config.activeProvider
+        if provider.requiresKey, model.config.resolvedKey(for: provider).isEmpty {
+            probe = .failed("No key for \(provider.name) to test with.")
+            return
+        }
+        if model.config.customProviderNeedsBaseURL {
+            probe = .failed("The custom provider needs a base URL first.")
+            return
+        }
+        if model.config.model.isEmpty {
+            probe = .failed("No model set for \(provider.name).")
             return
         }
 
-        var base = model.config.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        while base.hasSuffix("/") { base.removeLast() }
-        guard let url = URL(string: base + "/chat/completions") else {
-            probe = .failed("“\(model.config.baseURL)” is not a usable URL.")
-            return
-        }
-
-        let payload = JSONValue.object([
-            "model": .string(model.config.model),
-            "messages": .array([.object(["role": "user", "content": "ping"])]),
-            "max_tokens": .number(1),
-            "stream": .bool(false),
-        ])
-        guard let body = payload.encodedString().data(using: .utf8) else {
-            probe = .failed("Could not encode the probe request.")
-            return
-        }
-
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(model.config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines))",
-                         forHTTPHeaderField: "Authorization")
-        request.httpBody = body
+        let backend = ProviderBackendFactory.make(
+            provider: provider,
+            credentials: model.config.activeCredentials
+        )
+        let request = ChatRequest(
+            model: model.config.model,
+            messages: [ChatMessage(role: .user, content: "ping")],
+            maxTokens: 1
+        )
 
         let started = Date()
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            var sawAnything = false
+            for try await event in backend.stream(request) {
+                // Any event at all means the request was accepted and parsed —
+                // a one-token reply may contain only a finish or a usage frame.
+                switch event {
+                case .contentDelta, .reasoningDelta, .finish, .usage, .toolCallDelta:
+                    sawAnything = true
+                }
+            }
             let elapsed = Int(Date().timeIntervalSince(started) * 1000)
-            guard let http = response as? HTTPURLResponse else {
-                probe = .failed("The server did not answer with HTTP.")
-                return
-            }
-            if (200..<300).contains(http.statusCode) {
-                probe = .ok("Connected to \(model.config.host) — \(model.config.model) answered in \(elapsed) ms.")
-            } else {
-                probe = .failed("HTTP \(http.statusCode): \(Self.errorSnippet(from: data))")
-            }
+            probe = sawAnything
+                ? .ok("\(provider.name) answered in \(elapsed) ms using \(model.config.model).")
+                : .failed("\(provider.name) accepted the request but sent nothing back.")
         } catch {
-            probe = .failed(error.localizedDescription)
+            probe = .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
         }
     }
 
     /// DeepSeek reports failures as `{"error":{"message":…}}`; showing that
     /// sentence beats showing a raw body or a generic status code.
-    private static func errorSnippet(from data: Data) -> String {
-        if let value = try? JSONDecoder().decode(JSONValue.self, from: data),
-           let message = value["error"]?["message"]?.stringValue, !message.isEmpty {
-            return message
-        }
-        let text = String(decoding: data, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.isEmpty { return "no response body" }
-        return text.count > 300 ? String(text.prefix(300)) + "…" : text
-    }
-
     // MARK: Model
 
     private var modelSection: some View {
@@ -399,29 +543,33 @@ private struct GeneralSettingsTab: View {
             GlassCard {
                 VStack(alignment: .leading, spacing: Bud.Space.md) {
                     VStack(alignment: .leading, spacing: Bud.Space.xs) {
-                        Text("Preset")
-                            .font(Bud.Font.caption)
-                            .foregroundStyle(.secondary)
-                        Picker("Preset", selection: modelPresetBinding) {
-                            Text("Flash · fast").tag("deepseek-v4-flash")
-                            Text("Pro · strong").tag("deepseek-v4-pro")
-                            if !Self.presetModels.contains(model.config.model) {
-                                Text("Custom").tag(model.config.model)
+                        HStack(spacing: Bud.Space.sm) {
+                            Text("Model ID")
+                                .font(Bud.Font.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 0)
+                            // Replaces the old hard-coded Flash/Pro segmented
+                            // control, which only ever made sense for one
+                            // provider. This works for all of them.
+                            if let suggested = model.config.activeProvider.defaultModel,
+                               !suggested.isEmpty,
+                               suggested != model.config.model {
+                                Button("Use \(suggested)") {
+                                    model.config.model = suggested
+                                    model.persistConfig()
+                                }
+                                .buttonStyle(.link)
+                                .font(Bud.Font.caption)
                             }
                         }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                    }
-
-                    VStack(alignment: .leading, spacing: Bud.Space.xs) {
-                        Text("Model ID")
-                            .font(Bud.Font.caption)
-                            .foregroundStyle(.secondary)
-                        TextField("deepseek-v4-flash", text: modelIDBinding)
-                            .textFieldStyle(.roundedBorder)
-                            .font(Bud.Font.mono)
-                            .onSubmit { model.persistConfig() }
-                        Text("Sent verbatim to the API. Unknown names are served as flash.")
+                        TextField(
+                            model.config.activeProvider.defaultModel ?? "model-id",
+                            text: modelIDBinding
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .font(Bud.Font.mono)
+                        .onSubmit { model.persistConfig() }
+                        Text("Sent verbatim to \(model.config.activeProvider.name).")
                             .font(Bud.Font.caption)
                             .foregroundStyle(.tertiary)
                     }
@@ -469,15 +617,6 @@ private struct GeneralSettingsTab: View {
         }
     }
 
-    private var modelPresetBinding: Binding<String> {
-        Binding(
-            get: { model.config.model },
-            set: { newValue in
-                guard newValue != model.config.model else { return }
-                model.setModel(newValue)
-            }
-        )
-    }
 
     private var modelIDBinding: Binding<String> {
         Binding(

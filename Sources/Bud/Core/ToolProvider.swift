@@ -85,10 +85,6 @@ public actor ToolRegistry {
         return out
     }
 
-    public func wireToolDefinitions() async -> [JSONValue] {
-        await descriptors().map(\.wireRepresentation)
-    }
-
     public func invoke(name: String, arguments: JSONValue, callID: String) async -> ToolResult {
         guard let pid = routing[name], let provider = providers[pid] else {
             let known = routing.keys.sorted().prefix(40).joined(separator: ", ")
