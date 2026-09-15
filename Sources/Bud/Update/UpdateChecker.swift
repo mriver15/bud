@@ -24,7 +24,20 @@ public enum UpdateChecker {
         session: URLSession = .shared
     ) async throws -> UpdateCheckResult {
         let fetched = try await fetch(feed: feed, session: session)
-        try validate(fetched.manifest, feed: feed, current: current)
+        do {
+            try validate(fetched.manifest, feed: feed, current: current)
+        } catch UpdateError.notNewer {
+            // The ordinary answer to "is there an update?", and the answer every
+            // time the user is already on the newest release. Reported as a
+            // failure it would put an error in front of someone for the crime of
+            // being current — which is exactly what running the latest build
+            // looks like.
+            //
+            // The gate itself stays in `validate`, where it still refuses to
+            // install anything that is not strictly newer. Refusing to install
+            // and refusing to answer are different things.
+            return .upToDate(current: current)
+        }
         return .available(manifest: fetched.manifest, downloadURL: fetched.downloadURL)
     }
 
