@@ -36,8 +36,10 @@ servers can both expose `search` without colliding.
 (`registry.modelcontextprotocol.io`) — npm packages become `npx -y <pkg>`, PyPI
 packages become `uvx <pkg>`, and required environment variables are surfaced as
 fields before install. Or switch to **Glama**, which indexes hosted connectors.
-Connectors install in one click over HTTP; entries that publish no run command
-are linked instead of being given a fabricated one.
+Connectors install in one click over HTTP; directory entries publish no run
+command at all, so their slugs are checked against npm and become `npx -y <pkg>`
+only when the package really exists — otherwise the record is linked to its
+repository rather than given a fabricated command.
 
 > **Glama's API Data License is not public domain.** It requires a visible credit
 > to Glama on any screen showing its data, and a link from *every individual

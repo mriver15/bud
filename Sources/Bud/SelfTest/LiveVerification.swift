@@ -409,12 +409,29 @@ public enum BudLiveVerification {
 
                 let servers = try await glama.servers(query: nil, cursor: nil, limit: 25)
                 c.check("glama: returned servers", !servers.items.isEmpty)
-                // Glama publishes no run command for these, so Bud must link them
-                // rather than invent one.
-                c.check(
-                    "glama: servers are browse-only, never given a fabricated command",
-                    servers.items.allSatisfy { $0.registryServer.options.isEmpty }
-                )
+                // Glama publishes no run command for a directory entry, so the
+                // only package Bud may offer for one is a package npm confirmed
+                // under the entry's own slug — never a name invented from it.
+                // Probed against live npm for a few records rather than all of
+                // them: the answer is the same rule for every record, and npm
+                // does not need twenty-five of them to say so.
+                let resolver = NpmResolver()
+                for record in servers.items.prefix(3) {
+                    let candidate = record.npmCandidate
+                    let identifier = await resolver.identifier(
+                        namespace: record.namespace, slug: record.slug
+                    )
+                    let asked = [record.slug, "@\(record.namespace)/\(record.slug)"]
+                    c.check(
+                        "glama: \(record.slug) is installable only as a package npm has",
+                        identifier.map(asked.contains) ?? true
+                    )
+                    c.check(
+                        "glama: \(record.slug) offers exactly what npm confirmed",
+                        record.registryServer(option: candidate.resolvedOption(resolver))
+                            .options.count == (identifier == nil ? 0 : 1)
+                    )
+                }
             } catch {
                 c.check("glama: live fetch failed (\(error.localizedDescription))", false)
             }

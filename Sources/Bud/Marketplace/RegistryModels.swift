@@ -214,32 +214,49 @@ extension RegistryServerPayload {
     }
 }
 
+extension RegistryInstallOption {
+    /// The option for an npm package, in the shape the official registry maps
+    /// `registryType == "npm"` to.
+    ///
+    /// Both catalogues build their npm options here rather than each spelling one
+    /// out: a package reachable from the registry and behind a Glama record has
+    /// to install identically — same command, same label, same identity — or the
+    /// two rows describe two different installs of one server.
+    ///
+    /// npm packages are published by bare name and resolved at launch, so the
+    /// `-y` is what makes the install non-interactive.
+    static func npm(_ identifier: String, requiredEnv: [String] = []) -> RegistryInstallOption {
+        RegistryInstallOption(
+            id: "npm:\(identifier)",
+            label: "npx -y \(identifier)",
+            transport: .stdio,
+            command: "npx",
+            args: ["-y", identifier],
+            requiredEnv: requiredEnv
+        )
+    }
+}
+
 extension RegistryServerPayload.Package {
     var installOption: RegistryInstallOption? {
         guard let identifier, !identifier.isEmpty else { return nil }
-        let command: String
-        let registry: String
         switch registryType?.lowercased() {
         case "npm":
-            command = "npx"
-            registry = "npm"
+            return .npm(identifier, requiredEnv: requiredEnvNames)
         case "pypi":
-            command = "uvx"
-            registry = "pypi"
+            // PyPI packages are published by bare name and resolved at launch,
+            // and `uvx` is non-interactive without a flag.
+            return RegistryInstallOption(
+                id: "pypi:\(identifier)",
+                label: "uvx \(identifier)",
+                transport: .stdio,
+                command: "uvx",
+                args: [identifier],
+                requiredEnv: requiredEnvNames
+            )
         default:
             return nil
         }
-        // npm packages are published by bare name and resolved at launch, so the
-        // `-y` is what makes the install non-interactive.
-        let args = registry == "npm" ? ["-y", identifier] : [identifier]
-        return RegistryInstallOption(
-            id: "\(registry):\(identifier)",
-            label: ([command] + args).joined(separator: " "),
-            transport: .stdio,
-            command: command,
-            args: args,
-            requiredEnv: requiredEnvNames
-        )
     }
 
     /// Names the server needs in its environment before it will start.

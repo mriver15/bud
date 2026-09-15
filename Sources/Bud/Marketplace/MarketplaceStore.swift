@@ -18,6 +18,14 @@ private let marketplaceMaxInitialPages = 8
 /// enough for a query, and more would slow every keystroke's worth of work.
 private let marketplaceSearchLimit = 100
 
+/// How many npm probes may be out at once while a Glama list resolves.
+///
+/// A probe is one small request to one host and a browse list holds hundreds of
+/// rows, so the pass is a sliding window rather than a task per row: enough of
+/// them in flight to resolve a page promptly, few enough that npm's registry is
+/// never asked for a page and a half of names at the same instant.
+private let marketplaceNpmProbeConcurrency = 6
+
 // MARK: - Source
 
 /// Which catalogue the marketplace is browsing.
@@ -44,7 +52,7 @@ public enum MarketplaceSource: String, CaseIterable, Sendable, Identifiable {
         case .official:
             return "registry.modelcontextprotocol.io — packages and remote endpoints, installable in one click."
         case .glama:
-            return "glama.ai — hosted connectors install over HTTP; entries that publish no run command are linked instead."
+            return "glama.ai — hosted connectors install over HTTP; directory entries install from npm where the package exists, and are linked to their repository where it does not."
         }
     }
 }
@@ -121,6 +129,18 @@ public final class MarketplaceStore: MarketplaceProviding {
     /// Built per request from `glamaAPIKey`; a `GlamaClient` is a few field
     /// assignments around `URLSession.shared`.
     private var glamaClient: GlamaClient { GlamaClient(apiKey: glamaAPIKey) }
+    /// Answers the question a Glama directory row raises. Shared by default, and
+    /// so memoised for the process: what npm holds does not change with the
+    /// catalogue, the key or the query, and a source switch must not spend the
+    /// requests again.
+    private let resolver: NpmResolver
+    /// The npm questions the rows have raised, and their identities so a row
+    /// that arrives from two pages — or from a browse and a search — is one
+    /// entry. Kept rather than replaced: a row keeps its option when a search
+    /// gives way to the browse list again, and an answer that lands has to be
+    /// attachable to whichever list is on screen.
+    private var npmCandidates: [GlamaNpmCandidate] = []
+    private var npmIdentities: Set<String> = []
     /// The unfiltered first pages, so clearing the field restores the browse
     /// list without a second round-trip.
     private var initialServers: [RegistryServer] = []
@@ -133,8 +153,9 @@ public final class MarketplaceStore: MarketplaceProviding {
     /// change must not write its rows into the list that is now on screen.
     private var loadToken = 0
 
-    public init(client: RegistryClient = RegistryClient()) {
+    public init(client: RegistryClient = RegistryClient(), resolver: NpmResolver = .shared) {
         self.client = client
+        self.resolver = resolver
     }
 
     // MARK: - Loading
@@ -157,10 +178,12 @@ public final class MarketplaceStore: MarketplaceProviding {
     private func makeInitialTask() -> Task<Void, Never> {
         let client = self.client
         let glama = glamaClient
+        let resolver = self.resolver
         let source = self.source
         let token = loadToken
         return Task { [weak self] in
             var collected: [RegistryServer] = []
+            var candidates: [GlamaNpmCandidate] = []
             var cursor: String?
             var failure: String?
             var pages = 0
@@ -169,11 +192,12 @@ public final class MarketplaceStore: MarketplaceProviding {
                 pages += 1
                 do {
                     let page = try await Self.page(
-                        source: source, client: client, glama: glama,
+                        source: source, client: client, glama: glama, resolver: resolver,
                         query: nil, cursor: cursor, limit: marketplacePageSize
                     )
                     let before = collected.count
                     collected.append(contentsOf: page.items)
+                    candidates.append(contentsOf: page.npmCandidates)
                     // A registry page carries one row per published version, so
                     // counting rows would mistake a normal ~60-server page for
                     // the end of the list; staleness is what marks the end
@@ -191,7 +215,9 @@ public final class MarketplaceStore: MarketplaceProviding {
             }
 
             guard let self else { return }
-            await self.finishInitial(collected, failure: failure, token: token)
+            await self.finishInitial(
+                collected, npmCandidates: candidates, failure: failure, token: token
+            )
         }
     }
 
@@ -204,27 +230,38 @@ public final class MarketplaceStore: MarketplaceProviding {
     /// installable, `servers` are published to run from source and can only be
     /// linked — and both are worth showing. Paging follows the connector cursor,
     /// because every row behind that list has a real endpoint.
+    ///
+    /// A directory row is mapped with whatever npm has *already* answered for its
+    /// slug, and its question is returned alongside: the answers still open
+    /// arrive later, and a list that waited for the last of them would be a list
+    /// that does not render until npm has answered for every row on it.
     nonisolated static func page(
         source: MarketplaceSource,
         client: RegistryClient,
         glama: GlamaClient,
+        resolver: NpmResolver,
         query: String?,
         cursor: String?,
         limit: Int
-    ) async throws -> (items: [RegistryServer], nextCursor: String?) {
+    ) async throws -> (items: [RegistryServer], npmCandidates: [GlamaNpmCandidate], nextCursor: String?) {
         switch source {
         case .official:
             if let query, !query.isEmpty {
                 // Relevance-ordered search; the registry takes no cursor here.
-                return (try await client.search(query, limit: limit), nil)
+                return (try await client.search(query, limit: limit), [], nil)
             }
             let page = try await client.page(cursor: cursor, limit: limit)
-            return (page.servers, page.nextCursor)
+            return (page.servers, [], page.nextCursor)
         case .glama:
             let connectors = try await glama.connectors(query: query, cursor: cursor, limit: limit)
             let servers = try await glama.servers(query: query, cursor: nil, limit: limit)
+            let candidates = servers.items.map(\.npmCandidate)
+            let directory = zip(servers.items, candidates).map { record, candidate in
+                record.registryServer(option: candidate.resolvedOption(resolver))
+            }
             return (
-                connectors.items.map(\.registryServer) + servers.items.map(\.registryServer),
+                connectors.items.map(\.registryServer) + directory,
+                candidates,
                 connectors.nextCursor
             )
         }
@@ -263,15 +300,16 @@ public final class MarketplaceStore: MarketplaceProviding {
         loadError = nil
         let client = self.client
         let glama = glamaClient
+        let resolver = self.resolver
         let source = self.source
         let task = Task { [weak self] in
             let outcome: SearchOutcome
             do {
                 let page = try await Self.page(
-                    source: source, client: client, glama: glama,
+                    source: source, client: client, glama: glama, resolver: resolver,
                     query: trimmed, cursor: nil, limit: marketplaceSearchLimit
                 )
-                outcome = .results(page.items)
+                outcome = .results(page.items, page.npmCandidates)
             } catch {
                 outcome = .failure(error.localizedDescription)
             }
@@ -335,39 +373,147 @@ public final class MarketplaceStore: MarketplaceProviding {
 
     // MARK: - Completion
 
-    private func finishInitial(_ servers: [RegistryServer], failure: String?, token: Int) async {
+    private func finishInitial(
+        _ servers: [RegistryServer],
+        npmCandidates candidates: [GlamaNpmCandidate],
+        failure: String?,
+        token: Int
+    ) async {
         // A load that a source or key change superseded must not land on the list
         // the user is now looking at.
         guard token == loadToken else { return }
 
-        initialServers = servers
+        note(candidates)
+        let rows = applyingNpmAnswers(to: servers)
+        initialServers = rows
         // A failed fetch stays retryable: an empty cache must not latch.
-        didLoadInitial = !servers.isEmpty
+        didLoadInitial = !rows.isEmpty
 
-        guard lastQuery.isEmpty else { return }
-        results = servers
-        totalLoaded = servers.count
-        loadError = failure
+        if lastQuery.isEmpty {
+            results = rows
+            totalLoaded = rows.count
+            loadError = failure
+        }
+        // Whatever is on screen, these rows will be the browse list again as soon
+        // as the query is cleared, so their questions are asked either way.
+        startNpmProbes()
     }
 
     private func finishSearch(_ outcome: SearchOutcome, token: Int) async {
         guard token == queryToken else { return }
         isSearching = false
         switch outcome {
-        case .results(let servers):
-            results = servers
-            totalLoaded = servers.count
+        case .results(let servers, let candidates):
+            note(candidates)
+            results = applyingNpmAnswers(to: servers)
+            totalLoaded = results.count
             loadError = nil
+            startNpmProbes()
         case .failure(let message):
             // The previous list stays on screen; the banner explains the gap.
             loadError = message
         }
     }
 
+    // MARK: - npm probing
+
+    /// Remembers the questions the rows raise, one entry per row.
+    private func note(_ candidates: [GlamaNpmCandidate]) {
+        for candidate in candidates where npmIdentities.insert(candidate.identity).inserted {
+            npmCandidates.append(candidate)
+        }
+    }
+
+    /// The rows as they should be shown: one whose package npm has confirmed
+    /// carries the option, and one npm has nothing for stays browse-only.
+    ///
+    /// Reads only what has already been answered, so it is safe to run while
+    /// probes are still out, and it is idempotent — a row that already carries its
+    /// option is left exactly as it is.
+    private func applyingNpmAnswers(to servers: [RegistryServer]) -> [RegistryServer] {
+        guard !npmCandidates.isEmpty else { return servers }
+        var options: [String: RegistryInstallOption] = [:]
+        for candidate in npmCandidates {
+            guard let option = candidate.resolvedOption(resolver) else { continue }
+            options[candidate.identity] = option
+        }
+        guard !options.isEmpty else { return servers }
+        return servers.map { server in
+            guard server.options.isEmpty, let option = options[server.id] else { return server }
+            var row = server
+            row.options = [option]
+            return row
+        }
+    }
+
+    /// Asks npm about every row that has no answer yet, and attaches each answer
+    /// the moment it lands.
+    ///
+    /// Deliberately not awaited by the load that raised the questions: the list is
+    /// on screen before this starts, and a probe is what *may* add an option to a
+    /// row, never a precondition for the row being there. A probe that fails, or
+    /// that npm never answers, therefore changes nothing at all — which is what
+    /// keeps a slow or unreachable registry from touching the catalogue.
+    private func startNpmProbes() {
+        var seen = Set<String>()
+        let pending = npmCandidates.filter { candidate in
+            guard seen.insert(candidate.identity).inserted else { return false }
+            return resolver.cachedAnswer(candidate.resolverCandidate) == nil
+        }
+        guard !pending.isEmpty else { return }
+
+        let resolver = self.resolver
+        Task { [weak self] in
+            await withTaskGroup(of: Void.self) { group in
+                var next = 0
+                var outstanding = 0
+                while next < min(marketplaceNpmProbeConcurrency, pending.count) {
+                    let candidate = pending[next]
+                    next += 1
+                    outstanding += 1
+                    group.addTask { await Self.ask(resolver, about: candidate) }
+                }
+                // Sliding window: each answer admits the next probe, so one slow
+                // row never holds up the rest — and the row that just got its
+                // answer is redrawn immediately rather than at the end of the
+                // pass, which is the difference between options appearing one by
+                // one and the list switching over all at once.
+                while outstanding > 0 {
+                    _ = await group.next()
+                    outstanding -= 1
+                    if next < pending.count {
+                        let candidate = pending[next]
+                        next += 1
+                        outstanding += 1
+                        group.addTask { await Self.ask(resolver, about: candidate) }
+                    }
+                    self?.attachNpmAnswers()
+                }
+            }
+        }
+    }
+
+    /// One probe. Nothing is read from the result: the resolver is the memo, and
+    /// the row is redrawn from it, so all this has to do is make sure the question
+    /// has been asked.
+    private nonisolated static func ask(_ resolver: NpmResolver, about candidate: GlamaNpmCandidate) async {
+        _ = await resolver.identifier(namespace: candidate.namespace, slug: candidate.slug)
+    }
+
+    /// Republishes both lists from the answers in hand. Idempotent, so the answer
+    /// that just landed changes exactly the one row it belongs to.
+    private func attachNpmAnswers() {
+        initialServers = applyingNpmAnswers(to: initialServers)
+        results = applyingNpmAnswers(to: results)
+    }
+
     /// Drops everything the previous source or key produced: the rows, the browse
     /// cache, the query text that belonged to the old catalogue, and the tokens
     /// that would otherwise let a response still in flight land on top of the new
     /// list.
+    ///
+    /// The npm questions are the exception: they are keyed by Glama's own record
+    /// identity, so switching away and back is not a reason to ask npm again.
     private func resetForNewCatalogue() {
         searchTask?.cancel()
         searchTask = nil
@@ -389,6 +535,6 @@ public final class MarketplaceStore: MarketplaceProviding {
 /// be an `Error`, and the only thing that survives the hop back to the main actor
 /// is the message the user reads.
 private enum SearchOutcome: Sendable {
-    case results([RegistryServer])
+    case results([RegistryServer], [GlamaNpmCandidate])
     case failure(String)
 }

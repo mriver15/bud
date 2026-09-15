@@ -77,6 +77,7 @@ public enum BudSelfTest {
             selfUpdate,
             mcpConfigMapping,
             glamaMapping,
+            npmResolution,
             toolTruncation,
         ]
         var total = SelfTestReport()
@@ -624,17 +625,61 @@ public enum BudSelfTest {
         """)
 
         if let server = directory {
-            let row = server.registryServer
+            let row = server.registryServer(option: nil)
             c.equal("server identity", row.name, "glama:modelcontextprotocol/filesystem")
             c.equal("server row title", row.title, "Filesystem")
             c.equal("server row listing is the API's url", row.websiteURL, server.listingURL)
             c.equal("server row repository", row.repositoryURL, "https://github.com/modelcontextprotocol/servers")
             c.nilValue("server with no thumbnail has no icon", row.iconURL)
-            // The honest mapping: nothing invented, so the card is browse-only
-            // rather than offering an install that could not run.
+            // Nothing confirmed yet, so nothing is offered: the row is browse-only
+            // until npm has answered for its slug — see the `npm` suite for the
+            // other half, where a confirmed package becomes the option.
             c.equal("server maps to no install options", row.options.count, 0)
+            c.equal("the entry's npm question is its own identity", server.npmCandidate.identity, row.name)
         } else {
             c.check("directory server decodes", false)
+        }
+
+        // An entry whose server needs a key, in the shape Glama publishes it: a
+        // JSON Schema whose `required` list is the names the server will not start
+        // without.
+        let keyedServer = decode(GlamaServer.self, """
+        {
+          "id": "srv_linear",
+          "name": "Linear",
+          "namespace": "linear",
+          "slug": "linear",
+          "url": "https://glama.ai/mcp/servers/linear/linear",
+          "environmentVariablesJsonSchema": {
+            "type": "object",
+            "properties": {"LINEAR_API_KEY": {"type": "string"}},
+            "required": ["LINEAR_API_KEY"]
+          }
+        }
+        """)
+        if let server = keyedServer {
+            c.equal("a required key is read from the record's schema", server.requiredEnvironmentVariables, ["LINEAR_API_KEY"])
+            c.equal("the key rides on the npm question", server.npmCandidate.requiredEnv, ["LINEAR_API_KEY"])
+        } else {
+            c.check("a record with an environment schema decodes", false)
+        }
+
+        // The schema an entry that takes no configuration publishes. `required`
+        // says so outright, so the installed server must be offered no fields.
+        let unconfigured = decode(GlamaServer.self, """
+        {
+          "id": "srv_plain",
+          "name": "Plain",
+          "namespace": "acme",
+          "slug": "plain",
+          "url": "https://glama.ai/mcp/servers/acme/plain",
+          "environmentVariablesJsonSchema": {"properties": {}, "type": "object", "required": []}
+        }
+        """)
+        if let server = unconfigured {
+            c.check("a schema requiring nothing needs no fields", server.requiredEnvironmentVariables.isEmpty)
+        } else {
+            c.check("a record with an empty environment schema decodes", false)
         }
 
         // Explicit nulls for every field but the identity, which is exactly what
@@ -657,7 +702,7 @@ public enum BudSelfTest {
             c.nilValue("null repository stays nil", server.repository)
             c.nilValue("null description stays nil", server.description)
             c.check("null attributes default to empty", server.attributes.isEmpty)
-            c.equal("nulled record still maps", server.registryServer.name, "glama:n/odd")
+            c.equal("nulled record still maps", server.registryServer(option: nil).name, "glama:n/odd")
         } else {
             c.check("record with explicit nulls decodes", false)
         }
@@ -776,6 +821,206 @@ public enum BudSelfTest {
             c.check("unexpected status is an http error", false)
         }
         c.check("raw body is not shown to the user", !gateway.localizedDescription.contains("Bad Gateway"))
+
+        return c.report()
+    }
+
+    /// The npm lookup behind a Glama directory row.
+    ///
+    /// Every check here guards something that would otherwise be silent. A name
+    /// that reaches a URL unescaped is a request for a different path; a document
+    /// read as installable when it names nothing to run is an install that fails
+    /// at launch; and a failure to reach npm remembered as "this server has no
+    /// package" hides the package for the rest of the session.
+    static func npmResolution() -> SelfTestReport {
+        let c = Checker(suite: "npm")
+
+        // MARK: The names a record is asked about
+
+        c.equal(
+            "a namespaced record is asked about twice",
+            NpmResolver.Candidate(namespace: "mriver15", slug: "getcompetitive").identifiers,
+            ["getcompetitive", "@mriver15/getcompetitive"]
+        )
+        c.equal(
+            "a record with no namespace is asked about once",
+            NpmResolver.Candidate(namespace: "", slug: "filesystem").identifiers,
+            ["filesystem"]
+        )
+
+        // MARK: The URLs those names become
+
+        let base = NpmResolver.defaultBaseURLString
+        c.equal("the registry host", base, "https://registry.npmjs.org")
+        c.equal(
+            "a bare name is the whole path",
+            NpmResolver.packageURL("getcompetitive", base: base)?.absoluteString,
+            "https://registry.npmjs.org/getcompetitive"
+        )
+        // Asserted as host and path rather than as one string: the scope's `@` is
+        // legal in a path, and whether it is spelled `@` or `%40` on the wire is
+        // npm's business — both are the same document — but the segment it names
+        // is not negotiable.
+        let scopedURL = NpmResolver.packageURL("@mriver15/getcompetitive", base: base)
+        c.equal("a scoped name is asked at the same host", scopedURL?.host, "registry.npmjs.org")
+        c.equal("and scoped to one segment", scopedURL?.path, "/@mriver15/getcompetitive")
+        // A slug is catalogue text, so the rule is what stands between it and the
+        // path Bud requests: a query, a fragment, an escape or a second segment
+        // would all name something other than the package.
+        let refused = ["", ".", "..", "../-/user", "@../x", "@scope", "a/b/c", "pkg?write=true", "pkg#frag", "pkg/../other", "get competitive", "pkg%2fx"]
+        for name in refused {
+            c.nilValue("npm cannot have published this name: \(name)", NpmResolver.packageURL(name, base: base))
+        }
+
+        // MARK: Reading npm's answer
+
+        // The document npm serves for the package this whole path exists for,
+        // cut down to the two fields that decide: the latest release, and what it
+        // runs. Anything larger is decoded past — see `PackageDocument`.
+        let published = """
+        {"_id":"getcompetitive","name":"getcompetitive","dist-tags":{"latest":"1.1.1"},
+         "versions":{"1.1.1":{"name":"getcompetitive","version":"1.1.1","bin":{"getcompetitive":"dist/index.js"}}}}
+        """
+        c.equal(
+            "a published package is a hit",
+            NpmResolver.outcome(status: 200, body: Data(published.utf8), asking: "getcompetitive"),
+            .package("getcompetitive")
+        )
+        c.equal(
+            "the same document answers for its scoped name",
+            NpmResolver.outcome(
+                status: 200,
+                body: Data(published.replacingOccurrences(of: "\"getcompetitive\"", with: "\"@mriver15/getcompetitive\"").utf8),
+                asking: "@mriver15/getcompetitive"
+            ),
+            .package("@mriver15/getcompetitive")
+        )
+        c.equal(
+            "a package with one executable is a hit",
+            NpmResolver.outcome(
+                status: 200,
+                body: Data(#"{"name":"cli","dist-tags":{"latest":"2.0.0"},"versions":{"2.0.0":{"bin":"cli.js"}}}"#.utf8),
+                asking: "cli"
+            ),
+            .package("cli")
+        )
+
+        // A real package with nothing to run — the shape of the library that
+        // happens to share a name with a directory entry. `npx -y mongodb`
+        // installs the package and then has no command to start, so the row is
+        // browse-only rather than offering an install that cannot run.
+        c.equal(
+            "a package that runs nothing is a miss",
+            NpmResolver.outcome(
+                status: 200,
+                body: Data(#"{"name":"mongodb","dist-tags":{"latest":"7.6.0"},"versions":{"7.6.0":{"bin":null}}}"#.utf8),
+                asking: "mongodb"
+            ),
+            .absent
+        )
+        c.equal(
+            "a package with no latest release is a miss",
+            NpmResolver.outcome(
+                status: 200,
+                body: Data(#"{"name":"held","dist-tags":{},"versions":{"1.0.0":{"bin":"held.js"}}}"#.utf8),
+                asking: "held"
+            ),
+            .absent
+        )
+        c.equal(
+            "a 404 is a miss",
+            NpmResolver.outcome(status: 404, body: Data(#"{"error":"Not found"}"#.utf8), asking: "nope"),
+            .absent
+        )
+        c.equal(
+            "npm's miss document is a miss even under a 200",
+            NpmResolver.outcome(status: 200, body: Data(#"{"error":"Not found"}"#.utf8), asking: "nope"),
+            .absent
+        )
+        // The other half: an answer Bud could not read is not a statement about
+        // the package, and is not remembered as one.
+        c.equal(
+            "a 5xx is not an answer",
+            NpmResolver.outcome(status: 503, body: Data(), asking: "nope"),
+            .unavailable
+        )
+        c.equal(
+            "a proxy's page is not a package",
+            NpmResolver.outcome(status: 200, body: Data("<html>502 Bad Gateway</html>".utf8), asking: "nope"),
+            .unavailable
+        )
+        c.equal(
+            "a document naming another package is not an answer",
+            NpmResolver.outcome(status: 200, body: Data(published.utf8), asking: "somethingelse"),
+            .unavailable
+        )
+
+        // MARK: What is remembered
+
+        // The memo is the reason a browse list of hundreds of rows is one round
+        // trip per row for the life of the process rather than one per refresh.
+        let hit = NpmResolver.Candidate(namespace: "mriver15", slug: "getcompetitive")
+        let miss = NpmResolver.Candidate(namespace: "", slug: "nothing-by-that-name")
+        let unreachable = NpmResolver.Candidate(namespace: "", slug: "npm-was-down")
+        var memo = NpmResolver.Answers()
+        c.nilValue("an unanswered candidate is open", memo.answer(for: hit))
+        memo.record(.package("getcompetitive"), for: hit)
+        c.equal("a hit is kept", memo.answer(for: hit), .package("getcompetitive"))
+        memo.record(.absent, for: miss)
+        c.equal("a miss is kept, or every refresh asks again", memo.answer(for: miss), .absent)
+        memo.record(.unavailable, for: unreachable)
+        c.nilValue("a failure to reach npm is not an answer", memo.answer(for: unreachable))
+        c.nilValue("and it leaves the other candidate's answer alone", memo.answer(for: NpmResolver.Candidate(namespace: "", slug: "other")))
+
+        // MARK: The row a hit becomes
+
+        // The two catalogues build one option, so a package reachable from either
+        // pane installs the same command. This is the other pane's mapping, driven
+        // with the same identifier, rather than a copy of its expectations.
+        let mine = RegistryInstallOption.npm("getcompetitive")
+        c.equal("a hit installs over stdio", mine.transport, MCPTransportKind.stdio)
+        c.equal("a hit installs with npx", mine.command, "npx")
+        c.equal("a hit resolves the package at launch", mine.args, ["-y", "getcompetitive"])
+        c.equal("a hit is identified by its package", mine.id, "npm:getcompetitive")
+        c.equal("a hit's label is the command it runs", mine.label, "npx -y getcompetitive")
+
+        let payload = RegistryServerPayload.Package(
+            registryType: "npm", identifier: "getcompetitive", environmentVariables: nil
+        )
+        if let theirs = payload.installOption {
+            c.equal("the registry builds the same option", mine, theirs)
+        } else {
+            c.check("the registry maps an npm package", false)
+        }
+
+        // And end to end: the record this exists for, through the same mapping a
+        // Glama row takes, to the option an install is built from.
+        let record = try? JSONDecoder().decode(GlamaServer.self, from: Data("""
+        {
+          "id": "t3cy2aisuk",
+          "name": "getcompetitive",
+          "namespace": "mriver15",
+          "slug": "getcompetitive",
+          "url": "https://glama.ai/mcp/servers/t3cy2aisuk",
+          "attributes": ["hosting:local-only"],
+          "repository": {"url": "https://github.com/mriver15/getcompetitive"},
+          "environmentVariablesJsonSchema": {"properties": {}, "type": "object", "required": []}
+        }
+        """.utf8))
+        if let record {
+            let candidate = record.npmCandidate
+            c.equal("the row's identity is the record's", candidate.identity, "glama:mriver15/getcompetitive")
+            c.equal("the record's schema requires nothing", candidate.requiredEnv, [])
+            let option = candidate.option(for: "getcompetitive")
+            c.equal("the confirmed package becomes the row's option", option, mine)
+            c.equal(
+                "and the row installs as a local process",
+                record.registryServer(option: option).options,
+                [mine]
+            )
+        } else {
+            c.check("the getcompetitive record decodes", false)
+        }
 
         return c.report()
     }
