@@ -52,10 +52,11 @@ public enum UIRender {
             )
         }
 
-        // `.glassEffect` blanks its entire subtree in an offscreen capture, so the
-        // panel wrapper is replaced by an equivalent tinted fill here. The glass
-        // itself is verified in the live app by `--verify-ui`; this is purely to
-        // make the layout inside it reviewable.
+        // The panel's glass wrapper is replaced by an equivalent tinted fill.
+        // `cacheDisplay` cannot composite the backdrop, so the wrapper would
+        // contribute nothing but a flat tint anyway; this keeps the capture about
+        // layout. Glass rendering itself is proven in the live app by
+        // `--verify-ui`.
         emit(
             "chat-empty",
             ChatView(model: model)

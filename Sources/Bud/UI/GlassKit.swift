@@ -285,11 +285,18 @@ public struct EmptyStateView: View {
     private let systemImage: String
     private let title: String
     private let message: String
+    private let fills: Bool
 
-    public init(systemImage: String, title: String, message: String) {
+    /// - Parameter fills: when true the view expands to absorb the whole
+    ///   available area and centres itself inside it, which is what a pane-level
+    ///   empty state wants. Pass false to embed it in a larger column — such as
+    ///   a hero plus starter prompts — where an expanding block would push
+    ///   everything below it to the bottom edge and leave an orphan gap.
+    public init(systemImage: String, title: String, message: String, fills: Bool = true) {
         self.systemImage = systemImage
         self.title = title
         self.message = message
+        self.fills = fills
     }
 
     public var body: some View {
@@ -299,12 +306,16 @@ public struct EmptyStateView: View {
                 .foregroundStyle(.tertiary)
             Text(title).font(Bud.Font.title).foregroundStyle(.secondary)
             Text(message)
+                // Secondary rather than tertiary: the panel is glass over an
+                // arbitrary desktop, so the effective contrast varies and this
+                // copy has to stay readable over a bright wallpaper.
                 .font(Bud.Font.callout)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 260)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity)
+        .frame(maxHeight: fills ? .infinity : nil)
         .padding(Bud.Space.xl)
     }
 }

@@ -99,7 +99,9 @@ public struct ToolCountBadge: View {
         HStack(spacing: 5) {
             Image(systemName: "wrench.and.screwdriver")
                 .font(.system(size: 10, weight: .semibold))
-            Text("\(count)").font(Bud.Font.caption)
+            // The noun matters: a bare numeral next to an icon leaves the reader
+            // guessing whether it counts tools, tokens or messages.
+            Text(count == 1 ? "1 tool" : "\(count) tools").font(Bud.Font.caption)
         }
         .foregroundStyle(isActive ? Bud.Palette.accent : Color.secondary)
         .padding(.horizontal, 8)

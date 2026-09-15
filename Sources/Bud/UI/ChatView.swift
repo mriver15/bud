@@ -44,16 +44,25 @@ public struct ChatView: View {
 
     // MARK: - Transcript
 
+    @ViewBuilder
     private var transcript: some View {
+        if model.turns.isEmpty {
+            // Deliberately outside the ScrollView. A ScrollView proposes an
+            // unbounded height and lays its content out at its intrinsic size,
+            // so an empty state placed inside one cannot centre itself — the
+            // leftover height collects as a gap above the composer.
+            emptyState
+        } else {
+            transcriptScroll
+        }
+    }
+
+    private var transcriptScroll: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: Bud.Space.md) {
-                    if model.turns.isEmpty {
-                        emptyState
-                    } else {
-                        ForEach(model.turns) { turn in
-                            TranscriptRow(turn: turn, model: model)
-                        }
+                    ForEach(model.turns) { turn in
+                        TranscriptRow(turn: turn, model: model)
                     }
                     Color.clear.frame(height: 1).id(Self.bottomAnchor)
                 }
@@ -120,11 +129,15 @@ public struct ChatView: View {
     // MARK: - Empty state
 
     private var emptyState: some View {
-        VStack(spacing: Bud.Space.md) {
+        // Hero and starter prompts centre together as one column. Letting the
+        // hero absorb all the free space instead pushes the prompts to the
+        // bottom edge and strands a large gap between the two.
+        VStack(spacing: Bud.Space.lg) {
             EmptyStateView(
                 systemImage: "sparkles",
                 title: "Bud is ready",
-                message: "Ask anything. Bud can search, call your MCP tools, fan work out to subagents, and render results as a surface instead of prose."
+                message: "Ask anything. Bud can search, call your MCP tools, fan work out to subagents, and render results as a surface instead of prose.",
+                fills: false
             )
             .padding(.top, Bud.Space.lg)
 
@@ -135,7 +148,9 @@ public struct ChatView: View {
                     }
                 }
             }
+            .padding(.bottom, Bud.Space.lg)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 }
 

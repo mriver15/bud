@@ -119,13 +119,17 @@ public struct Composer: View {
         .buttonStyle(.plain)
         .background(Circle().fill(sendTint.opacity(0.85)))
         .glassEffect(.regular.tint(sendTint).interactive(), in: .circle)
-        .opacity(model.isStreaming || canSend ? 1 : 0.5)
+        .opacity(model.isStreaming || canSend ? 1 : 0.4)
         .disabled(!model.isStreaming && !canSend)
         .help(model.isStreaming ? "Stop" : "Send")
     }
 
+    /// A saturated accent at half opacity still reads as an active control, which
+    /// invites a click that does nothing. The disabled state drops the accent
+    /// entirely rather than only dimming it.
     private var sendTint: Color {
-        model.isStreaming ? Bud.Palette.danger : Bud.Palette.accent
+        if model.isStreaming { return Bud.Palette.danger }
+        return canSend ? Bud.Palette.accent : Color.secondary
     }
 
     // MARK: - Tools

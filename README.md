@@ -188,18 +188,24 @@ one rather than silently writing an empty file.
 
 Two limits are worth knowing, because both can be mistaken for product bugs:
 
-- **`.glassEffect` blanks its own subtree.** The glass material is composited, so
-  `cacheDisplay` draws nothing for it — including the content inside. The chat
-  panel and the user message bubble are therefore captured with the glass wrapper
-  swapped for an equivalent tinted fill. Their real appearance is only observable
-  in the running app.
-- **Materials resolve differently offscreen.** `.ultraThinMaterial` and
-  `.buttonStyle(.glass)` are compositor features too, so controls can look
-  flat or unstyled in a render while being correct on screen.
+- **The backdrop is never composited.** `cacheDisplay` and `ImageRenderer` draw the
+  view tree, not the window server's output, so the glass renders as a tint over
+  whatever is behind it in the image rather than refracting a desktop. Glass
+  content itself does draw — measured directly: a plain text node yields 87
+  distinct colours, the same node with `.glassEffect` yields 84, and a glass
+  sibling of a text node yields 98. Use `--verify-ui` and a real screenshot for
+  appearance; use this for layout.
+- **Some surfaces come out blank, and that is not a defect.** The harness prints
+  `BLANK` rather than claiming success. Observed on the empty chat surface and on
+  a lone user transcript row, while the same rows render correctly inside a
+  populated transcript and the empty surface renders correctly in the running
+  app. The cause is AppKit layout that only completes once a window is actually
+  ordered on screen; an offscreen capture cannot reproduce it. Treat `BLANK` as
+  "not verifiable this way", not as a failure.
 
-Also note `cacheDisplay`, like `ImageRenderer`, does not composite backdrop
-layers, so neither mode can confirm how the glass *looks*. That still needs a
-human, or the Screen Recording permission for `screencapture`.
+To capture real pixels, grant Screen Recording to your terminal and use
+`screencapture -x out.png` — note that on macOS 26 `-l<windowid>` and `-R<x,y,w,h>`
+were both unreliable here, so capture the full screen and crop.
 
 ### Working without Xcode
 

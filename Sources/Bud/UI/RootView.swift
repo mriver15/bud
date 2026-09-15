@@ -64,8 +64,10 @@ struct RootView: View {
 
             Spacer(minLength: Bud.Space.sm)
 
-            GlassEffectContainer(spacing: 6) {
-                HStack(spacing: 6) {
+            GlassEffectContainer(spacing: 10) {
+                // The gear is spaced clear of the segmented control so it does
+                // not read as a third segment of it.
+                HStack(spacing: 10) {
                     surfacePicker
 
                     GlassIconButton(

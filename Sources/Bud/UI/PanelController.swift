@@ -62,17 +62,35 @@ final class PanelController {
         let panel = FloatingPanel(contentRect: NSRect(origin: .zero, size: size))
         panel.contentView = NSHostingView(rootView: RootView(model: model))
         panel.setFrameAutosaveName(Self.frameAutosaveName)
-        if panel.frame.origin == .zero { positionTopTrailing(panel, size: size) }
+        // `setFrameAutosaveName` gives no way to tell a restored frame from one
+        // still sitting at the origin, so the restore is done explicitly and the
+        // default placement only applies when there was genuinely nothing to
+        // restore — or when what was restored is now off every screen, which
+        // happens as soon as a display is unplugged.
+        let restored = panel.setFrameUsingName(Self.frameAutosaveName)
+        if !restored || !isOnAnyScreen(panel.frame) {
+            positionTopTrailing(panel, size: size)
+        }
         panel.minSize = NSSize(width: 380, height: 420)
         self.panel = panel
         return panel
     }
 
-    /// Default placement: tucked into the top-right of the active screen, inset
-    /// from the menu bar. Only used on first launch — afterwards the autosaved
-    /// frame wins.
+    private func isOnAnyScreen(_ frame: NSRect) -> Bool {
+        NSScreen.screens.contains { $0.visibleFrame.intersects(frame) }
+    }
+
+    /// Default placement: tucked into the top-right of the screen the user is
+    /// working on, inset from the menu bar. Only used when there is no usable
+    /// saved frame.
     private func positionTopTrailing(_ panel: NSPanel, size: NSSize) {
-        guard let screen = NSScreen.main else { return }
+        // `NSScreen.main` tracks the key window and is unreliable before any
+        // window is key — which is exactly when this runs — so the screen under
+        // the pointer is used instead.
+        let pointer = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(pointer, $0.frame, false) }
+            ?? NSScreen.screens.first
+        guard let screen else { return }
         let visible = screen.visibleFrame
         let inset: CGFloat = 16
         let origin = NSPoint(
