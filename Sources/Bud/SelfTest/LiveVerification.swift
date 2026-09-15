@@ -312,6 +312,104 @@ public enum BudLiveVerification {
             (runs.first?.output.lowercased().contains("verified") ?? false)
         )
 
+        // MARK: Glama (live, when a key is configured)
+
+        let glamaKey = config.glamaAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if glamaKey.isEmpty {
+            c.check("glama: no key configured — live checks skipped", true)
+        } else {
+            c.check("glama: key resolved from config, environment or shell profile", true)
+            let glama = GlamaClient(apiKey: glamaKey)
+
+            do {
+                let page = try await glama.connectors(query: nil, cursor: nil, limit: 25)
+                c.check("glama: returned connectors", !page.items.isEmpty)
+                c.check("glama: issued a page cursor", page.nextCursor != nil)
+
+                // Attribution is a licence term: every row Bud presents has to be
+                // able to link back to its own Glama listing.
+                c.check(
+                    "glama: every connector carries a listing URL",
+                    page.items.allSatisfy { !($0.listingURL ?? "").isEmpty }
+                )
+                c.check(
+                    "glama: listing URLs point at glama.ai",
+                    page.items.allSatisfy { ($0.listingURL ?? "").contains("glama.ai") }
+                )
+
+                let installable = page.items.compactMap(\.installOption)
+                c.check("glama: some connectors are installable", !installable.isEmpty)
+                c.check(
+                    "glama: install targets an http endpoint",
+                    installable.allSatisfy { $0.url?.hasPrefix("http") ?? false }
+                )
+                // Installing the listing page instead of the endpoint would add a
+                // catalogue URL as if it were an MCP server.
+                let listingURLs = Set(page.items.compactMap(\.listingURL))
+                c.check(
+                    "glama: install target is never the listing page",
+                    installable.allSatisfy { !listingURLs.contains($0.url ?? "") }
+                )
+                c.check(
+                    "glama: at least one connector takes anonymous callers",
+                    page.items.contains { ($0.connection?.authType ?? "").lowercased() == "none" }
+                )
+                c.check(
+                    "glama: rows carry install options where an endpoint exists",
+                    page.items.map(\.registryServer).contains { !$0.options.isEmpty }
+                )
+
+                // The credential must land in `headers`, not `env`: `env` is only
+                // read by the stdio transport, so a key placed there is never
+                // sent and the server silently authenticates as nobody.
+                let store = MarketplaceStore()
+                if let secured = page.items.first(where: {
+                    $0.connection?.url?.isEmpty == false
+                        && ($0.connection?.authType ?? "").lowercased() != "none"
+                }), let option = secured.installOption {
+                    let mapped = store.makeConfig(from: secured.registryServer, option: option)
+                    c.equal("glama: connector maps to http transport", mapped.transport, .http)
+                    c.check("glama: credential lands in headers", mapped.headers["Authorization"] != nil)
+                    c.check("glama: credential does not land in env", mapped.env.isEmpty)
+                } else {
+                    c.check("glama: found an auth-requiring connector to check", false)
+                }
+
+                let searched = try await glama.connectors(query: "github", cursor: nil, limit: 10)
+                c.check("glama: search returned results", !searched.items.isEmpty)
+
+                let servers = try await glama.servers(query: nil, cursor: nil, limit: 25)
+                c.check("glama: returned servers", !servers.items.isEmpty)
+                // Glama publishes no run command for these, so Bud must link them
+                // rather than invent one.
+                c.check(
+                    "glama: servers are browse-only, never given a fabricated command",
+                    servers.items.allSatisfy { $0.registryServer.options.isEmpty }
+                )
+            } catch {
+                c.check("glama: live fetch failed (\(error.localizedDescription))", false)
+            }
+
+            // A rejected key must surface as an actionable error, not a body dump.
+            do {
+                _ = try await GlamaClient(apiKey: "glm_not_a_real_key")
+                    .connectors(query: nil, cursor: nil, limit: 1)
+                c.check("glama: a bogus key is rejected", false)
+            } catch let error as GlamaError {
+                if case .unauthorized = error {
+                    c.check("glama: bogus key yields unauthorized", true)
+                } else {
+                    c.check("glama: bogus key yields unauthorized (got \(error))", false)
+                }
+                c.check(
+                    "glama: the error text says where to get a key",
+                    (error.errorDescription ?? "").contains("glama.ai")
+                )
+            } catch {
+                c.check("glama: bogus key produced a typed GlamaError", false)
+            }
+        }
+
         // MARK: Cleanup
 
         await cleanup?()

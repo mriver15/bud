@@ -63,6 +63,16 @@ public final class AppModel {
         }
     }
 
+    /// Bumped whenever something wants the caret in the composer — currently
+    /// expanding Bud from the collapsed bubble, so a click on it lands ready to
+    /// type. A counter rather than a flag because the request has to be
+    /// observable even when it repeats.
+    public var composerFocusToken = 0
+
+    public func focusComposer() {
+        composerFocusToken &+= 1
+    }
+
     /// Set by the shell to present the settings window.
     public var onPresentSettings: (@MainActor (SettingsTab) -> Void)?
     /// Set by the shell to toggle the floating panel.

@@ -36,6 +36,11 @@ public struct Composer: View {
             }
         }
         .onAppear { isFocused = true }
+        .onChange(of: model.composerFocusToken) { _, _ in
+            // Set when Bud expands from the collapsed bubble: the panel window is
+            // ordered back in, so the caret has to be placed explicitly.
+            isFocused = true
+        }
     }
 
     // MARK: - Input

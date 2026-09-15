@@ -1,8 +1,13 @@
 import AppKit
 import SwiftUI
 
-/// Registry browser: search the public MCP registry and install a server
+/// Marketplace browser: search a catalogue of MCP servers and install one
 /// straight into the MCP manager.
+///
+/// Two sources are offered — the official MCP registry and Glama — and the pane
+/// carries whichever attribution the active source requires. Glama's API Data
+/// License obliges every view showing its data to credit Glama and to link each
+/// record's own listing, so both live on the pane itself rather than in About.
 ///
 /// The view owns nothing but its presentation state — the list, the request in
 /// flight, and install results all live in `MarketplaceStore` / `MCPManager`, so
@@ -11,6 +16,10 @@ public struct MarketplaceView: View {
     private let store: MarketplaceStore
     private let mcp: MCPManager
     private let model: AppModel
+
+    /// Where the Glama credit points. Glama's licence is specific that this is a
+    /// plain link, so it is opened directly and never marked up.
+    private static let glamaURLString = "https://glama.ai"
 
     @BudState private var inspected: RegistryServer?
 
@@ -23,17 +32,37 @@ public struct MarketplaceView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: Bud.Space.md) {
             SectionHeader("MCP Marketplace", subtitle: subtitle, systemImage: "shippingbox")
-            searchField
-            if let loadError = store.loadError {
-                errorBanner(loadError)
+            sourcePicker
+            if store.source == .glama {
+                glamaCredit
             }
-            resultsArea
+            if store.glamaKeyMissing {
+                glamaKeyMissingState
+            } else {
+                searchField
+                if let loadError = store.loadError {
+                    errorBanner(loadError)
+                }
+                resultsArea
+            }
         }
         .padding(Bud.Space.lg)
-        .task { await store.loadInitial() }
+        .task {
+            // The store does not own the config, so the shell mirrors the key in.
+            // Doing it here — rather than once at launch — is what lets a key
+            // pasted in Settings take effect on the next visit, with no relaunch.
+            store.glamaAPIKey = model.config.glamaAPIKey
+            await store.loadInitial()
+        }
         .task(id: store.query) { await runSearch() }
         .sheet(item: $inspected) { server in
-            RegistryServerInspector(server: server, store: store, mcp: mcp, model: model)
+            RegistryServerInspector(
+                server: server,
+                source: store.source,
+                store: store,
+                mcp: mcp,
+                model: model
+            )
         }
     }
 
@@ -42,8 +71,104 @@ public struct MarketplaceView: View {
     private var subtitle: String {
         let count = store.totalLoaded
         let servers = count == 1 ? "1 server" : "\(count) servers"
-        if store.lastQuery.isEmpty { return "\(servers) loaded from the registry" }
+        let origin = store.source == .glama ? "from Glama" : "from the registry"
+        if store.lastQuery.isEmpty { return "\(servers) loaded \(origin)" }
         return "\(servers) matching “\(store.lastQuery)”"
+    }
+
+    /// The source switcher, styled as the surface picker in the panel header is:
+    /// adjacent capsule buttons inside one `GlassEffectContainer`, so the two
+    /// controls read as the same kind of thing. The container is not decoration —
+    /// it is what gives the capsules correct material bounds; without it the
+    /// glass draws over the header above.
+    private var sourcePicker: some View {
+        VStack(alignment: .leading, spacing: Bud.Space.xs) {
+            GlassEffectContainer(spacing: 2) {
+                HStack(spacing: 2) {
+                    ForEach(MarketplaceSource.allCases) { option in
+                        Button {
+                            withAnimation(.snappy(duration: 0.18)) { store.source = option }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: symbol(for: option))
+                                    .font(.system(size: 10, weight: .medium))
+                                Text(option.label)
+                                    .font(Bud.Font.caption)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(store.source == option ? .primary : .secondary)
+                        .glassEffect(
+                            store.source == option
+                                ? .regular.tint(Bud.Palette.accent.opacity(0.45)).interactive()
+                                : .identity,
+                            in: .capsule
+                        )
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            Text(store.source.blurb)
+                .font(Bud.Font.caption)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func symbol(for source: MarketplaceSource) -> String {
+        switch source {
+        case .official: return "shippingbox"
+        case .glama: return "circle.hexagongrid"
+        }
+    }
+
+    /// Glama's API Data License requires a visible credit to Glama, linked to
+    /// glama.ai, on every view that shows its data. The link is plain — no
+    /// `nofollow`, no `sponsored` — and it sits on the pane itself because that
+    /// is where the data is.
+    private var glamaCredit: some View {
+        Button {
+            if let url = URL(string: Self.glamaURLString) {
+                _ = NSWorkspace.shared.open(url)
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text("MCP data from Glama")
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .font(Bud.Font.caption)
+            .foregroundStyle(Bud.Palette.accent)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Glama's API Data License requires this credit and a link to each record's own listing.")
+    }
+
+    /// A missing key is a prompt, not an error: nothing was requested, so it is
+    /// shown as an empty state with a way to fix it rather than as a banner.
+    private var glamaKeyMissingState: some View {
+        VStack(spacing: Bud.Space.md) {
+            EmptyStateView(
+                systemImage: "key",
+                title: "Glama needs an API key",
+                message: "Browsing Glama's catalogue requires an API key. Add one in Settings → General and come back — Bud keeps it in ~/.bud/config.json with owner-only permissions.",
+                fills: false
+            )
+            Button {
+                model.openSettings(tab: .general)
+            } label: {
+                Label("Open Settings", systemImage: "gearshape")
+                    .font(Bud.Font.body)
+            }
+            .buttonStyle(.glass)
+            .controlSize(.small)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private var searchField: some View {
@@ -54,7 +179,7 @@ public struct MarketplaceView: View {
                     .foregroundStyle(.secondary)
 
                 TextField(
-                    "Search the MCP registry",
+                    store.source == .glama ? "Search Glama" : "Search the MCP registry",
                     text: Binding(
                         get: { store.query },
                         set: { store.query = $0 }
@@ -131,7 +256,11 @@ public struct MarketplaceView: View {
                     spacing: Bud.Space.sm
                 ) {
                     ForEach(store.results) { server in
-                        ServerCard(server: server, isInstalled: store.isInstalled(server)) {
+                        ServerCard(
+                            server: server,
+                            source: store.source,
+                            isInstalled: store.isInstalled(server)
+                        ) {
                             inspected = server
                         }
                     }
@@ -142,14 +271,20 @@ public struct MarketplaceView: View {
     }
 
     private var emptyMessage: String {
-        if store.isSearching { return "Querying the MCP registry." }
+        if store.isSearching {
+            return store.source == .glama ? "Querying Glama." : "Querying the MCP registry."
+        }
         if !store.lastQuery.isEmpty {
-            return "No registry entry matches “\(store.lastQuery)”. Try a shorter term."
+            return store.source == .glama
+                ? "No Glama record matches “\(store.lastQuery)”. Try a shorter term."
+                : "No registry entry matches “\(store.lastQuery)”. Try a shorter term."
         }
         if store.loadError != nil {
-            return "The registry could not be read. Retry above, or check this Mac's network."
+            return store.source == .glama
+                ? "Glama could not be read. Retry above, or check the key in Settings → General."
+                : "The registry could not be read. Retry above, or check this Mac's network."
         }
-        return "The registry returned no servers."
+        return store.source == .glama ? "Glama returned no records." : "The registry returned no servers."
     }
 
     /// The field is edited per keystroke while the store only answers settled
@@ -169,60 +304,108 @@ public struct MarketplaceView: View {
 
 private struct ServerCard: View {
     let server: RegistryServer
+    let source: MarketplaceSource
     let isInstalled: Bool
     let action: () -> Void
 
     @BudState private var isHovering = false
 
     var body: some View {
-        Button(action: action) {
-            GlassCard(tint: isInstalled ? Bud.Palette.success : nil) {
-                HStack(alignment: .top, spacing: Bud.Space.md) {
-                    icon
-                    VStack(alignment: .leading, spacing: Bud.Space.xs) {
-                        HStack(spacing: Bud.Space.xs) {
-                            Text(server.displayTitle)
-                                .font(Bud.Font.title)
-                                .lineLimit(1)
-                            Spacer(minLength: Bud.Space.xs)
-                            if isInstalled {
-                                GlassChip(
-                                    "Installed",
-                                    systemImage: "checkmark.circle.fill",
-                                    tint: Bud.Palette.success,
-                                    isActive: true
-                                )
-                            }
-                        }
-
-                        Text(server.name)
-                            .font(Bud.Font.caption)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-
-                        if !server.summary.isEmpty {
-                            Text(server.summary)
-                                .font(Bud.Font.callout)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-
-                        HStack(spacing: Bud.Space.xs) {
-                            if !server.version.isEmpty { GlassChip(server.version) }
-                            ForEach(provenances, id: \.self) { GlassChip($0) }
-                            GlassChip(optionCountLabel)
-                            Spacer(minLength: 0)
-                        }
-                    }
+        GlassCard(tint: isInstalled ? Bud.Palette.success : nil) {
+            VStack(alignment: .leading, spacing: Bud.Space.sm) {
+                content
+                if let listing = glamaListing {
+                    glamaLink(listing)
                 }
             }
         }
-        .buttonStyle(.plain)
         .scaleEffect(isHovering ? 1.008 : 1)
         .animation(.snappy(duration: 0.12), value: isHovering)
         .onHover { isHovering = $0 }
+    }
+
+    /// The record's own Glama listing. Glama's API Data License requires every
+    /// record presented to carry this link, visible without hovering, in addition
+    /// to whatever else the card links to.
+    ///
+    /// For a Glama row `websiteURL` *is* the listing — the mapping puts the API's
+    /// `url` there and never the endpoint — so this reads the same field the
+    /// website link would, which is the point: one URL, one meaning.
+    private var glamaListing: URL? {
+        guard source == .glama, let raw = server.websiteURL else { return nil }
+        return URL(string: raw)
+    }
+
+    /// A sibling of the card's button, not a child: a link nested inside a button
+    /// is not separately clickable on macOS.
+    private func glamaLink(_ url: URL) -> some View {
+        Button {
+            _ = NSWorkspace.shared.open(url)
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "arrow.up.right.square")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("View on Glama")
+                    .font(Bud.Font.caption)
+                    .underline()
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(Bud.Palette.accent)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Open this record's listing on glama.ai")
+    }
+
+    private var content: some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: Bud.Space.md) {
+                icon
+                VStack(alignment: .leading, spacing: Bud.Space.xs) {
+                    HStack(spacing: Bud.Space.xs) {
+                        Text(server.displayTitle)
+                            .font(Bud.Font.title)
+                            .lineLimit(1)
+                        Spacer(minLength: Bud.Space.xs)
+                        if isInstalled {
+                            GlassChip(
+                                "Installed",
+                                systemImage: "checkmark.circle.fill",
+                                tint: Bud.Palette.success,
+                                isActive: true
+                            )
+                        }
+                    }
+
+                    Text(server.name)
+                        .font(Bud.Font.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+
+                    if !server.summary.isEmpty {
+                        Text(server.summary)
+                            .font(Bud.Font.callout)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    HStack(spacing: Bud.Space.xs) {
+                        if !server.version.isEmpty { GlassChip(server.version) }
+                        ForEach(provenances, id: \.self) { GlassChip($0) }
+                        GlassChip(optionCountLabel)
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+            // The label is the hit area, so it is stretched to the card's inner
+            // width and given a shape: the row reads as one button, not just the
+            // glyphs in it.
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     /// Registry order is already relevance order for a search and publication
@@ -281,12 +464,16 @@ private struct ServerCard: View {
 
 private struct RegistryServerInspector: View {
     let server: RegistryServer
+    let source: MarketplaceSource
     let store: MarketplaceStore
     let mcp: MCPManager
     let model: AppModel
 
     @Environment(\.dismiss) private var dismiss
-    @BudState private var envValues: [String: String] = [:]
+    /// Credentials the user has typed, keyed by the name the option declares.
+    /// Transport-agnostic on purpose: `makeConfig` decides whether they become a
+    /// child process's environment or an HTTP header.
+    @BudState private var credentials: [String: String] = [:]
     @BudState private var installingOptionID: String?
     @BudState private var report: InstallReport?
 
@@ -419,7 +606,14 @@ private struct RegistryServerInspector: View {
             items.append(RegistryLink(id: "repo", label: "Repository", symbol: "chevron.left.forwardslash.chevron.right", url: url))
         }
         if let raw = server.websiteURL, let url = URL(string: raw) {
-            items.append(RegistryLink(id: "site", label: "Website", symbol: "safari", url: url))
+            // For a Glama record this is the record's own listing — the link its
+            // API Data License requires wherever the record is presented — so it
+            // is named as such rather than as a generic website.
+            items.append(
+                source == .glama
+                    ? RegistryLink(id: "glama", label: "Glama listing", symbol: "arrow.up.right.square", url: url)
+                    : RegistryLink(id: "site", label: "Website", symbol: "safari", url: url)
+            )
         }
         return items
     }
@@ -429,7 +623,7 @@ private struct RegistryServerInspector: View {
         VStack(alignment: .leading, spacing: Bud.Space.sm) {
             SectionHeader("Install options", subtitle: "Installing adds a server you can edit later in Settings.")
             if server.options.isEmpty {
-                Text("This entry publishes no npm package, PyPI package, or remote endpoint, so Bud cannot configure it automatically.")
+                Text(browseOnlyExplanation)
                     .font(Bud.Font.callout)
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -439,6 +633,18 @@ private struct RegistryServerInspector: View {
                 }
             }
         }
+    }
+
+    /// Why there is nothing to install.
+    ///
+    /// Glama's worth saying plainly: its directory publishes a server's source,
+    /// not a run command, so any install Bud offered would be a guess. The honest
+    /// answer is to hand over the repository and let the user wired it up.
+    private var browseOnlyExplanation: String {
+        guard source == .glama else {
+            return "This entry publishes no npm package, PyPI package, or remote endpoint, so Bud cannot configure it automatically."
+        }
+        return "Glama lists this server for running from source and publishes no package identifier or launch command, so Bud cannot install it automatically. Open the repository or the listing above, then add the command in Settings → MCP."
     }
 
     private func optionCard(_ option: RegistryInstallOption) -> some View {
@@ -462,7 +668,7 @@ private struct RegistryServerInspector: View {
                     .textSelection(.enabled)
 
                 ForEach(option.requiredEnv, id: \.self) { name in
-                    envField(name)
+                    credentialField(name)
                 }
 
                 HStack(spacing: Bud.Space.sm) {
@@ -494,7 +700,11 @@ private struct RegistryServerInspector: View {
         }
     }
 
-    private func envField(_ name: String) -> some View {
+    /// The credential's name is the API's — `Authorization` for a Glama
+    /// connector, an environment variable name for a stdio package. Where the
+    /// value ends up is `makeConfig`'s call, not this view's: `env` for a child
+    /// process, `headers` for an HTTP endpoint.
+    private func credentialField(_ name: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(name)
                 .font(Bud.Font.caption)
@@ -502,8 +712,8 @@ private struct RegistryServerInspector: View {
             TextField(
                 name,
                 text: Binding(
-                    get: { envValues[name] ?? "" },
-                    set: { envValues[name] = $0 }
+                    get: { credentials[name] ?? "" },
+                    set: { credentials[name] = $0 }
                 )
             )
             .textFieldStyle(.roundedBorder)
@@ -562,10 +772,14 @@ private struct RegistryServerInspector: View {
         installingOptionID = option.id
         report = nil
 
-        var config = store.makeConfig(from: server, option: option)
+        var typed: [String: String] = [:]
         for name in option.requiredEnv {
-            config.env[name] = (envValues[name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            typed[name] = (credentials[name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         }
+        // `makeConfig` routes each credential to `env` or `headers` by transport.
+        // Writing them here instead is what would put an HTTP server's key
+        // somewhere the transport never reads.
+        let config = MarketplaceStore.makeConfig(from: server, option: option, credentials: typed)
 
         await mcp.addServer(config)
         await mcp.connect(id: config.id)
@@ -592,7 +806,7 @@ private struct RegistryServerInspector: View {
 
     private func isReady(_ option: RegistryInstallOption) -> Bool {
         option.requiredEnv.allSatisfy { name in
-            !(envValues[name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            !(credentials[name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
 }

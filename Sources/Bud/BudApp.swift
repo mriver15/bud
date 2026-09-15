@@ -103,9 +103,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await model.start() }
     }
 
-    /// `bud://ask?text=…` sends a message, `bud://toggle` shows or hides the
-    /// panel, `bud://new` starts a fresh transcript. Anything else is ignored —
-    /// an unrecognised link must never leave the app in a half-open state.
+    /// `bud://ask?text=…` sends a message, `bud://toggle` collapses or expands,
+    /// `bud://collapse` and `bud://expand` set the shape explicitly,
+    /// `bud://settings?tab=marketplace` opens that settings pane, and `bud://new`
+    /// starts a fresh transcript. Anything else is ignored — an
+    /// unrecognised link must never leave the app in a half-open state.
     @objc private func handleURLEvent(_ event: NSAppleEventDescriptor, replyEvent: NSAppleEventDescriptor) {
         guard let string = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
               let url = URL(string: string) else { return }
@@ -120,11 +122,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let text = items.first { $0.name == "text" }?.value ?? ""
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
-            panels?.show()
+            // Expand rather than `show()`: asking from a link is a deliberate
+            // question, so the answer should be on screen when it arrives.
+            panels?.expand()
             Task { await model.send(trimmed) }
 
         case "toggle":
             panels?.toggle()
+
+        case "collapse":
+            panels?.collapse()
+
+        case "expand":
+            panels?.expand()
+
+        case "settings":
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            let requested = items.first { $0.name == "tab" }?.value ?? ""
+            model.openSettings(tab: SettingsTab(rawValue: requested) ?? .general)
+            NSApp.activate(ignoringOtherApps: true)
 
         case "new":
             model.clearTranscript()

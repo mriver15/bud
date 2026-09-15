@@ -70,6 +70,15 @@ struct RootView: View {
                 HStack(spacing: 10) {
                     surfacePicker
 
+                    // Collapsing is a first-class action, not a window control:
+                    // the bubble is where Bud lives when it is not being read.
+                    GlassIconButton(
+                        systemImage: "arrow.down.right.and.arrow.up.left",
+                        help: "Collapse to the corner (\(GlobalHotKey.summonShortcutLabel))"
+                    ) {
+                        NotificationCenter.default.post(name: .budTogglePanel, object: nil)
+                    }
+
                     GlassIconButton(
                         systemImage: "gearshape",
                         help: "Settings (⌘,)"

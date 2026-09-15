@@ -103,11 +103,13 @@ private struct GeneralSettingsTab: View {
 
     private static let presetModels = ["deepseek-v4-flash", "deepseek-v4-pro"]
     private static let knownEfforts = ["low", "medium", "high", "max"]
+    private static let glamaKeysURLString = "https://glama.ai/settings/api-keys"
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Bud.Space.lg) {
                 credentialsSection
+                glamaSection
                 endpointSection
                 modelSection
                 limitsSection
@@ -172,6 +174,68 @@ private struct GeneralSettingsTab: View {
                 }
             }
         }
+    }
+
+    // MARK: Glama
+
+    /// Glama's key, alongside the DeepSeek one rather than on the marketplace
+    /// pane: a pane that browses is not where a credential is configured, and the
+    /// licence notice that makes the pane work belongs next to the field that
+    /// unlocks it.
+    private var glamaSection: some View {
+        VStack(alignment: .leading, spacing: Bud.Space.sm) {
+            SectionHeader(
+                "Glama marketplace",
+                subtitle: "Required to browse Glama in Settings → Marketplace.",
+                systemImage: "square.grid.2x2"
+            )
+            GlassCard {
+                VStack(alignment: .leading, spacing: Bud.Space.sm) {
+                    Text("Glama API key")
+                        .font(Bud.Font.caption)
+                        .foregroundStyle(.secondary)
+                    SecureField("glm_…", text: glamaKeyBinding)
+                        .textFieldStyle(.roundedBorder)
+                        .font(Bud.Font.mono)
+                        // Committed on submit, never per keystroke: the config file
+                        // is rewritten whole, and a half-typed credential should
+                        // not be what lands on disk.
+                        .onSubmit { model.persistConfig() }
+                    HStack(spacing: Bud.Space.sm) {
+                        Button {
+                            if let url = URL(string: Self.glamaKeysURLString) {
+                                _ = NSWorkspace.shared.open(url)
+                            }
+                        } label: {
+                            Label("Create a key at glama.ai", systemImage: "arrow.up.right.square")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        Spacer(minLength: 0)
+                    }
+                    Text("Glama's API Data License requires Bud to credit Glama on every view that shows its data and to link each record back to its Glama listing. The marketplace pane does both; that is the price of the catalogue, not a setting.")
+                        .font(Bud.Font.caption)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        provenanceRow(
+                            "Glama key",
+                            model.config.glamaAPIKey.isEmpty
+                                ? "not set — the marketplace will prompt for one"
+                                : "set"
+                        )
+                    }
+                    .padding(.top, Bud.Space.xs)
+                }
+            }
+        }
+    }
+
+    private var glamaKeyBinding: Binding<String> {
+        Binding(
+            get: { model.config.glamaAPIKey },
+            set: { model.config.glamaAPIKey = $0 }
+        )
     }
 
     private var apiKeyBinding: Binding<String> {

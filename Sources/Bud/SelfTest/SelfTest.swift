@@ -73,6 +73,7 @@ public enum BudSelfTest {
             jsonValue,
             toolNaming,
             mcpConfigMapping,
+            glamaMapping,
             toolTruncation,
         ]
         var total = SelfTestReport()
@@ -127,6 +128,51 @@ public enum BudSelfTest {
           default: deepseek/deepseek-v4-flash:max
         """)
         c.equal("comments ignored", commented?.model, "deepseek-v4-flash")
+
+        // Shell profiles are the only place a Finder-launched app can find a key,
+        // so a miss here is a key the marketplace never sees. The quotes are the
+        // part that fails quietly: they have to come off, and a lookalike name
+        // must not answer for the real one.
+        let profile = """
+        export DEEPSEEK_API_KEY="sk-quoted"
+        export GLAMA_API_KEY='glm-single'
+        export GLAMA_API_KEY_OLD=glm-stale
+        """
+        c.equal(
+            "double-quoted shell value",
+            BudConfigLoader.parseShellAssignment(in: profile, named: "DEEPSEEK_API_KEY"),
+            "sk-quoted"
+        )
+        c.equal(
+            "single-quoted shell value",
+            BudConfigLoader.parseShellAssignment(in: profile, named: "GLAMA_API_KEY"),
+            "glm-single"
+        )
+        c.equal(
+            "bare shell assignment",
+            BudConfigLoader.parseShellAssignment(in: "GLAMA_API_KEY=glm-bare\n", named: "GLAMA_API_KEY"),
+            "glm-bare"
+        )
+        c.equal(
+            "indented shell export",
+            BudConfigLoader.parseShellAssignment(in: "  export GLAMA_API_KEY=glm-indent", named: "GLAMA_API_KEY"),
+            "glm-indent"
+        )
+        c.nilValue(
+            "a longer name must not answer for the requested one",
+            BudConfigLoader.parseShellAssignment(in: "export GLAMA_API_KEY_OLD=glm-stale\n", named: "GLAMA_API_KEY")
+        )
+        c.nilValue(
+            "unrelated shell name is ignored",
+            BudConfigLoader.parseShellAssignment(in: "OTHER=1", named: "GLAMA_API_KEY")
+        )
+        c.equal(
+            "blank shell value falls through",
+            BudConfigLoader.parseShellAssignment(
+                in: "GLAMA_API_KEY=\nGLAMA_API_KEY=glm-later\n", named: "GLAMA_API_KEY"
+            ),
+            "glm-later"
+        )
 
         return c.report()
     }
@@ -415,6 +461,318 @@ public enum BudSelfTest {
             RegistryInstallOption(id: "npm:x", label: "npx -y x", transport: .stdio, command: "npx", args: ["-y", "x"]),
             RegistryInstallOption(id: "npm:x", label: "npx -y x", transport: .stdio, command: "npx", args: ["-y", "x"])
         )
+
+        return c.report()
+    }
+
+    // MARK: Glama
+
+    /// Glama's catalogue, mapped offline.
+    ///
+    /// Every check here guards a failure that would otherwise be silent: a wrong
+    /// identity means a freshly installed server never shows as installed, a
+    /// credential written to the wrong field is simply never sent (an HTTP server
+    /// still answers `initialize` unauthenticated, so nothing looks wrong until a
+    /// tool call), and a fabricated install command yields a server that cannot
+    /// start.
+    static func glamaMapping() -> SelfTestReport {
+        let c = Checker(suite: "glama")
+
+        func decode<T: Decodable>(_ type: T.Type, _ json: String) -> T? {
+            try? JSONDecoder().decode(type, from: Data(json.utf8))
+        }
+
+        // MARK: Connectors
+
+        // Shaped like a live record. The two URLs really are different hosts:
+        // Glama's listing page versus the endpoint the publisher hosts.
+        let anonymous = decode(GlamaConnector.self, """
+        {
+          "id": "rec_github",
+          "name": "GitHub",
+          "namespace": "acme",
+          "slug": "github",
+          "url": "https://glama.ai/mcp/connectors/acme/github",
+          "description": "GitHub's hosted MCP server.",
+          "attributes": ["tools", "search"],
+          "qualityScore": 84.5,
+          "isBoosted": false,
+          "thumbnailUrl": "https://glama.ai/thumbs/github.png",
+          "repository": {"url": "https://github.com/acme/github-mcp"},
+          "healthy": true,
+          "toolCount": 27,
+          "connection": {"authType": "none", "transport": "streamable_http", "url": "https://mcp.acme.dev/github"}
+        }
+        """)
+
+        if let connector = anonymous, let option = connector.installOption {
+            let row = connector.registryServer
+            c.equal("connector identity", connector.registryIdentity, "glama:acme/github")
+            c.equal("row id is the identity", row.id, "glama:acme/github")
+            c.equal("row name is the identity", row.name, "glama:acme/github")
+            c.equal("row title is the record name", row.title, "GitHub")
+            c.equal("row summary is the description", row.summary, "GitHub's hosted MCP server.")
+            c.equal("row listing is the API's url", row.websiteURL, connector.listingURL)
+            c.equal("row repository", row.repositoryURL, "https://github.com/acme/github-mcp")
+            c.equal("row icon", row.iconURL, "https://glama.ai/thumbs/github.png")
+            c.equal("row version is empty", row.version, "")
+            c.equal("connector maps to exactly one option", row.options.count, 1)
+            c.equal("option id is fixed", option.id, "glama-connector")
+            c.equal("option transport is http", option.transport, MCPTransportKind.http)
+            c.nilValue("no stdio command is invented", option.command)
+            c.check("listing and endpoint differ", connector.listingURL != connector.connection?.url)
+            c.equal("option url is the endpoint", option.url, "https://mcp.acme.dev/github")
+            c.check("option url is not the listing", option.url != connector.listingURL)
+            c.equal("anonymous connector needs no credential", option.requiredEnv, [String]())
+        } else {
+            c.check("connector with a connection maps to one option", false)
+        }
+
+        // One record with no credential, one with an API key, one with OAuth: the
+        // live sample is roughly a third credentialed, so this is the common path,
+        // not an edge.
+        let keyed = decode(GlamaConnector.self, """
+        {
+          "id": "rec_linear",
+          "name": "Linear",
+          "namespace": "linear",
+          "slug": "linear",
+          "url": "https://glama.ai/mcp/connectors/linear/linear",
+          "connection": {"authType": "api_key", "transport": "streamable_http", "url": "https://mcp.linear.app/mcp"}
+        }
+        """)
+        let oauth = decode(GlamaConnector.self, """
+        {
+          "id": "rec_oauth",
+          "name": "Notion",
+          "namespace": "notion",
+          "slug": "notion",
+          "url": "https://glama.ai/mcp/connectors/notion/notion",
+          "connection": {"authType": "oauth2", "transport": "streamable_http", "url": "https://mcp.notion.com/mcp"}
+        }
+        """)
+
+        // A record missing description, attributes, toolCount, repository and
+        // thumbnail still has to decode and keep its name: the thumbnail is
+        // absent for most of the catalogue.
+        if let connector = keyed {
+            c.equal("sparse connector keeps its name", connector.name, "Linear")
+            c.nilValue("absent description stays nil", connector.description)
+            c.check("absent attributes default to empty", connector.attributes.isEmpty)
+            c.nilValue("absent toolCount stays nil", connector.toolCount)
+            c.nilValue("absent repository stays nil", connector.repository)
+            c.nilValue("absent thumbnail stays nil", connector.thumbnailUrl)
+        } else {
+            c.check("sparse connector decodes", false)
+        }
+
+        if let connector = keyed, let option = connector.installOption {
+            c.equal("api_key connector needs Authorization", option.requiredEnv, ["Authorization"])
+            c.check("api_key option states the shape", option.label.contains("Bearer <key>"))
+            c.check("option label still names the endpoint", option.label.contains("https://mcp.linear.app/mcp"))
+
+            let row = connector.registryServer
+            // The credential contract. `env` is read only by the stdio transport;
+            // an HTTP key written there is never sent, and the server authenticates
+            // as nobody without complaining.
+            let blank = MarketplaceStore.makeConfig(from: row, option: option)
+            c.equal("http credential is prefilled as a header", blank.headers["Authorization"], "")
+            c.check("http credential is not prefilled as an env var", blank.env.isEmpty)
+            c.equal("http config transport", blank.transport, MCPTransportKind.http)
+            c.equal("http config url is the endpoint", blank.url, "https://mcp.linear.app/mcp")
+            c.nilValue("http config has no command", blank.command)
+
+            let installed = MarketplaceStore.makeConfig(
+                from: row, option: option, credentials: ["Authorization": "Bearer glm_test"]
+            )
+            c.equal("typed credential lands in headers", installed.headers["Authorization"], "Bearer glm_test")
+            c.check("typed credential is not in env", installed.env.isEmpty)
+            // `isInstalled` answers by comparing the installed config's
+            // registryName to the row's name, so these two must be the same string.
+            c.equal("registryName uses the glama scheme", installed.registryName, "glama:linear/linear")
+            c.equal("registryName matches the row name", installed.registryName, row.name)
+        } else {
+            c.check("api_key connector maps to one option", false)
+        }
+
+        if let option = oauth?.installOption {
+            c.equal("oauth2 connector needs Authorization", option.requiredEnv, ["Authorization"])
+            c.check("oauth2 option says where the endpoints are", option.label.contains("oauth-authorization-server"))
+        } else {
+            c.check("oauth2 connector maps to one option", false)
+        }
+
+        // MARK: Servers
+
+        // A directory entry, with the real shape: a repository, no thumbnail, and
+        // no package or run command anywhere in the payload.
+        let directory = decode(GlamaServer.self, """
+        {
+          "id": "srv_filesystem",
+          "name": "Filesystem",
+          "namespace": "modelcontextprotocol",
+          "slug": "filesystem",
+          "url": "https://glama.ai/mcp/servers/modelcontextprotocol/filesystem",
+          "description": "Exposes the filesystem over MCP.",
+          "attributes": ["tools"],
+          "repository": {"url": "https://github.com/modelcontextprotocol/servers"},
+          "spdxLicense": "MIT"
+        }
+        """)
+
+        if let server = directory {
+            let row = server.registryServer
+            c.equal("server identity", row.name, "glama:modelcontextprotocol/filesystem")
+            c.equal("server row title", row.title, "Filesystem")
+            c.equal("server row listing is the API's url", row.websiteURL, server.listingURL)
+            c.equal("server row repository", row.repositoryURL, "https://github.com/modelcontextprotocol/servers")
+            c.nilValue("server with no thumbnail has no icon", row.iconURL)
+            // The honest mapping: nothing invented, so the card is browse-only
+            // rather than offering an install that could not run.
+            c.equal("server maps to no install options", row.options.count, 0)
+        } else {
+            c.check("directory server decodes", false)
+        }
+
+        // Explicit nulls for every field but the identity, which is exactly what
+        // the API sends for `repository` on most connectors.
+        let sparse = decode(GlamaServer.self, """
+        {
+          "id": "srv_odd",
+          "name": "Odd",
+          "namespace": "n",
+          "slug": "odd",
+          "url": "https://glama.ai/mcp/servers/n/odd",
+          "repository": null,
+          "description": null,
+          "attributes": null,
+          "thumbnailUrl": null
+        }
+        """)
+        if let server = sparse {
+            c.equal("nulled record keeps its name", server.name, "Odd")
+            c.nilValue("null repository stays nil", server.repository)
+            c.nilValue("null description stays nil", server.description)
+            c.check("null attributes default to empty", server.attributes.isEmpty)
+            c.equal("nulled record still maps", server.registryServer.name, "glama:n/odd")
+        } else {
+            c.check("record with explicit nulls decodes", false)
+        }
+
+        // MARK: Credential placement
+
+        // The same rule the other way round: a stdio package needs its key in the
+        // child's environment, and would ignore a header.
+        let stdioRow = RegistryServer(
+            id: "npm:@acme/files", name: "npm:@acme/files", title: "Files", summary: ""
+        )
+        let stdioOption = RegistryInstallOption(
+            id: "npm:@acme/files", label: "npx -y @acme/files",
+            transport: .stdio, command: "npx", args: ["-y", "@acme/files"],
+            requiredEnv: ["ACME_API_KEY"]
+        )
+        let stdioBlank = MarketplaceStore.makeConfig(from: stdioRow, option: stdioOption)
+        c.equal("stdio credential is prefilled in env", stdioBlank.env["ACME_API_KEY"], "")
+        c.check("stdio credential is not a header", stdioBlank.headers.isEmpty)
+
+        let stdioInstalled = MarketplaceStore.makeConfig(
+            from: stdioRow, option: stdioOption, credentials: ["ACME_API_KEY": "secret"]
+        )
+        c.equal("typed stdio credential lands in env", stdioInstalled.env["ACME_API_KEY"], "secret")
+        c.check("typed stdio credential is not a header", stdioInstalled.headers.isEmpty)
+        c.equal("stdio config keeps its command", stdioInstalled.command, "npx")
+
+        // MARK: Client boundary
+
+        // No key: the call must stop before a request exists. `makeRequest` is the
+        // only path to one, so this is where that is provable without a network.
+        let keyless = GlamaClient(apiKey: "")
+        do {
+            _ = try keyless.makeRequest(path: "/v1/connectors", items: [])
+            c.check("empty key throws missingKey", false)
+        } catch let error as GlamaError {
+            c.equal("empty key throws missingKey", error, GlamaError.missingKey)
+            c.check(
+                "missingKey says where to get one",
+                error.localizedDescription.contains("glama.ai/settings/api-keys")
+            )
+        } catch {
+            c.check("empty key throws missingKey", false)
+        }
+
+        let client = GlamaClient(apiKey: "glm_test")
+        do {
+            let request = try client.makeRequest(
+                path: "/v1/connectors",
+                items: GlamaClient.queryItems(query: "git hub/api", cursor: "cursor_2", limit: 5_000)
+            )
+            c.equal("auth header carries the key", request.value(forHTTPHeaderField: "Authorization"), "Bearer glm_test")
+            c.equal("read is a GET", request.httpMethod, "GET")
+            c.equal("limit is clamped to the API ceiling", GlamaClient.clamp(5_000), 100)
+            c.equal("limit floor", GlamaClient.clamp(0), 1)
+
+            let items = request.url
+                .flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?
+                .queryItems ?? []
+            c.equal("query is percent-encoded once and back", items.first { $0.name == "query" }?.value, "git hub/api")
+            c.equal("cursor is sent as after", items.first { $0.name == "after" }?.value, "cursor_2")
+            c.equal("first carries the clamped limit", items.first { $0.name == "first" }?.value, "100")
+            c.equal("base url", GlamaClient.defaultBaseURLString + "/v1/connectors", "https://glama.ai/api/mcp/v1/connectors")
+        } catch {
+            c.check("a configured key builds a request", false)
+        }
+
+        // An empty query is not sent at all: `query=` would be a search for the
+        // empty string rather than a browse.
+        c.equal("blank query is omitted", GlamaClient.queryItems(query: "  ", cursor: nil, limit: 10).count, 1)
+
+        // MARK: Failure parsing
+
+        // The real 401 body. Its message is the actionable half of the error, so
+        // it has to survive into what the user reads.
+        let unauthorized = Data("""
+        {"error":{"code":"unauthorized","message":"This endpoint requires an API key. Create one at https://glama.ai/settings/api-keys."}}
+        """.utf8)
+        let unauthorizedError = GlamaClient.failure(status: 401, data: unauthorized, response: nil)
+        if case .unauthorized(let message) = unauthorizedError {
+            c.check("401 is unauthorized", true)
+            c.check("401 keeps the API's own message", message?.contains("settings/api-keys") == true)
+        } else {
+            c.check("401 is unauthorized", false)
+        }
+        c.check(
+            "401 description is readable",
+            unauthorizedError.localizedDescription.contains("401")
+                && !unauthorizedError.localizedDescription.contains("{\"error\"")
+        )
+
+        if let response = HTTPURLResponse(
+            url: URL(fileURLWithPath: "/"), statusCode: 429, httpVersion: nil,
+            headerFields: ["RateLimit-Reset": "37"]
+        ) {
+            let limited = GlamaClient.failure(status: 429, data: Data(), response: response)
+            if case .rateLimited(let reset) = limited {
+                c.equal("429 carries the reset window", reset, "37")
+            } else {
+                c.check("429 is rate limited", false)
+            }
+            c.check("429 description mentions the reset", limited.localizedDescription.contains("37"))
+        } else {
+            c.check("429 is rate limited", false)
+        }
+
+        // A proxy's HTML page is not the API's error document: the status is all
+        // there is, and dumping the body at the user would hide that.
+        let html = Data("<html><body>502 Bad Gateway</body></html>".utf8)
+        let gateway = GlamaClient.failure(status: 502, data: html, response: nil)
+        if case .http(let status, let code, let message) = gateway {
+            c.equal("unexpected status is kept", status, 502)
+            c.nilValue("no error code is invented", code)
+            c.nilValue("no message is invented", message)
+        } else {
+            c.check("unexpected status is an http error", false)
+        }
+        c.check("raw body is not shown to the user", !gateway.localizedDescription.contains("Bad Gateway"))
 
         return c.report()
     }

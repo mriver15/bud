@@ -180,6 +180,28 @@ public enum UIRender {
             into: &written
         )
 
+        // The Glama pane, driven with the real key so the credit line and the
+        // per-record listing links are actually on screen rather than assumed.
+        // Glama's API Data License requires both, so this is a compliance check
+        // as much as a layout one.
+        let glamaKey = BudConfigLoader.load().glamaAPIKey
+        if glamaKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            print("  skip marketplace-glama (no Glama key configured)")
+        } else {
+            store.glamaAPIKey = glamaKey
+            store.source = .glama
+            runLoop(10.0)
+            emit(
+                "marketplace-glama",
+                MarketplaceView(store: store, mcp: model.mcp, model: model)
+                    .frame(width: 900, height: 620),
+                width: 900,
+                height: 620,
+                directory: directory,
+                into: &written
+            )
+        }
+
         // MARK: Subagents
 
         emit(

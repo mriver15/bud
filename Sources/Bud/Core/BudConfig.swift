@@ -12,10 +12,18 @@ import Foundation
 /// The API key comes from `~/.bud/config.json`, then the Keychain, then
 /// `DEEPSEEK_API_KEY` in the environment, then `~/.zshrc`. The shell fallback
 /// matters because a GUI launch from Finder inherits no shell environment.
+///
+/// The Glama marketplace key follows the same shape, minus the Keychain: the
+/// stored config, then `GLAMA_API_KEY` in the environment, then the same profile
+/// search. Skipping the profile search would strand a key that is already
+/// exported in `~/.zshrc`, which is where keys usually live.
 public struct BudConfig: Sendable, Codable, Hashable {
     public var model: String
     public var baseURL: String
     public var apiKey: String
+    /// Glama's API key, for browsing its MCP catalogue. Empty means "not
+    /// configured", which the marketplace reports as a call to action.
+    public var glamaAPIKey: String
     public var reasoningEffort: String?
     public var temperature: Double?
     public var maxTokens: Int?
@@ -49,6 +57,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         model: String = "deepseek-v4-flash",
         baseURL: String = "https://api.deepseek.com/v1",
         apiKey: String = "",
+        glamaAPIKey: String = "",
         reasoningEffort: String? = nil,
         temperature: Double? = nil,
         maxTokens: Int? = nil,
@@ -59,6 +68,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         self.model = model
         self.baseURL = baseURL
         self.apiKey = apiKey
+        self.glamaAPIKey = glamaAPIKey
         self.reasoningEffort = reasoningEffort
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -111,6 +121,7 @@ public enum BudConfigLoader {
             if let v = stored.model, !v.isEmpty { config.model = v }
             if let v = stored.baseURL, !v.isEmpty { config.baseURL = v }
             if let v = stored.apiKey, !v.isEmpty { config.apiKey = v }
+            if let v = stored.glamaAPIKey, !v.isEmpty { config.glamaAPIKey = v }
             if let v = stored.reasoningEffort { config.reasoningEffort = v }
             if let v = stored.temperature { config.temperature = v }
             if let v = stored.maxTokens { config.maxTokens = v }
@@ -119,7 +130,10 @@ public enum BudConfigLoader {
             if let v = stored.allowParallelSubagents { config.allowParallelSubagents = v }
         }
 
-        if config.apiKey.isEmpty { config.apiKey = resolveAPIKey() }
+        if config.apiKey.isEmpty { config.apiKey = resolveKey(named: "DEEPSEEK_API_KEY") }
+        // A Finder launch inherits no environment, so the profile search is what
+        // actually finds a key that is exported in ~/.zshrc.
+        if config.glamaAPIKey.isEmpty { config.glamaAPIKey = resolveKey(named: "GLAMA_API_KEY") }
         return config
     }
 
@@ -129,6 +143,7 @@ public enum BudConfigLoader {
             model: config.model,
             baseURL: config.baseURL,
             apiKey: config.apiKey,
+            glamaAPIKey: config.glamaAPIKey,
             reasoningEffort: config.reasoningEffort,
             temperature: config.temperature,
             maxTokens: config.maxTokens,
@@ -214,34 +229,55 @@ public enum BudConfigLoader {
 
     // MARK: API key resolution
 
-    static func resolveAPIKey() -> String {
-        if let key = ProcessInfo.processInfo.environment["DEEPSEEK_API_KEY"], !key.isEmpty {
-            return key
+    /// Environment first, then the profile a Finder launch never read.
+    ///
+    /// The value is returned, never logged: both callers only ever assign it to
+    /// the config, and a key is a credential.
+    static func resolveKey(named variable: String) -> String {
+        if let value = ProcessInfo.processInfo.environment[variable], !value.isEmpty {
+            return value
         }
-        if let key = readKeyFromShellProfiles(), !key.isEmpty { return key }
+        if let value = readKeyFromShellProfiles(named: variable), !value.isEmpty { return value }
         return ""
     }
 
     /// A Finder-launched app sees none of the shell environment, so the key is
     /// recovered from the profile that defines it.
-    static func readKeyFromShellProfiles() -> String? {
+    static func readKeyFromShellProfiles(named variable: String) -> String? {
         let home = FileManager.default.homeDirectoryForCurrentUser
         for name in [".zshrc", ".zprofile", ".bash_profile", ".profile"] {
             let url = home.appendingPathComponent(name)
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
-            for rawLine in text.split(separator: "\n") {
-                let line = rawLine.trimmingCharacters(in: .whitespaces)
-                guard line.hasPrefix("export DEEPSEEK_API_KEY=") ||
-                      line.hasPrefix("DEEPSEEK_API_KEY=") else { continue }
-                var value = line.replacingOccurrences(of: "export ", with: "")
-                    .replacingOccurrences(of: "DEEPSEEK_API_KEY=", with: "")
-                    .trimmingCharacters(in: .whitespaces)
-                if (value.hasPrefix("\"") && value.hasSuffix("\"")) ||
-                   (value.hasPrefix("'") && value.hasSuffix("'")) {
-                    value = String(value.dropFirst().dropLast())
-                }
-                if !value.isEmpty { return value }
+            if let value = parseShellAssignment(in: text, named: variable) { return value }
+        }
+        return nil
+    }
+
+    /// Pulls `NAME=value` — with or without a leading `export ` — out of a
+    /// profile's text, unquoting a quoted value.
+    ///
+    /// Separate from the file walk so the parsing is testable without touching
+    /// the filesystem: the quote handling is the part that fails quietly, turning
+    /// `export NAME="abc"` into a value with the quotes still on it.
+    static func parseShellAssignment(in text: String, named variable: String) -> String? {
+        for rawLine in text.split(separator: "\n") {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            let assignment: String
+            if line.hasPrefix("export \(variable)=") {
+                assignment = String(line.dropFirst("export ".count))
+            } else if line.hasPrefix("\(variable)=") {
+                assignment = line
+            } else {
+                continue
             }
+
+            var value = String(assignment.dropFirst(variable.count + 1))
+                .trimmingCharacters(in: .whitespaces)
+            if (value.hasPrefix("\"") && value.hasSuffix("\"")) ||
+               (value.hasPrefix("'") && value.hasSuffix("'")) {
+                value = String(value.dropFirst().dropLast())
+            }
+            if !value.isEmpty { return value }
         }
         return nil
     }
@@ -250,6 +286,7 @@ public enum BudConfigLoader {
         public var model: String?
         public var baseURL: String?
         public var apiKey: String?
+        public var glamaAPIKey: String?
         public var reasoningEffort: String?
         public var temperature: Double?
         public var maxTokens: Int?
@@ -259,6 +296,7 @@ public enum BudConfigLoader {
 
         public init(
             model: String? = nil, baseURL: String? = nil, apiKey: String? = nil,
+            glamaAPIKey: String? = nil,
             reasoningEffort: String? = nil, temperature: Double? = nil,
             maxTokens: Int? = nil, systemPrompt: String? = nil,
             maxToolRounds: Int? = nil, allowParallelSubagents: Int? = nil
@@ -266,6 +304,7 @@ public enum BudConfigLoader {
             self.model = model
             self.baseURL = baseURL
             self.apiKey = apiKey
+            self.glamaAPIKey = glamaAPIKey
             self.reasoningEffort = reasoningEffort
             self.temperature = temperature
             self.maxTokens = maxTokens

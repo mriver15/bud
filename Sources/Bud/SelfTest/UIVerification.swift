@@ -105,6 +105,46 @@ public enum BudUIVerification {
         controller.installHotKey()
         c.check("summon hotkey is \(GlobalHotKey.summonShortcutLabel)", true)
 
+        // MARK: Collapsed bubble
+
+        // The bubble is Bud's resting state, so the transition has to be
+        // reversible without losing the panel — and the bubble has to land
+        // somewhere the user can actually reach.
+        controller.collapse()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        c.check("collapse switches to the bubble", controller.showingCollapsed)
+        c.check("collapse takes the full panel off screen", !controller.isPanelVisible)
+        c.check("collapse shows the bubble", controller.isBubbleVisible)
+
+        if let bubble = controller.collapsedBubbleFrame {
+            c.check(
+                "bubble is a small square (found \(Int(bubble.width))x\(Int(bubble.height)))",
+                abs(bubble.width - bubble.height) < 0.5 && bubble.width <= 80 && bubble.width >= 40
+            )
+            let containingScreen = NSScreen.screens.first { $0.visibleFrame.intersects(bubble) }
+            c.check("bubble is on a screen", containingScreen != nil)
+            if let screen = containingScreen {
+                // Outside the menu bar and the Dock: a bubble tucked under either
+                // would be unreachable.
+                c.check(
+                    "bubble sits fully inside the usable area",
+                    screen.visibleFrame.contains(bubble)
+                )
+                let v = screen.visibleFrame
+                let touchingCorner = (abs(bubble.minX - v.minX) < 48 || abs(bubble.maxX - v.maxX) < 48)
+                    && (abs(bubble.minY - v.minY) < 48 || abs(bubble.maxY - v.maxY) < 48)
+                c.check("bubble is parked in a corner", touchingCorner)
+            }
+        } else {
+            c.check("bubble has a frame", false)
+        }
+
+        controller.expand()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        c.check("expand restores the panel", !controller.showingCollapsed && controller.isPanelVisible)
+        c.check("expand takes the bubble off screen", !controller.isBubbleVisible)
+        c.check("expanding asks the composer for focus", model.composerFocusToken > 0)
+
         return c.report()
     }
 

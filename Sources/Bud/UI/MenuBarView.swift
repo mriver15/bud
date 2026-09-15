@@ -51,7 +51,11 @@ struct MenuBarView: View {
 
     private var panelActions: some View {
         VStack(alignment: .leading, spacing: 2) {
-            MenuActionRow(symbol: "macwindow", title: "Show Bud", shortcut: GlobalHotKey.summonShortcutLabel) {
+            MenuActionRow(
+                symbol: "rectangle.compress.vertical",
+                title: "Collapse / Expand",
+                shortcut: GlobalHotKey.summonShortcutLabel
+            ) {
                 NotificationCenter.default.post(name: .budTogglePanel, object: nil)
             }
             MenuActionRow(symbol: "square.and.pencil", title: "New chat") {

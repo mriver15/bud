@@ -11,9 +11,14 @@ Built for macOS 26 with Swift 6 strict concurrency. No third-party packages.
 
 ## What it does
 
-**Floating glass panel.** An accessory app — no Dock icon. Summon it with `⌥⌘B`
-from anywhere, drag it by its header, and it stays on top across Spaces without
-stealing focus from whatever you were typing in.
+**Floating glass panel, or a corner bubble.** An accessory app — no Dock icon.
+Summon it with `⌥⌘B` from anywhere, drag it by its header, and it stays on top
+across Spaces without stealing focus from whatever you were typing in.
+
+When you are not reading it, Bud collapses to a small glass bubble parked in a
+screen corner — still visible, showing a spinning ring while it works, and one
+click from the composer. Drag the bubble to any corner and it snaps into place;
+the shape and corner are both remembered across launches.
 
 **Chat that shows its work.** Reasoning streams into a collapsed disclosure,
 tool calls appear as live rows with their arguments and results, and the answer
@@ -24,11 +29,19 @@ renders as markdown. Nothing is hidden behind a spinner.
 line or a URL; Bud namespaces their tools as `mcp__<server>__<tool>` so two
 servers can both expose `search` without colliding.
 
-**Marketplace.** Browses the official MCP registry
-(`registry.modelcontextprotocol.io`) — search, inspect, and install a server
-without leaving the app. npm packages become `npx -y <pkg>`, PyPI packages
-become `uvx <pkg>`, and remote servers just need their URL. Required environment
-variables are surfaced as fields before install.
+**Marketplace, with two sources.** Browse the official MCP registry
+(`registry.modelcontextprotocol.io`) — npm packages become `npx -y <pkg>`, PyPI
+packages become `uvx <pkg>`, and required environment variables are surfaced as
+fields before install. Or switch to **Glama**, which indexes hosted connectors.
+Connectors install in one click over HTTP; entries that publish no run command
+are linked instead of being given a fabricated one.
+
+> **Glama's API Data License is not public domain.** It requires a visible credit
+> to Glama on any screen showing its data, and a link from *every individual
+> record* back to that record's own Glama listing. Bud implements both — the
+> credit sits on the marketplace pane and each card carries a "View on Glama"
+> link. If you need a surface where no visible credit fits, Glama offers a
+> commercial licence that waives this.
 
 **Subagents.** Ask Bud to split work and it runs each slice concurrently in a
 fresh context with its own tool loop, then reports back. The Agents tab shows
@@ -85,6 +98,11 @@ a first launch would appear to have no key even though your terminal does.
 MCP servers persist to `~/.bud/mcp.json`. Both files are written with `0600`
 permissions since they can hold credentials.
 
+The Glama source needs an API key from `glama.ai/settings/api-keys`, resolved
+from the stored config, then `GLAMA_API_KEY`, then your shell profile. Without
+it the Glama pane shows a call to action rather than an error; the official
+registry needs no key and works regardless.
+
 Models: `deepseek-v4-flash` (fast) and `deepseek-v4-pro` (deep). Reasoning effort
 is picked up from the `:max` style suffix in your oh-my-pi config.
 
@@ -94,8 +112,9 @@ is picked up from the `:max` style suffix in your oh-my-pi config.
 
 | Action | How |
 |---|---|
-| Summon / hide the panel | `⌥⌘B` |
-| Hide | `Esc` |
+| Collapse to the corner bubble / expand | `⌥⌘B` |
+| Collapse to the bubble | `Esc` |
+| Move the bubble to another corner | Drag it and release |
 | Send | `Enter` |
 | Newline | `Shift``Enter` |
 | Stop generating | Stop button, or `/stop` |
@@ -113,7 +132,9 @@ it — Shortcuts, a shell alias, a script, a calendar alert.
 
 ```bash
 open "bud://ask?text=Summarise%20my%20Downloads%20folder"   # opens the panel and sends
-open "bud://toggle"                                          # show or hide the panel
+open "bud://collapse"                                        # collapse to the corner bubble
+open "bud://expand"                                          # open the full panel
+open "bud://toggle"                                          # whichever is the other one
 open "bud://new"                                             # start a fresh transcript
 ```
 
