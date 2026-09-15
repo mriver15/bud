@@ -106,6 +106,20 @@ is picked up from the `:max` style suffix in your oh-my-pi config.
 Slash commands: `/clear`, `/tools`, `/settings`, `/mcp`, `/marketplace`,
 `/agents`.
 
+### Driving Bud from outside
+
+Bud registers a `bud://` URL scheme, so anything that can open a link can talk to
+it — Shortcuts, a shell alias, a script, a calendar alert.
+
+```bash
+open "bud://ask?text=Summarise%20my%20Downloads%20folder"   # opens the panel and sends
+open "bud://toggle"                                          # show or hide the panel
+open "bud://new"                                             # start a fresh transcript
+```
+
+The text is percent-encoded like any URL query value. Unrecognised routes are
+ignored rather than opening the panel into an undefined state.
+
 ---
 
 ## Architecture

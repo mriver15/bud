@@ -90,7 +90,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { self?.panels?.toggle() }
         }
 
+        // `bud://` links arrive as Apple events. Handled here rather than through
+        // SwiftUI's `onOpenURL` because that requires a Window scene to be the
+        // focus, and Bud is normally driven entirely from the panel.
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleURLEvent(_:replyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
+
         Task { await model.start() }
+    }
+
+    /// `bud://ask?text=…` sends a message, `bud://toggle` shows or hides the
+    /// panel, `bud://new` starts a fresh transcript. Anything else is ignored —
+    /// an unrecognised link must never leave the app in a half-open state.
+    @objc private func handleURLEvent(_ event: NSAppleEventDescriptor, replyEvent: NSAppleEventDescriptor) {
+        guard let string = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
+              let url = URL(string: string) else { return }
+        MainActor.assumeIsolated { handle(url) }
+    }
+
+    private func handle(_ url: URL) {
+        let route = url.host()?.lowercased() ?? ""
+        switch route {
+        case "ask":
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            let text = items.first { $0.name == "text" }?.value ?? ""
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            panels?.show()
+            Task { await model.send(trimmed) }
+
+        case "toggle":
+            panels?.toggle()
+
+        case "new":
+            model.clearTranscript()
+            panels?.show()
+
+        default:
+            break
+        }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

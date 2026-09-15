@@ -247,14 +247,34 @@ private struct WrapComponent: View {
     let onAction: (GenUIAction) -> Void
     let onPrompt: (String) -> Void
 
+    /// The width this row was actually given, measured rather than assumed.
+    /// `Layout.sizeThatFits` and `Layout.placeSubviews` are handed different
+    /// proposals — the first may see an unspecified width while the second sees
+    /// the real bounds — so if the layout decides wrapping from each of them
+    /// independently it can measure one line and place three, drawing the pills
+    /// on top of one another.
+    @BudState private var measuredWidth: CGFloat = 0
+
     var body: some View {
-        WrapLayout(spacing: CGFloat(gap ?? Double(Bud.Space.sm)), equalWidth: equalWidth) {
+        WrapLayout(
+            spacing: CGFloat(gap ?? Double(Bud.Space.sm)),
+            equalWidth: equalWidth,
+            available: measuredWidth
+        ) {
             ForEach(children.indices, id: \.self) { index in
                 UIComponentView(
                     component: children[index],
                     onAction: onAction,
                     onPrompt: onPrompt
                 )
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { measuredWidth = proxy.size.width }
+                    .onChange(of: proxy.size.width) { _, width in measuredWidth = width }
             }
         }
     }
@@ -294,6 +314,8 @@ private struct WrapLayout: Layout {
     /// `columns` shares the line equally; `row` keeps each child at its
     /// intrinsic width.
     var equalWidth: Bool
+    /// Width measured by the enclosing view, or 0 before the first layout pass.
+    var available: CGFloat
 
     private static let minimumColumnWidth: CGFloat = 120
     /// Stand-in for "unbounded" so the arithmetic stays finite.
@@ -305,15 +327,20 @@ private struct WrapLayout: Layout {
     }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) -> CGSize {
-        let available = min(proposal.width ?? Self.unbounded, Self.unbounded)
-        let placements = placements(subviews: subviews, available: available)
-        let width = placements.map { $0.origin.x + $0.size.width }.max() ?? 0
+        let width = available > 0
+            ? available
+            : min(proposal.width ?? Self.unbounded, Self.unbounded)
+        let placements = placements(subviews: subviews, available: width)
+        let measured = placements.map { $0.origin.x + $0.size.width }.max() ?? 0
         let height = placements.map { $0.origin.y + $0.size.height }.max() ?? 0
-        return CGSize(width: min(width, available), height: height)
+        return CGSize(width: min(measured, width), height: height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) {
-        for (index, placement) in placements(subviews: subviews, available: bounds.width).enumerated() {
+        // Same width as `sizeThatFits` used, so the reported height always
+        // matches the layout that is actually drawn.
+        let width = available > 0 ? available : bounds.width
+        for (index, placement) in placements(subviews: subviews, available: width).enumerated() {
             subviews[index].place(
                 at: CGPoint(x: bounds.minX + placement.origin.x, y: bounds.minY + placement.origin.y),
                 proposal: ProposedViewSize(placement.size)
@@ -339,7 +366,13 @@ private struct WrapLayout: Layout {
                 ? ProposedViewSize(width: equalItemWidth, height: nil)
                 : .unspecified
             var size = subview.sizeThatFits(proposal)
-            size.width = min(size.width, available)
+            if size.width > available {
+                // Re-measure at the clamped width. A Text narrowed to fit grows
+                // taller, so keeping the pre-clamp height would under-report the
+                // line and overlap whatever comes next.
+                size = subview.sizeThatFits(ProposedViewSize(width: available, height: nil))
+                size.width = min(size.width, available)
+            }
 
             if inLine >= perLine || (inLine > 0 && x + size.width > available) {
                 x = 0

@@ -129,28 +129,39 @@ public struct ChatView: View {
     // MARK: - Empty state
 
     private var emptyState: some View {
-        // Hero and starter prompts centre together as one column. Letting the
-        // hero absorb all the free space instead pushes the prompts to the
-        // bottom edge and strands a large gap between the two.
-        VStack(spacing: Bud.Space.lg) {
-            EmptyStateView(
-                systemImage: "sparkles",
-                title: "Bud is ready",
-                message: "Ask anything. Bud can search, call your MCP tools, fan work out to subagents, and render results as a surface instead of prose.",
-                fills: false
-            )
-            .padding(.top, Bud.Space.lg)
+        // Hero and starter prompts centre together as one column, held between
+        // two Spacers so the leftover height is split evenly. `.frame(alignment:
+        // .center)` relies on the group reporting an honest intrinsic height and
+        // came out visibly low; equal Spacers do not depend on that.
+        VStack(spacing: 0) {
+            Spacer(minLength: Bud.Space.lg)
 
-            VStack(spacing: 6) {
-                ForEach(Self.starterPrompts, id: \.self) { prompt in
-                    StarterPromptButton(prompt: prompt) {
-                        Task { await model.send(prompt) }
+            VStack(spacing: Bud.Space.lg) {
+                EmptyStateView(
+                    systemImage: "sparkles",
+                    title: "Bud is ready",
+                    message: "Ask anything. Bud can search, call your MCP tools, fan work out to subagents, and render results as a surface instead of prose.",
+                    fills: false
+                )
+
+                VStack(spacing: 6) {
+                    ForEach(Self.starterPrompts, id: \.self) { prompt in
+                        StarterPromptButton(prompt: prompt) {
+                            Task { await model.send(prompt) }
+                        }
                     }
                 }
+                // EmptyStateView already carries `Bud.Space.xl` of padding on
+                // every side. Without matching padding below the prompts the
+                // group's *visible* content is inset at the top but flush at the
+                // bottom, which biases the optical centre low by half that
+                // padding even though the frame itself is centred.
+                .padding(.bottom, Bud.Space.xl)
             }
-            .padding(.bottom, Bud.Space.lg)
+
+            Spacer(minLength: Bud.Space.lg)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .frame(maxWidth: .infinity)
     }
 }
 

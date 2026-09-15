@@ -100,6 +100,19 @@ public enum UIRender {
                     ]),
                 ]),
                 .object([
+                    "type": .string("row"),
+                    "children": .array([
+                        "comfy", "bud", "learniwashere", "openclaw",
+                        "arpunkememb", "career-ops", "p-vulnerable", "competitivefin",
+                    ].map { name in
+                        .object([
+                            "type": .string("text"),
+                            "value": .string(name),
+                            "style": .string("caption"),
+                        ])
+                    }),
+                ]),
+                .object([
                     "type": .string("table"),
                     "columns": .array([.string("Service"), .string("Region"), .string("Status")]),
                     "rows": .array([
