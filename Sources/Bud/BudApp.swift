@@ -95,6 +95,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // launched into — this is the difference between a widget and an app.
         NSApp.setActivationPolicy(.accessory)
 
+        // Quitting is what makes an update stick. `open` on an app that is still
+        // running only brings the old instance forward, so the updater spawns a
+        // helper and then has to actually stop — which it could not do, because
+        // nothing had ever given it a way out.
+        model.onQuit = { NSApp.terminate(nil) }
+
         let panels = PanelController(model: model)
         self.panels = panels
         panels.installHotKey()

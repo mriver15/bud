@@ -68,15 +68,25 @@ public final class UpdateModel {
     /// authenticated route to reach it.
     private var checkedDownloadURL: URL?
 
-    /// Called to shut the app down once a relaunch helper is waiting for it.
-    private let onQuit: (@MainActor () -> Void)?
+    /// Ends the process so the relaunch helper can bring the new copy up.
+    ///
+    /// Non-optional, and never "do nothing". The helper waits for this pid to
+    /// disappear and then opens the app; if nothing ever ends the process it
+    /// waits out its two-minute bound and opens nothing, which looks exactly like
+    /// a button that is broken — because it is. An updater that offers a Restart
+    /// button has to be able to restart, so the ability is part of the type
+    /// rather than a callback the app has to remember to supply.
+    public var onQuit: @MainActor () -> Void
 
     public init(
         current: BudVersion? = BudVersion.current(),
         onQuit: (@MainActor () -> Void)? = nil
     ) {
         self.currentVersion = current
-        self.onQuit = onQuit
+        // `exit` rather than `NSApp.terminate` as the fallback: this module does
+        // not import AppKit, and a process that ends is what the helper needs.
+        // The app replaces this with a clean `terminate` when it wires itself up.
+        self.onQuit = onQuit ?? { exit(0) }
     }
 
     /// The app bundle to replace, or nil when this is not running from one.
@@ -167,7 +177,7 @@ public final class UpdateModel {
         guard let destination = installedBundle else { return }
         do {
             try UpdateInstaller.relaunchAfterExit(app: destination)
-            onQuit?()
+            onQuit()
         } catch {
             phase = .failed(message(for: error))
         }

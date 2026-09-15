@@ -77,7 +77,6 @@ public final class AppModel {
     /// Set by the shell to present the settings window.
     public var onPresentSettings: (@MainActor (SettingsTab) -> Void)?
     /// Set by the shell to toggle the floating panel.
-    public var onTogglePanel: (@MainActor () -> Void)?
     /// Set by the shell to quit.
     public var onQuit: (@MainActor () -> Void)?
 
@@ -92,6 +91,10 @@ public final class AppModel {
         self.marketplace = MarketplaceStore()
         self.subagents = SubagentSupervisor(env: env)
         self.update = UpdateModel()
+        // Wired here because this is the first moment `self` is complete enough
+        // to be captured. The closure reads `onQuit` when it is called, not when
+        // it is set, so the app delegate can still be the one to fill it in.
+        update.onQuit = { [weak self] in self?.onQuit?() }
     }
 
     // MARK: Derived state
