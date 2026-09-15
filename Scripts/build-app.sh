@@ -18,7 +18,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG="release"
 APP_NAME="Bud"
 BUNDLE_ID="com.bud.assistant"
-VERSION="1.0.0"
+VERSION="0.0.1"
 # An integer, because the build number is what orders two releases and an
 # updater that cannot order them cannot refuse a downgrade. It used to mirror
 # VERSION, which meant the default bundle declared "1.0.0" where every consumer
