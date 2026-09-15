@@ -40,4 +40,12 @@ if arguments.contains("--verify-live") {
     exit(report.ok ? 0 : 1)
 }
 
+// Renders each real surface to a PNG for visual review, then exits.
+if let index = arguments.firstIndex(of: "--render-ui") {
+    let path = arguments.count > index + 1
+        ? arguments[index + 1]
+        : FileManager.default.temporaryDirectory.appendingPathComponent("bud-ui").path
+    UIRender.run(outputDirectory: path)
+}
+
 BudApp.main()

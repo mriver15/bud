@@ -155,9 +155,10 @@ would otherwise reject.
 
 ```bash
 swift build
-./.build/debug/Bud --self-test      # 105 checks, offline, deterministic
-./.build/debug/Bud --verify-live    # 36 checks, live network + real MCP process
-./.build/debug/Bud --verify-ui      # 16 checks, launches the real panel
+./.build/debug/Bud --self-test        # 105 checks, offline, deterministic
+./.build/debug/Bud --verify-live      # 36 checks, live network + real MCP process
+./.build/debug/Bud --verify-ui        # 16 checks, launches the real panel
+./.build/debug/Bud --render-ui /tmp/ui  # writes a PNG of every surface
 ```
 
 **`--self-test`** covers the surfaces where a silent bug is expensive: SSE frame
@@ -178,6 +179,27 @@ stronger than a screenshot for the thing that matters: a window that merely
 *looks* translucent while the platform silently fell back to a grey fill would
 pass visual review but cannot pass this. It exists because `screencapture` needs
 the Screen Recording permission, which a terminal-launched process does not have.
+
+**`--render-ui`** writes a PNG of every surface — transcript rows, all six
+settings tabs, the marketplace, the subagent roster and a generative-UI panel —
+over a desktop-like gradient so layout, spacing, typography and contrast can be
+reviewed. It reports the number of distinct colours per surface and flags a blank
+one rather than silently writing an empty file.
+
+Two limits are worth knowing, because both can be mistaken for product bugs:
+
+- **`.glassEffect` blanks its own subtree.** The glass material is composited, so
+  `cacheDisplay` draws nothing for it — including the content inside. The chat
+  panel and the user message bubble are therefore captured with the glass wrapper
+  swapped for an equivalent tinted fill. Their real appearance is only observable
+  in the running app.
+- **Materials resolve differently offscreen.** `.ultraThinMaterial` and
+  `.buttonStyle(.glass)` are compositor features too, so controls can look
+  flat or unstyled in a render while being correct on screen.
+
+Also note `cacheDisplay`, like `ImageRenderer`, does not composite backdrop
+layers, so neither mode can confirm how the glass *looks*. That still needs a
+human, or the Screen Recording permission for `screencapture`.
 
 ### Working without Xcode
 

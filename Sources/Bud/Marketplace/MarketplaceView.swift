@@ -121,7 +121,15 @@ public struct MarketplaceView: View {
             )
         } else {
             ScrollView {
-                LazyVStack(spacing: Bud.Space.sm) {
+                // Adaptive rather than a single column: at the settings window's
+                // width a full-width card wastes most of the pane and shows only
+                // a handful of results. This yields two columns when there is
+                // room and one when there is not.
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 340, maximum: 560), spacing: Bud.Space.sm)],
+                    alignment: .leading,
+                    spacing: Bud.Space.sm
+                ) {
                     ForEach(store.results) { server in
                         ServerCard(server: server, isInstalled: store.isInstalled(server)) {
                             inspected = server

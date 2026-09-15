@@ -113,6 +113,10 @@ private struct GeneralSettingsTab: View {
                 limitsSection
                 promptSection
             }
+            // Cap the measure. A text field stretched across the whole pane is
+            // hard to scan, and a label stops reading as paired with its value
+            // once the two are most of a screen apart.
+            .frame(maxWidth: 640, alignment: .leading)
             .padding(.trailing, Bud.Space.xs)
         }
         .task {
@@ -566,6 +570,7 @@ private struct AboutTab: View {
                 sourceCard
                 architectureCard
             }
+            .frame(maxWidth: 640, alignment: .leading)
             .padding(.trailing, Bud.Space.xs)
         }
     }
