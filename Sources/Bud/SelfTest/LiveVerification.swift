@@ -1,0 +1,347 @@
+import Foundation
+
+/// End-to-end checks that need the real world: the live DeepSeek API, the live
+/// MCP registry, and a real MCP server process.
+///
+/// Run with `--verify-live`. This is the proof that the stack works rather than
+/// merely compiles — it drives the same `AppModel`, `MCPManager`, `ToolRegistry`
+/// and `AgentRuntime` the app uses, so a break anywhere in the wiring shows up
+/// here.
+///
+/// The MCP checks run against this binary's own `--mcp-echo-server` mode: a real
+/// process, real JSON-RPC, real handshake, with no dependency on npx or the
+/// network. One network check (the registry) and one model check (DeepSeek) are
+/// unavoidable, since those are the two things that cannot be faked locally.
+@MainActor
+public enum BudLiveVerification {
+    public static func run() async -> SelfTestReport {
+        let c = Checker(suite: "live")
+        var cleanup: (() async -> Void)?
+
+        defer { _ = cleanup }
+
+        // MARK: Configuration
+
+        let config = BudConfigLoader.load()
+        c.check("config: API key resolved", !config.apiKey.isEmpty)
+        c.check("config: model resolved", !config.model.isEmpty)
+        c.check("config: base URL is https", config.baseURL.hasPrefix("https://"))
+
+        guard !config.apiKey.isEmpty else {
+            c.check("config: cannot continue without an API key", false)
+            return c.report()
+        }
+
+        let env = AppEnvironment(config: config)
+        let backend = env.makeBackend()
+
+        // MARK: DeepSeek streaming
+
+        var streamedText = ""
+        var streamedReasoning = ""
+        var sawFinish = false
+        do {
+            let request = ChatRequest(
+                model: config.model,
+                messages: [ChatMessage(role: .user, content: "Reply with exactly the word: pong")],
+                maxTokens: 2048
+            )
+            for try await event in backend.stream(request) {
+                switch event {
+                case .contentDelta(let d): streamedText += d
+                case .reasoningDelta(let d): streamedReasoning += d
+                case .finish: sawFinish = true
+                case .usage, .toolCallDelta: break
+                }
+            }
+        } catch {
+            c.check("deepseek: stream completed (\(error.localizedDescription))", false)
+        }
+        c.check("deepseek: produced text", streamedText.lowercased().contains("pong"))
+        c.check("deepseek: produced reasoning", !streamedReasoning.isEmpty)
+        c.check("deepseek: reported finish", sawFinish)
+
+        // MARK: DeepSeek tool call
+
+        let echoSchema: JSONValue = .object([
+            "type": .string("function"),
+            "function": .object([
+                "name": .string("get_weather"),
+                "description": .string("Get the weather for a city."),
+                "parameters": .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "city": .object(["type": .string("string")]),
+                    ]),
+                    "required": .array([.string("city")]),
+                ]),
+            ]),
+        ])
+
+        var calls: [ToolCall] = []
+        var finishReason: String?
+        do {
+            let request = ChatRequest(
+                model: config.model,
+                messages: [ChatMessage(role: .user, content: "What is the weather in Paris? Use the tool.")],
+                tools: [echoSchema],
+                maxTokens: 2048
+            )
+            var pending: [Int: (id: String, name: String, args: String)] = [:]
+            for try await event in backend.stream(request) {
+                switch event {
+                case .toolCallDelta(let i, let id, let name, let frag):
+                    var e = pending[i] ?? ("", "", "")
+                    if let id, !id.isEmpty { e.id = id }
+                    if let name, !name.isEmpty { e.name = name }
+                    e.args += frag
+                    pending[i] = e
+                case .finish(let r): finishReason = r
+                default: break
+                }
+            }
+            calls = pending.keys.sorted().compactMap { key in
+                guard let e = pending[key], !e.name.isEmpty else { return nil }
+                return ToolCall(id: e.id, name: e.name, arguments: e.args)
+            }
+        } catch {
+            c.check("deepseek: tool request completed (\(error.localizedDescription))", false)
+        }
+        c.check("deepseek: requested a tool", !calls.isEmpty)
+        c.check("deepseek: finish reason is tool_calls", finishReason == "tool_calls")
+        if let first = calls.first {
+            c.equal("deepseek: correct tool chosen", first.name, "get_weather")
+            c.check("deepseek: arguments are valid JSON", first.parsedArguments.objectValue != nil)
+            c.check("deepseek: argument carries the city", first.parsedArguments["city"] != nil)
+        }
+
+        // MARK: Tool result round trip
+
+        if let first = calls.first {
+            var finalText = ""
+            do {
+                let request = ChatRequest(
+                    model: config.model,
+                    messages: [
+                        ChatMessage(role: .user, content: "What is the weather in Paris? Use the tool."),
+                        ChatMessage(role: .assistant, content: "", toolCalls: [first]),
+                        ChatMessage(role: .tool, content: "18C and sunny", toolCallID: first.id, name: first.name),
+                    ],
+                    tools: [echoSchema],
+                    maxTokens: 2048
+                )
+                for try await event in backend.stream(request) {
+                    if case .contentDelta(let d) = event { finalText += d }
+                }
+            } catch {
+                c.check("deepseek: tool round trip (\(error.localizedDescription))", false)
+            }
+            c.check("deepseek: answered using the tool result", finalText.contains("18"))
+        }
+
+        // MARK: MCP registry (live network)
+
+        let registry = RegistryClient()
+        do {
+            let page = try await registry.page(cursor: nil, limit: 25)
+            c.check("registry: returned servers", !page.servers.isEmpty)
+            c.check("registry: issued a next cursor", page.nextCursor != nil)
+            let withOptions = page.servers.filter { !$0.options.isEmpty }
+            c.check("registry: servers mapped to install options", !withOptions.isEmpty)
+            c.check(
+                "registry: every option has a label",
+                page.servers.allSatisfy { s in s.options.allSatisfy { !$0.label.isEmpty } }
+            )
+            let searches = try await registry.search("github", limit: 5)
+            c.check("registry: search returned results", !searches.isEmpty)
+        } catch {
+            c.check("registry: fetch succeeded (\(error.localizedDescription))", false)
+        }
+
+        // MARK: MCP over stdio (real process)
+
+        let mcp = MCPManager()
+        let echoID = "bud-echo-verify"
+        let mcpURL = BudConfigLoader.mcpURL
+        let backup = try? Data(contentsOf: mcpURL)
+        cleanup = {
+            await mcp.removeServer(id: echoID)
+            if let backup {
+                try? backup.write(to: mcpURL, options: [.atomic])
+            } else {
+                try? FileManager.default.removeItem(at: mcpURL)
+            }
+        }
+
+        guard let executable = SelfExecutable.path else {
+            c.check("mcp: located own executable", false)
+            return c.report()
+        }
+
+        await mcp.addServer(MCPServerConfig(
+            id: echoID,
+            name: "echo",
+            transport: .stdio,
+            command: executable,
+            args: ["--mcp-echo-server"],
+            enabled: true,
+            autoStart: false
+        ))
+        await mcp.connect(id: echoID)
+
+        let status = mcp.statuses[echoID]
+        c.check(
+            "mcp: server reached ready (\(status?.error ?? "no error reported"))",
+            status?.state == .ready
+        )
+        c.equal("mcp: discovered both tools", status?.toolCount, 2)
+
+        let tools = mcp.serverTools(id: echoID).map(\.name).sorted()
+        c.equal(
+            "mcp: tools are namespaced",
+            tools,
+            ["mcp__echo__add", "mcp__echo__echo"]
+        )
+
+        // MARK: Tool registry routing
+
+        let registryTools = ToolRegistry()
+        await registryTools.register(mcp)
+        let names = await registryTools.descriptors().map(\.name)
+        c.check("registry: exposes MCP tools", names.contains("mcp__echo__echo"))
+
+        let echoResult = await registryTools.invoke(
+            name: "mcp__echo__echo",
+            arguments: .object(["message": .string("hello")]),
+            callID: "verify-1"
+        )
+        c.check("registry: echo returned its payload", echoResult.text.contains("echo: hello"))
+        c.check("registry: echo was not an error", !echoResult.isError)
+
+        let addResult = await registryTools.invoke(
+            name: "mcp__echo__add",
+            arguments: .object(["a": .number(19), "b": .number(23)]),
+            callID: "verify-2"
+        )
+        c.check("registry: arithmetic over the wire", addResult.text.contains("42"))
+
+        let failResult = await registryTools.invoke(
+            name: "mcp__echo__fail",
+            arguments: .object([:]),
+            callID: "verify-3"
+        )
+        c.check("registry: unknown tool is reported, not crashed", failResult.isError)
+
+        let missing = await registryTools.invoke(
+            name: "mcp__echo__nope",
+            arguments: .object([:]),
+            callID: "verify-4"
+        )
+        c.check("registry: missing tool yields an error", missing.isError)
+
+        // MARK: Generative UI tool
+
+        let genui = GenUIToolProvider()
+        let spec: JSONValue = .object([
+            "title": .string("Verification"),
+            "components": .array([
+                .object([
+                    "type": .string("metrics"),
+                    "items": .array([
+                        .object(["label": .string("Tools"), "value": .string("2")]),
+                    ]),
+                ]),
+                .object([
+                    "type": .string("table"),
+                    "columns": .array([.string("a"), .string("b")]),
+                    "rows": .array([.array([.string("1"), .string("2")])]),
+                ]),
+                .object([
+                    "type": .string("button"),
+                    "label": .string("Refresh"),
+                    "action": .object(["id": .string("refresh"), "prompt": .string("refresh it")]),
+                ]),
+            ]),
+        ])
+        let uiResult = await genui.invoke(tool: "render_ui", arguments: spec, callID: "verify-ui")
+        c.check("genui: render_ui produced a surface", uiResult.ui != nil)
+        c.check("genui: render_ui was not an error", !uiResult.isError)
+
+        let badUI = await genui.invoke(tool: "render_ui", arguments: .object([:]), callID: "verify-ui-2")
+        c.check("genui: malformed spec is rejected with a message", badUI.isError)
+
+        // MARK: Agent runtime, end to end
+
+        let runtimeEnv = AppEnvironment(config: config)
+        await runtimeEnv.registry.register(mcp)
+        await runtimeEnv.registry.register(GenUIToolProvider())
+        let runtime = AgentRuntime(env: runtimeEnv)
+        runtime.send("Use the echo tool to echo the phrase 'integration works', then tell me what it returned.")
+        let answered = await waitUntil(timeout: 120) { !runtime.isStreaming }
+        c.check("runtime: turn settled", answered)
+
+        let usedTool = runtime.turns.contains { turn in
+            turn.segments.contains { if case .tool = $0 { return true } else { return false } }
+        }
+        c.check("runtime: executed a tool", usedTool)
+        let succeeded = runtime.turns.contains { turn in
+            turn.segments.contains { segment in
+                if case .tool(_, _, _, let state, let text, _) = segment {
+                    return state == .succeeded && (text?.contains("integration works") ?? false)
+                }
+                return false
+            }
+        }
+        c.check("runtime: tool result reached the transcript", succeeded)
+        c.check("runtime: produced a final answer", !runtime.turns.compactMap { $0.plainText.isEmpty ? nil : $0 }.isEmpty)
+
+        // MARK: Subagent
+
+        let supervisor = SubagentSupervisor(env: runtimeEnv)
+        let runs = await supervisor.spawn([
+            SubagentSpec(
+                title: "verify",
+                prompt: "Reply with the single word: verified",
+                allowTools: false
+            ),
+        ])
+        c.check("subagent: returned a run", runs.count == 1)
+        c.equal("subagent: run completed", runs.first?.state, .done)
+        c.check(
+            "subagent: produced output",
+            (runs.first?.output.lowercased().contains("verified") ?? false)
+        )
+
+        // MARK: Cleanup
+
+        await cleanup?()
+        cleanup = nil
+
+        return c.report()
+    }
+
+    // MARK: Helpers
+
+    /// Polls a condition until it holds or the deadline passes. Used instead of
+    /// observing published state directly, because the verification runs outside
+    /// a SwiftUI update cycle.
+    private static func waitUntil(
+        timeout: TimeInterval,
+        _ condition: @MainActor () -> Bool
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return condition()
+    }
+
+    private enum SelfExecutable {
+        static var path: String? {
+            guard let raw = CommandLine.arguments.first else { return nil }
+            let url = URL(fileURLWithPath: raw).standardizedFileURL
+            return FileManager.default.isExecutableFile(atPath: url.path) ? url.path : nil
+        }
+    }
+}

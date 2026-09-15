@@ -1,0 +1,21 @@
+# Build output
+.build/
+build/
+*.app
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+
+# SwiftPM
+.swiftpm/
+Package.resolved
+
+# macOS
+.DS_Store
+._*
+
+# Local harness used for isolated compile checks
+harness/
