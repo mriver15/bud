@@ -19,8 +19,9 @@ public struct SubagentPanel: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-                .padding(.horizontal, Bud.Space.lg)
-                .padding(.top, Bud.Space.lg)
+                // Only the gap above the rule. The margin around the pane
+                // belongs to the host, so this view reads the same in the panel
+                // and in Settings without either one guessing at the other.
                 .padding(.bottom, Bud.Space.md)
 
             Rectangle()

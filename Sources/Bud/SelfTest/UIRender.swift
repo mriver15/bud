@@ -186,6 +186,7 @@ public enum UIRender {
         emit(
             "marketplace",
             MarketplaceView(store: store, mcp: model.mcp, model: model)
+                .padding(Bud.Space.lg)          // the pane inset the shell supplies
                 .frame(width: 900, height: 620),
             width: 900,
             height: 620,
@@ -207,6 +208,7 @@ public enum UIRender {
             emit(
                 "marketplace-glama",
                 MarketplaceView(store: store, mcp: model.mcp, model: model)
+                    .padding(Bud.Space.lg)      // the pane inset the shell supplies
                     .frame(width: 900, height: 620),
                 width: 900,
                 height: 620,

@@ -70,25 +70,36 @@ public struct SettingsView: View {
 
     // MARK: - Panel
 
-    @ViewBuilder
+    /// Every pane gets its margin here rather than supplying its own.
+    ///
+    /// Two of the six did and four did not, so most panes sat flush against the
+    /// rail while the leftover width collected on the right — 40pt of it in
+    /// General, 127pt in Connections. A margin that each pane is individually
+    /// responsible for is a margin that most panes will not have, and the four
+    /// that forgot were not distinguishable from the two that remembered until
+    /// they were measured.
     private var panel: some View {
-        switch model.settingsTab {
-        case .general:
-            GeneralSettingsTab(model: model)
-        case .mcp:
-            MCPSettingsView(
-                mcp: model.mcp,
-                onBrowseMarketplace: { model.openSettings(tab: .marketplace) }
-            )
-        case .marketplace:
-            MarketplaceView(store: model.marketplace, mcp: model.mcp, model: model)
-        case .subagents:
-            SubagentPanel(supervisor: model.subagents, model: model)
-        case .tools:
-            ToolBrowserView(model: model)
-        case .about:
-            AboutTab(model: model)
+        Group {
+            switch model.settingsTab {
+            case .general:
+                GeneralSettingsTab(model: model)
+            case .mcp:
+                MCPSettingsView(
+                    mcp: model.mcp,
+                    onBrowseMarketplace: { model.openSettings(tab: .marketplace) }
+                )
+            case .marketplace:
+                MarketplaceView(store: model.marketplace, mcp: model.mcp, model: model)
+            case .subagents:
+                SubagentPanel(supervisor: model.subagents, model: model)
+            case .tools:
+                ToolBrowserView(model: model)
+            case .about:
+                AboutTab(model: model)
+            }
         }
+        .padding(Bud.Space.lg)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -117,8 +128,12 @@ private struct GeneralSettingsTab: View {
             // Cap the measure. A text field stretched across the whole pane is
             // hard to scan, and a label stops reading as paired with its value
             // once the two are most of a screen apart.
-            .frame(maxWidth: 640, alignment: .leading)
-            .padding(.trailing, Bud.Space.xs)
+            // Capped for readability, then centred. Left-aligning the capped
+            // column pushed every spare point to the right of it, so the pane
+            // read as 35pt of margin on one side and 40 on the other — the two
+            // numbers a person notices without being able to say why.
+            .frame(maxWidth: 640)
+            .frame(maxWidth: .infinity)
         }
         .task {
             // Read the fallback sources once: they are disk and environment
@@ -774,8 +789,12 @@ private struct AboutTab: View {
                 sourceCard
                 architectureCard
             }
-            .frame(maxWidth: 640, alignment: .leading)
-            .padding(.trailing, Bud.Space.xs)
+            // Capped for readability, then centred. Left-aligning the capped
+            // column pushed every spare point to the right of it, so the pane
+            // read as 35pt of margin on one side and 40 on the other — the two
+            // numbers a person notices without being able to say why.
+            .frame(maxWidth: 640)
+            .frame(maxWidth: .infinity)
         }
     }
 

@@ -46,7 +46,9 @@ public struct MarketplaceView: View {
                 resultsArea
             }
         }
-        .padding(Bud.Space.lg)
+        // The inset belongs to whichever pane hosts this. This view was one of
+        // the two that supplied its own, which is why the other four looked
+        // broken next to it.
         .task {
             // The store does not own the config, so the shell mirrors the key in.
             // Doing it here — rather than once at launch — is what lets a key

@@ -246,6 +246,7 @@ struct RootView: View {
             ChatView(model: model)
         case .agents:
             SubagentPanel(supervisor: model.subagents, model: model)
+                .padding(Bud.Space.lg)
         }
     }
 }
