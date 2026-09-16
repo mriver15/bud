@@ -40,6 +40,13 @@ if arguments.contains("--verify-live") {
     exit(report.ok ? 0 : 1)
 }
 
+// Reports what a request costs before any conversation: the tool block, the
+// system prompt, and the notes that ride along on every message.
+if arguments.contains("--measure") {
+    let ok = await RequestMeasureCLI.run(arguments: arguments)
+    exit(ok ? 0 : 1)
+}
+
 // Renders each real surface to a PNG for visual review, then exits.
 if let index = arguments.firstIndex(of: "--render-ui") {
     let path = arguments.count > index + 1
