@@ -454,6 +454,11 @@ public final class AgentRuntime {
         let notes = BudStore.lessonContext()
         if !notes.isEmpty { text += "\n\n" + notes }
 
+        // Read on every request for the same reason the notes are: a skill
+        // installed halfway through a conversation has to be usable in it.
+        let skills = SkillContext.prompt()
+        if !skills.isEmpty { text += "\n\n" + skills }
+
         return ChatMessage(role: .system, content: text)
     }
 }

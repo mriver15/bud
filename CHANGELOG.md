@@ -12,6 +12,60 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 0.2.0
+
+### Skills
+
+Bud loads **Agent Skills** — the open format, a folder with a `SKILL.md` in it. Not
+a format of its own: a skill you already use in another agent works here
+unchanged, and one you write here works there. That is the only reason a
+marketplace is worth building rather than a folder.
+
+Skills load progressively, which is the point of the format:
+
+1. **Discovery** — the name and description of every installed skill sit in the
+   prompt. About 100 tokens each, so a hundred skills cost a page.
+2. **Activation** — when a task matches, the model calls `skill` and reads the
+   instructions.
+3. **Execution** — the skill's own files, loaded only when it says to.
+
+A skill called `pdf` is exactly a worked example: asked about extracting tables
+and filling a form, Bud read the skill, then read `forms.md` out of the skill's
+own folder because the skill told it to.
+
+### The marketplace
+
+**Settings › Skills.** Browse, install, remove.
+
+Sources are **GitHub repositories**, because there is no registry to be a client
+of: the format is open and the skills live in repositories. Bud reads a repo's
+tree, finds every `SKILL.md` in it, and shows what it found with the description
+each skill carries. Installing downloads the **whole folder** — scripts,
+references, assets — because a skill installed without the files it references is
+one that fails the first time it is followed.
+
+Any repository with skill folders in it is a source: paste `owner/repo` and Bud
+browses that. One is shipped, and it is the one that was checked rather than
+guessed.
+
+### Verified
+
+`--self-test` 464 checks, `--verify-live` 85 — including a real install from the
+real source, checked on disk and then removed.
+
+Two bugs the work found, both of which would have shipped:
+
+- **Descriptions read as ">"**. Several skills in the standard's own example
+  collection write `description: >` and fold the text over several lines. The
+  reader took the first line only, so the marketplace would have shown a page of
+  blank descriptions — caused by the one construct a long description needs.
+- **Resource paths came back absolute.** macOS resolves `/var` to `/private/var`
+  in directory enumerations, so trimming a prefix silently failed and every
+  listed file was named absolutely. A skill saying "run `scripts/extract.py`"
+  would have pointed somewhere that does not exist.
+
+---
+
 ## Bud 0.1.0
 
 Seventeen releases of plumbing and one of feature. This is the version where the

@@ -417,6 +417,59 @@ public enum BudLiveVerification {
             (runs.first?.output.lowercased().contains("verified") ?? false)
         )
 
+        // MARK: Skills (live)
+
+        // Against the shipped source, over the real network. What is asserted is
+        // the shape of the contract rather than a particular inventory: a list of
+        // skills changes without notice, and a check that pinned "there are twenty"
+        // would fail the day somebody added one.
+        let skills = SkillRegistry()
+        c.check("skills: the shipped source is a repository", skills.sources.count >= 1)
+
+        if let source = skills.sources.first {
+            do {
+                let found = try await skills.browse(source)
+                c.check("skills: browsing finds skills (\(found.count))", found.count >= 1)
+                c.check("skills: every one parses a name", found.allSatisfy { !$0.name.isEmpty })
+                c.check(
+                    "skills: every one carries a description to be found by",
+                    found.allSatisfy { $0.summary.count > 20 }
+                )
+                c.check("skills: names obey the spec's rules", found.allSatisfy { entry in
+                    (try? SkillParser.validate(name: entry.name)) != nil
+                })
+
+                // One install, then put it back. The whole point of the
+                // marketplace is that a folder arrives intact, so the check is
+                // the folder on disk and not the fact that a request succeeded.
+                if let candidate = found.first(where: { !$0.isInstalled }) {
+                    let installed = try await skills.install(candidate)
+                    c.equal("skills: the installed name matches what was offered",
+                            installed.name, candidate.name)
+                    c.check("skills: the skill landed on disk",
+                            FileManager.default.fileExists(
+                                atPath: SkillStore.directory
+                                    .appendingPathComponent(candidate.name)
+                                    .appendingPathComponent("SKILL.md").path
+                            ))
+                    c.check("skills: it reads back with its instructions",
+                            (installed.instructions.count) > 0)
+                    c.check("skills: it is listed as installed",
+                            SkillStore.installed().contains { $0.name == candidate.name })
+
+                    let resources = installed.resources
+                    c.check("skills: whatever else it carried came with it (\(resources.count) files)",
+                            !resources.isEmpty || candidate.folder.isEmpty)
+
+                    try skills.uninstall(candidate.name)
+                    c.check("skills: uninstalling removes it",
+                            !SkillStore.installed().contains { $0.name == candidate.name })
+                }
+            } catch {
+                c.check("skills: browsing the shipped source (\(error.localizedDescription))", false)
+            }
+        }
+
         // MARK: Glama (live, when a key is configured)
 
         let glamaKey = config.glamaAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)

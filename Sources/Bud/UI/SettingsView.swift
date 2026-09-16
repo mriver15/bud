@@ -90,6 +90,8 @@ public struct SettingsView: View {
                 )
             case .marketplace:
                 MarketplaceView(store: model.marketplace, mcp: model.mcp, model: model)
+            case .skills:
+                SkillsSettingsView(registry: model.skills)
             case .subagents:
                 SubagentPanel(supervisor: model.subagents, model: model)
             case .tools:
