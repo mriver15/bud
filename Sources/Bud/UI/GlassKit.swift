@@ -159,20 +159,42 @@ public struct GlassPanel<Content: View>: View {
 /// tinted, hairline-bordered fill. Nesting real glass here would double the
 /// blur cost for no visual gain.
 public struct GlassCard<Content: View>: View {
+    /// What the card is made of.
+    ///
+    /// A material blurs whatever is behind it. On chrome — a panel, a header —
+    /// that is the point, and there is one of them. On a list row there may be
+    /// three hundred, and a material re-samples its backdrop every frame that
+    /// anything behind it moves: a streaming transcript animating behind an open
+    /// marketplace makes every card in it re-blur, sixty times a second.
+    ///
+    /// The cost lands on the compositor, which is why it never shows up as CPU
+    /// time in the process — the window just becomes heavy to use, and a machine
+    /// with a locked screen measures none of it.
+    public enum Surface: Sendable {
+        /// Blurred. For chrome that floats above content.
+        case material
+        /// A flat translucent fill. For rows in a list, where the count is the
+        /// problem rather than the material.
+        case flat
+    }
+
     private let cornerRadius: CGFloat
     private let padding: CGFloat
     private let tint: Color?
+    private let surface: Surface
     private let content: Content
 
     public init(
         cornerRadius: CGFloat = Bud.Radius.card,
         padding: CGFloat = Bud.Space.md,
         tint: Color? = nil,
+        surface: Surface = .material,
         @ViewBuilder content: () -> Content
     ) {
         self.cornerRadius = cornerRadius
         self.padding = padding
         self.tint = tint
+        self.surface = surface
         self.content = content()
     }
 
@@ -182,7 +204,11 @@ public struct GlassCard<Content: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(.ultraThinMaterial)
+                    // Tuned to land where the material lands over a dark panel, so
+                    // moving a card from one to the other is not a redesign.
+                    .fill(surface == .material
+                          ? AnyShapeStyle(.ultraThinMaterial)
+                          : AnyShapeStyle(Color.white.opacity(0.055)))
                     .overlay {
                         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                             .fill((tint ?? .clear).opacity(tint == nil ? 0 : 0.14))

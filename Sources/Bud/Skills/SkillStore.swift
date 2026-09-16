@@ -8,9 +8,17 @@ import Foundation
 /// one with a text editor has done the right thing in every case — there is no
 /// sync step to forget and no state that can disagree with the disk.
 public enum SkillStore {
-    public static var directory: URL {
-        BudConfigLoader.budDirectory.appendingPathComponent("skills", isDirectory: true)
-    }
+    private static let defaultDirectory = BudConfigLoader.budDirectory
+        .appendingPathComponent("skills", isDirectory: true)
+
+    /// Redirects the store, and nothing but the test suite sets it.
+    ///
+    /// The cache's whole risk is that it stops noticing an edit to a folder this
+    /// design invites people to edit, and proving it does notice means writing to
+    /// a skills folder — which should not be the one somebody is using.
+    nonisolated(unsafe) static var directoryOverride: URL?
+
+    public static var directory: URL { directoryOverride ?? defaultDirectory }
 
     public static func ensureDirectory() {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -21,19 +29,90 @@ public enum SkillStore {
     /// A skill that will not parse is skipped rather than taking the list with it.
     /// Skills arrive from the internet and from other people, and one malformed
     /// folder should cost its own row, not the feature.
+    ///
+    /// Cached, because this is on the request path — the prompt lists every skill
+    /// every round — and reading and parsing every manifest and walking every
+    /// folder to produce the same answer twenty-four times a turn is work nobody
+    /// asked for. The cache is keyed on a fingerprint of what it was built from
+    /// rather than on a flag, so a `SKILL.md` edited by hand is picked up on the
+    /// next call: this design invites people to edit the folder, and a cache that
+    /// stopped noticing would quietly undo that.
     public static func installed() -> [Skill] {
         ensureDirectory()
+        guard let entries = directories() else { return [] }
+
+        // Both the manifest and its folder. The manifest carries the name and the
+        // description; the folder's own timestamp is what changes when a file is
+        // added or removed beside it, which is the only other thing the cached
+        // value depends on.
+        let fingerprint = entries
+            .map { "\($0.lastPathComponent):\(stamp(of: $0.appendingPathComponent("SKILL.md"))):\(stamp(of: $0))" }
+            .joined(separator: "|")
+        if let cached = cache.value(fingerprint: fingerprint) { return cached }
+
+        let skills = entries
+            .compactMap { read(directory: $0) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        cache.store(skills, fingerprint: fingerprint)
+        return skills
+    }
+
+    private static func directories() -> [URL]? {
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
-        ) else { return [] }
-
+        ) else { return nil }
         return entries
             .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
-            .compactMap { read(directory: $0) }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
+
+    /// Size and modification date, which change when a file does.
+    ///
+    /// A stat, not a read: twenty of these cost less than one manifest parse, and
+    /// being exact is cheaper than deciding when to be approximate.
+    private static func stamp(of url: URL) -> String {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
+              let date = values.contentModificationDate
+        else { return "-" }
+        // The size is absent for a directory, which is fine — its timestamp is
+        // what is being read there. And the time is not rounded to the second: two
+        // edits within one tick is exactly what a person saving a file twice looks
+        // like, and rounding would call the second one unchanged.
+        return "\(values.fileSize ?? -1)@\(date.timeIntervalSince1970)"
+    }
+
+    /// One entry, guarded. `installed()` is read from the prompt builder and from
+    /// the settings pane, which are not the same thread.
+    private final class Cache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var fingerprint = ""
+        private var skills: [Skill] = []
+        private var filled = false
+
+        func value(fingerprint wanted: String) -> [Skill]? {
+            lock.withLock { filled && fingerprint == wanted ? skills : nil }
+        }
+
+        func store(_ value: [Skill], fingerprint wanted: String) {
+            lock.withLock {
+                skills = value
+                fingerprint = wanted
+                filled = true
+            }
+        }
+
+        func clear() {
+            lock.withLock { filled = false }
+        }
+    }
+
+    private static let cache = Cache()
+
+    /// Drops the cached listing. Called when this store writes, so the next read
+    /// is the one that sees it.
+    public static func invalidate() { cache.clear() }
 
     public static func read(name: String) -> Skill? {
         read(directory: directory.appendingPathComponent(name, isDirectory: true))
@@ -100,6 +179,7 @@ public enum SkillStore {
             try FileManager.default.removeItem(at: destination)
         }
         try FileManager.default.copyItem(at: source, to: destination)
+        invalidate()
         quarantine(destination)
         if let origin {
             try? origin.write(
@@ -115,6 +195,7 @@ public enum SkillStore {
         let target = directory.appendingPathComponent(name, isDirectory: true)
         guard FileManager.default.fileExists(atPath: target.path) else { return }
         try FileManager.default.removeItem(at: target)
+        invalidate()
     }
 
     /// Marks installed files as having come from the internet.

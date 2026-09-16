@@ -1949,6 +1949,60 @@ public enum BudSelfTest {
         c.check("but not SKILL.md itself, which was already read",
                 onDisk?.resources.contains("SKILL.md") == false)
 
+        // MARK: The listing cache
+
+        // The cache exists because the prompt lists every skill on every request,
+        // and its risk is that it stops noticing the folder change. Proved here
+        // against a store of its own rather than the one in use.
+        let store = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bud-skillstore-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+        let previous = SkillStore.directoryOverride
+        SkillStore.directoryOverride = store
+        defer {
+            SkillStore.directoryOverride = previous
+            SkillStore.invalidate()
+            try? FileManager.default.removeItem(at: store)
+        }
+
+        func writeSkill(_ name: String, _ description: String, scripts: Int = 0) {
+            let folder = store.appendingPathComponent(name, isDirectory: true)
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try? "---\nname: \(name)\ndescription: \(description)\n---\n\nBody.\n"
+                .write(to: folder.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+            for index in 0..<scripts {
+                try? Data("print()".utf8)
+                    .write(to: folder.appendingPathComponent("run\(index).py"))
+            }
+        }
+
+        writeSkill("first", "The first skill, with enough description to be found.")
+        c.equal("a skill appears in the listing", SkillStore.installed().map(\.name), ["first"])
+        c.equal("and again, from the cache", SkillStore.installed().map(\.name), ["first"])
+
+        writeSkill("second", "The second skill, added after the first read.")
+        c.equal("a skill added afterwards appears",
+                SkillStore.installed().map(\.name), ["first", "second"])
+
+        // The case the fingerprint exists for: the folder listing is unchanged, so
+        // only a look at the file itself can notice this.
+        writeSkill("first", "A description edited by hand, which the cache must not miss.")
+        c.check("an edited description is noticed",
+                SkillStore.installed().first { $0.name == "first" }?
+                    .summary.contains("edited by hand") == true)
+
+        // And the file list, which is what the resource walk produces.
+        writeSkill("first", "A description edited by hand, which the cache must not miss.", scripts: 2)
+        c.check("files added beside it are noticed",
+                SkillStore.installed().first { $0.name == "first" }?
+                    .resources.contains("run0.py") == true)
+
+        try? FileManager.default.removeItem(at: store.appendingPathComponent("second"))
+        c.equal("a removed skill disappears", SkillStore.installed().map(\.name), ["first"])
+        SkillStore.invalidate()
+        c.equal("and invalidating rebuilds the same answer",
+                SkillStore.installed().map(\.name), ["first"])
+
         // A folder that is not a skill is nil rather than a skill with no name.
         c.check("a folder with no SKILL.md is not a skill",
                 SkillStore.read(directory: directory.deletingLastPathComponent()) == nil)
