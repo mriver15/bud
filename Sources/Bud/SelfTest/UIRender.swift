@@ -326,6 +326,20 @@ public enum UIRender {
             into: &written
         )
 
+        // MARK: Skills
+
+        emit(
+            "skills",
+            SkillsSettingsView(registry: model.skills)
+                .padding(Bud.Space.lg)
+                .frame(width: 900, height: 660, alignment: .topLeading)
+                .background(Color.black.opacity(0.30)),
+            width: 900,
+            height: 660,
+            directory: directory,
+            into: &written
+        )
+
         // MARK: Settings tabs
 
         for tab in SettingsTab.allCases {

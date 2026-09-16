@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 public enum SettingsTab: String, CaseIterable, Sendable, Identifiable {
-    case general, mcp, marketplace, subagents, tools, about
+    case general, mcp, marketplace, skills, subagents, tools, about
 
     public var id: String { rawValue }
 
@@ -11,6 +11,7 @@ public enum SettingsTab: String, CaseIterable, Sendable, Identifiable {
         case .general: return "General"
         case .mcp: return "Connections"
         case .marketplace: return "Marketplace"
+        case .skills: return "Skills"
         case .subagents: return "Subagents"
         case .tools: return "Tools"
         case .about: return "About"
@@ -22,6 +23,7 @@ public enum SettingsTab: String, CaseIterable, Sendable, Identifiable {
         case .general: return "slider.horizontal.3"
         case .mcp: return "point.3.connected.trianglepath.dotted"
         case .marketplace: return "square.grid.2x2"
+        case .skills: return "sparkles.rectangle.stack"
         case .subagents: return "person.3.sequence"
         case .tools: return "wrench.and.screwdriver"
         case .about: return "info.circle"
@@ -74,6 +76,9 @@ public final class AppModel {
     public let subagents: SubagentSupervisor
     /// Reports a long turn that finished while Bud was not in front.
     private let notifier = CompletionNotifier()
+
+    /// Installed skills and where new ones come from.
+    public let skills = SkillRegistry()
 
     /// The one browser. The tools drive the same view the Browser surface shows,
     /// so what the model is reading and what is on screen are the same page
@@ -206,6 +211,7 @@ public final class AppModel {
             subagents,
             GenUIToolProvider(),
             BrowserToolProvider(engine: browser),
+            SkillToolProvider(),
         ]
         for provider in providers {
             await env.registry.register(provider)

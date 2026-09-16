@@ -114,6 +114,7 @@ public enum RequestMeasureCLI {
             subagents,
             GenUIToolProvider(),
             BrowserToolProvider(engine: BrowserEngine()),
+            SkillToolProvider(),
         ]
         for provider in providers {
             await env.registry.register(provider)

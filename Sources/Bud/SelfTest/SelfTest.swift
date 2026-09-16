@@ -81,6 +81,7 @@ public enum BudSelfTest {
             selfUpdate,
             mcpConfigMapping,
             fileReading,
+            skills,
             glamaMapping,
             npmResolution,
             toolTruncation,
@@ -1749,6 +1750,211 @@ public enum BudSelfTest {
     /// Runs against a database of its own. Pointing the store at the real one
     /// would make the suite write into the user's history and then assert
     /// against whatever it had left there on the previous run.
+    // MARK: Skills
+
+    /// The `SKILL.md` reader.
+    ///
+    /// Written against the format as it is actually found rather than as the
+    /// specification describes it in the abstract: the skills in the standard's
+    /// own example collection write their descriptions as folded block scalars,
+    /// which is the construct a long description needs and the one a
+    /// hand-rolled reader is most likely to skip.
+    static func skills() -> SelfTestReport {
+        let c = Checker(suite: "skills")
+
+        func parse(_ text: String, folder: String? = nil) -> Skill? {
+            try? SkillParser.parse(text, folder: folder)
+        }
+        func problem(_ text: String, folder: String? = nil) -> SkillParser.Problem? {
+            do {
+                _ = try SkillParser.parse(text, folder: folder)
+                return nil
+            } catch let error as SkillParser.Problem {
+                return error
+            } catch {
+                return nil
+            }
+        }
+
+        // MARK: The minimal file
+
+        let minimal = """
+        ---
+        name: pdf-processing
+        description: Extract text from PDFs. Use when the user mentions PDFs.
+        ---
+
+        # How to do it
+
+        Open the file and read it.
+        """
+        let skill = parse(minimal)
+        c.equal("a minimal skill parses", skill?.name, "pdf-processing")
+        c.check("its description is kept", skill?.summary.contains("Use when the user mentions") == true)
+        c.check("the body becomes the instructions",
+                skill?.instructions.contains("# How to do it") == true)
+        c.check("and the frontmatter is not part of it",
+                skill?.instructions.contains("name:") == false)
+
+        // MARK: Block scalars
+
+        // Exactly the shape three of the skills in the standard's example
+        // collection use. Reading only the first line yields ">".
+        let folded = """
+        ---
+        name: academy-guide
+        description: >
+          Stop and check this skill before finishing any reply to a question about
+          how to use the product, since it recommends matching courses and
+          tutorials.
+        license: Proprietary
+        ---
+
+        Body.
+        """
+        let foldedSkill = parse(folded)
+        c.check("a folded description is read whole",
+                foldedSkill?.summary.contains("Stop and check this skill") == true)
+        c.check("and not left as the indicator alone", foldedSkill?.summary != ">")
+        c.check("its folded lines are joined into one",
+                foldedSkill?.summary.contains("question about how to use the product") == true)
+        c.check("and it is one paragraph, not three lines",
+                foldedSkill?.summary.contains("\n") == false)
+
+        let literal = """
+        ---
+        name: steps
+        description: |
+          Line one.
+          Line two.
+        ---
+
+        Body.
+        """
+        c.check("a literal description keeps its newlines",
+                parse(literal)?.summary.contains("Line one.\nLine two.") == true)
+
+        // MARK: Where the block ends
+
+        // The blank line is inside the block, so the last line of the folded
+        // description must not be the first line of the body.
+        c.equal("a block ends at the next key", parse(folded)?.license, "Proprietary")
+
+        let withMetadata = """
+        ---
+        name: authored
+        description: A skill with metadata.
+        metadata:
+          author: example-org
+          version: "1.0"
+        ---
+
+        Body.
+        """
+        let authored = parse(withMetadata)
+        c.equal("metadata is read as a map", authored?.metadata["author"], "example-org")
+        c.equal("and quoted values are unquoted", authored?.metadata["version"], "1.0")
+        c.check("metadata does not leak into the description",
+                authored?.summary == "A skill with metadata.")
+
+        // MARK: Names
+
+        c.check("a name with a capital is refused", problem("""
+        ---
+        name: PDF-Processing
+        description: x
+        ---
+        """) != nil)
+        c.check("a name starting with a hyphen is refused", problem("""
+        ---
+        name: -pdf
+        description: x
+        ---
+        """) != nil)
+        c.check("a doubled hyphen is refused", problem("""
+        ---
+        name: pdf--processing
+        description: x
+        ---
+        """) != nil)
+        c.check("a name over 64 characters is refused", problem("""
+        ---
+        name: \(String(repeating: "a", count: 65))
+        description: x
+        ---
+        """) != nil)
+        c.check("a name with a space is refused", problem("""
+        ---
+        name: pdf processing
+        description: x
+        ---
+        """) != nil)
+        c.check("digits and single hyphens are allowed",
+                problem("---\nname: pdf-2-processing\ndescription: x\n---") == nil)
+
+        // MARK: Missing pieces
+
+        c.equal("a file with no frontmatter is refused", problem("Just text."), .noFrontmatter)
+        c.equal("a missing name says so", problem("---\ndescription: x\n---"), .missingName)
+        c.equal("a missing description says so", problem("---\nname: x\n---"), .missingDescription)
+        c.equal("an unclosed frontmatter says so",
+                problem("---\nname: x\ndescription: y"), .noFrontmatter)
+
+        // The spec requires the folder and the name to agree, and the folder is
+        // what `skill` has to be addressed by.
+        c.equal("a name that disagrees with its folder is refused",
+                problem(minimal, folder: "elsewhere"), .folderMismatch(name: "pdf-processing", folder: "elsewhere"))
+        c.check("a name that agrees with its folder is accepted",
+                problem(minimal, folder: "pdf-processing") == nil)
+
+        // MARK: What real files contain
+
+        let messy = "\u{FEFF}---\r\nname: windows\r\ndescription: Written on a machine that ends lines differently.\r\n---\r\n\r\nBody."
+        c.equal("a byte-order mark and CRLF do not stop it", parse(messy)?.name, "windows")
+
+        let colons = """
+        ---
+        name: colons
+        description: Handles http://example.com and a: b without losing anything.
+        ---
+        """
+        c.check("a colon inside a description is text, not syntax",
+                parse(colons)?.summary.contains("http://example.com and a: b") == true)
+
+        // MARK: The store
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bud-skills-\(UUID().uuidString)/a-skill", isDirectory: true)
+        try? FileManager.default.createDirectory(
+            at: directory.appendingPathComponent("scripts"), withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory.deletingLastPathComponent()) }
+        try? """
+        ---
+        name: a-skill
+        description: A skill on disk, with files beside it.
+        ---
+
+        Do the thing.
+        """.write(to: directory.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        try? Data("print()".utf8).write(to: directory.appendingPathComponent("scripts/run.py"))
+        try? Data("notes".utf8).write(to: directory.appendingPathComponent("REFERENCE.md"))
+
+        let onDisk = SkillStore.read(directory: directory)
+        c.equal("a folder on disk reads as a skill", onDisk?.name, "a-skill")
+        c.check("its other files are listed, so the model can find them",
+                onDisk?.resources.contains("scripts/run.py") == true)
+        c.check("including its references", onDisk?.resources.contains("REFERENCE.md") == true)
+        c.check("but not SKILL.md itself, which was already read",
+                onDisk?.resources.contains("SKILL.md") == false)
+
+        // A folder that is not a skill is nil rather than a skill with no name.
+        c.check("a folder with no SKILL.md is not a skill",
+                SkillStore.read(directory: directory.deletingLastPathComponent()) == nil)
+
+        return c.report()
+    }
+
     // MARK: Reading files
 
     /// What `read_file` makes of the things people actually drop on it.
