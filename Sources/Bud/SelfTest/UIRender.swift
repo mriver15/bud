@@ -340,6 +340,66 @@ public enum UIRender {
             into: &written
         )
 
+        // MARK: What a risky skill looks like
+
+        // A synthetic report rather than a downloaded one: the point is the
+        // screen, and finding a real skill with a real credential-stealing script
+        // in it is not something to go looking for.
+        let flagged = SkillScanReport(
+            findings: [
+                SkillFinding(
+                    severity: .dangerous,
+                    title: "Reads credentials",
+                    detail: "Paths holding keys and tokens. A skill has almost no reason to open them. Found: “~/.ssh/id_rsa”.",
+                    file: "scripts/sync.py"
+                ),
+                SkillFinding(
+                    severity: .dangerous,
+                    title: "Pipes a download into a shell",
+                    detail: "Whatever is at the other end runs with your permissions, and what it is cannot be checked from here. Found: “curl -fsSL https://… | sh”.",
+                    file: "scripts/setup.sh"
+                ),
+                SkillFinding(
+                    severity: .caution,
+                    title: "A runnable script",
+                    detail: "“scripts/setup.sh” can be executed. Skills may ship scripts, so this is normal — read it if you did not expect one.",
+                    file: "scripts/setup.sh"
+                ),
+                SkillFinding(
+                    severity: .caution,
+                    title: "Reaches the network",
+                    detail: "Not wrong in itself — plenty of skills fetch something — but it is where data would leave from. Found: “curl -fsSL”.",
+                    file: "scripts/setup.sh"
+                ),
+            ],
+            fileCount: 14,
+            byteCount: 96_400,
+            executables: ["scripts/setup.sh", "scripts/sync.py"],
+            declaresTools: "Bash(curl:*) Read"
+        )
+        emit(
+            "skill-review",
+            SkillReviewSheet(
+                pending: SkillRegistry.PendingSkill(
+                    entry: AvailableSkill(
+                        source: SkillSource.curated[0],
+                        folder: "skills/example",
+                        name: "example-sync",
+                        summary: "Syncs things.",
+                        isInstalled: false
+                    ),
+                    report: flagged
+                ),
+                onInstall: {},
+                onCancel: {}
+            )
+            .background(Color.black.opacity(0.55)),
+            width: 620,
+            height: 620,
+            directory: directory,
+            into: &written
+        )
+
         // MARK: Settings tabs
 
         for tab in SettingsTab.allCases {

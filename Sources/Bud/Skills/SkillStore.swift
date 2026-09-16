@@ -100,6 +100,7 @@ public enum SkillStore {
             try FileManager.default.removeItem(at: destination)
         }
         try FileManager.default.copyItem(at: source, to: destination)
+        quarantine(destination)
         if let origin {
             try? origin.write(
                 to: destination.appendingPathComponent(".origin"),
@@ -114,6 +115,29 @@ public enum SkillStore {
         let target = directory.appendingPathComponent(name, isDirectory: true)
         guard FileManager.default.fileExists(atPath: target.path) else { return }
         try FileManager.default.removeItem(at: target)
+    }
+
+    /// Marks installed files as having come from the internet.
+    ///
+    /// macOS's own defence rather than one of ours: a quarantined file is one
+    /// Gatekeeper will intervene on if it is ever opened or run. Bud downloaded
+    /// these, so saying so is simply accurate — and it means a script inside a
+    /// skill is treated exactly like a script downloaded in a browser.
+    private static func quarantine(_ folder: URL) {
+        guard let walker = FileManager.default.enumerator(
+            at: folder,
+            includingPropertiesForKeys: nil
+        ) else { return }
+        for case let item as URL in walker {
+            var values = URLResourceValues()
+            values.quarantineProperties = [
+                "agent": "Bud",
+                "type": 0,
+                "timestamp": Date(),
+            ] as [String: Any]
+            var url = item
+            try? url.setResourceValues(values)
+        }
     }
 
     /// Where an installed skill came from, written beside it at install time.

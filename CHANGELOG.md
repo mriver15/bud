@@ -12,6 +12,64 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 0.2.1
+
+### Skills are checked before they are installed
+
+A skill is two risks behind one door: **instructions that go into the model's
+context**, and **code it ships that can run**. Both are decided before anything
+reaches your machine.
+
+Every skill is scanned on the way in. What it finds falls into three kinds:
+
+- **Refused** — a symbolic link pointing out of the folder, a file name that
+  escapes it, or a compiled program whose behaviour cannot be read. Nothing about
+  these can be made safe by looking harder.
+- **Needs review** — a recursive delete aimed at your machine or your home,
+  a download piped straight into a shell, an encoded payload decoded and run,
+  a read of `~/.ssh` or a keychain, `sudo`, `eval` on anything assembled at
+  runtime, or, in the instructions themselves: *ignore previous instructions*,
+  *do not tell the user*, *without asking*, *print your system prompt*, *send this
+  to…*. **You are shown each one, with the file and the matched text, and
+  installing takes a deliberate click.**
+- **Worth knowing** — a runnable script, a network call, hidden or bidirectional
+  characters, an unusually large bundle. Shown; nothing is blocked.
+
+A skill with nothing to report installs without a prompt. A confirmation nobody
+has a reason to read is one people learn to click through.
+
+### What was reused rather than reinvented
+
+- **macOS quarantine.** Everything installed is marked as having come from the
+  internet, so Gatekeeper treats a script inside a skill exactly as it would a
+  script you downloaded in a browser. `com.apple.quarantine`, set through
+  `URLResourceValues`, not a scheme of ours.
+- **The file reader.** `FileReading` already knew how to tell text from binary and
+  how to decode what is not UTF-8, which is most of what classifying a skill's
+  files needs.
+
+### It is a screen, not a sandbox
+
+Everything here can be worked around by someone who knows it exists. Its job is
+to make the ordinary case visible and the obvious case impossible — not to certify
+anything. What it does *not* do: run anything in isolation, check a signature,
+or judge whether instructions are *subtle*. A skill that manipulates the model
+without using any of the phrases above will pass.
+
+### Calibration
+
+The rules were tuned against a real published skill, not only against fixtures:
+the `pdf` skill ships five Python scripts and mentions a URL, and raises nothing
+dangerous. Two rules were wrong and the tests caught them:
+
+- The recursive-delete rule required whitespace after the path, so
+  `rm -rf ~/Documents` passed while `rm -rf ~` was caught.
+- It would also have fired on `rm -rf ./build` and `rm -rf /tmp/work`, which is
+  how a screen teaches people to ignore it. Scoped paths are now exempt, and the
+  exemptions have their own checks.
+
+---
+
 ## Bud 0.2.0
 
 ### Skills

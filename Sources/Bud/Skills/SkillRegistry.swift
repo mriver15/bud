@@ -161,13 +161,82 @@ public final class SkillRegistry {
 
     // MARK: - Installing
 
-    /// Downloads a skill folder into `~/.bud/skills`.
+    /// A skill that has been downloaded and inspected, waiting on a decision.
+    public struct PendingSkill: Identifiable, Sendable {
+        public var entry: AvailableSkill
+        public var report: SkillScanReport
+        public var id: String { entry.id }
+    }
+
+    /// Set when a download finished and something in it needs a person to look.
+    public private(set) var pending: PendingSkill?
+    @ObservationIgnored private var pendingStaging: URL?
+    @ObservationIgnored private var pendingFolder: URL?
+
+    /// Downloads a skill, inspects it, and installs it if there is nothing to see.
     ///
-    /// Every file under the folder, not just `SKILL.md`: the standard is explicit
-    /// that a skill may carry scripts, references and assets, and a skill
-    /// installed without them is one that fails the first time it is followed.
-    @discardableResult
-    public func install(_ skill: AvailableSkill) async throws -> Skill {
+    /// The decision is made before anything reaches the skills folder, which is
+    /// the only order that helps: a screen applied after installing is a report on
+    /// something already able to be used.
+    public func prepare(_ entry: AvailableSkill) async throws {
+        let (staging, folder) = try await download(entry)
+        let report = SkillScanner.scan(directory: folder)
+
+        if report.isBlocked {
+            try? FileManager.default.removeItem(at: staging)
+            throw SkillError.refused(report.findings(at: .blocked).map(\.title))
+        }
+
+        guard report.needsReview else {
+            try commit(entry: entry, staging: staging, folder: folder)
+            return
+        }
+        // Held rather than discarded: the download is done and the decision may
+        // well be yes. `pendingStaging` is cleaned up either way.
+        clearPending()
+        pendingStaging = staging
+        pendingFolder = folder
+        pending = PendingSkill(entry: entry, report: report)
+    }
+
+    /// Installs what `prepare` held back.
+    public func confirmPending() throws {
+        guard let pending, let staging = pendingStaging, let folder = pendingFolder else { return }
+        try commit(entry: pending.entry, staging: staging, folder: folder)
+    }
+
+    public func discardPending() {
+        clearPending()
+    }
+
+    private func clearPending() {
+        if let pendingStaging { try? FileManager.default.removeItem(at: pendingStaging) }
+        pendingStaging = nil
+        pendingFolder = nil
+        pending = nil
+    }
+
+    private func commit(entry: AvailableSkill, staging: URL, folder: URL) throws {
+        let origin = entry.source.webURL.map { "\($0)/tree/\(entry.source.branch)/\(entry.folder)" }
+        let installed = try SkillStore.install(from: folder, origin: origin)
+        try? FileManager.default.removeItem(at: staging)
+        pendingStaging = nil
+        pendingFolder = nil
+        pending = nil
+        refreshInstalled()
+        available = available.map { row in
+            var updated = row
+            if row.name == installed.name { updated.isInstalled = true }
+            return updated
+        }
+    }
+
+    /// Downloads every file under the skill's folder into a staging directory.
+    ///
+    /// Every file, not just `SKILL.md`: the standard is explicit that a skill may
+    /// carry scripts, references and assets, and a skill installed without them is
+    /// one that fails the first time it is followed.
+    private func download(_ skill: AvailableSkill) async throws -> (staging: URL, folder: URL) {
         let paths = try await tree(for: skill.source)
         let prefix = skill.folder.isEmpty ? "" : skill.folder + "/"
         let files = paths.filter { $0.hasPrefix(prefix) && $0 != prefix }
@@ -176,37 +245,26 @@ public final class SkillRegistry {
             .appendingPathComponent("bud-skill-\(UUID().uuidString)", isDirectory: true)
         let folder = staging.appendingPathComponent(skill.name, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: staging) }
 
-        let trimmed = SkillSource(owner: skill.source.owner, repo: skill.source.repo,
-                                  branch: skill.source.branch, path: skill.source.path,
-                                  title: skill.source.title)
         for path in files {
             let relative = String(path.dropFirst(prefix.count))
             guard !relative.isEmpty else { continue }
+            // A path from a repository is data. `..` in one would write outside the
+            // folder it is being installed into, and the scanner would only see it
+            // afterwards.
+            guard !relative.split(separator: "/").contains("..") else { continue }
             let destination = folder.appendingPathComponent(relative)
-            // A path from a repository is data, and `../` in one would write
-            // outside the folder it is being installed into.
             guard destination.standardizedFileURL.path.hasPrefix(folder.standardizedFileURL.path) else {
                 continue
             }
-            let data = try await Self.rawData(source: trimmed, path: path)
+            let data = try await Self.rawData(source: skill.source, path: path)
             try FileManager.default.createDirectory(
                 at: destination.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
             try data.write(to: destination)
         }
-
-        let origin = skill.source.webURL.map { "\($0)/tree/\(skill.source.branch)/\(skill.folder)" }
-        let installed = try SkillStore.install(from: folder, origin: origin)
-        refreshInstalled()
-        available = available.map { entry in
-            var updated = entry
-            if entry.name == installed.name { updated.isInstalled = true }
-            return updated
-        }
-        return installed
+        return (staging, folder)
     }
 
     public func uninstall(_ name: String) throws {
@@ -281,6 +339,7 @@ public final class SkillRegistry {
 }
 
 public enum SkillError: LocalizedError {
+    case refused([String])
     case badSource(String)
     case unreachable(String)
     case sourceRefused(String, Int)
@@ -288,6 +347,10 @@ public enum SkillError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
+        case .refused(let reasons):
+            // The reasons are the whole message: "refused" on its own tells
+            // somebody nothing they can act on.
+            return "This skill was not installed. " + reasons.joined(separator: "; ") + "."
         case .badSource(let source):
             return "“\(source)” is not a repository Bud can read"
         case .unreachable(let what):
