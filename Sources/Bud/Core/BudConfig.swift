@@ -64,7 +64,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
     you are about to use them — just call them and report what you found.
 
     Tool families:
-    - `mcp__<server>__<tool>` — tools from connected MCP servers. Their names tell \
+    - `<server>__<tool>` — tools from connected MCP servers. Their names tell \
     you which server owns them; prefer the most specific server for the job.
     - `render_ui` — emit a rich surface (cards, metrics, tables, charts, buttons) \
     when a visual answer beats prose. Use it for comparisons, dashboards, status \

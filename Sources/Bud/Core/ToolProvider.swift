@@ -66,9 +66,18 @@ public actor ToolRegistry {
     /// All descriptors, de-duplicated by name. On a collision the later provider
     /// keeps its original name and the earlier one is re-suffixed, so an MCP
     /// server never silently shadows a native tool.
+    ///
+    /// Routing is rebuilt here, as a side effect of the same pass that produces
+    /// the list, rather than only when a provider is registered. A provider's
+    /// tools are not fixed at registration — an MCP server connects later and
+    /// brings its own — so a table built once described a world where that
+    /// server had no tools. The model was offered them and every call to one came
+    /// back "Unknown tool", because the only thing that decides whether a tool
+    /// can be called was built before the tool existed.
     public func descriptors() async -> [ToolDescriptor] {
         var seen: Set<String> = []
         var out: [ToolDescriptor] = []
+        var table: [String: String] = [:]
         for pid in order {
             guard let p = providers[pid] else { continue }
             for var d in await p.toolDescriptors() {
@@ -79,9 +88,11 @@ public actor ToolRegistry {
                     d.id = d.name
                 }
                 seen.insert(d.name)
+                table[d.name] = d.providerID
                 out.append(d)
             }
         }
+        if routing != table { routing = table }
         return out
     }
 
@@ -125,11 +136,24 @@ public enum ToolNaming {
         return out
     }
 
+    /// An MCP tool's name on the wire: `<server>__<tool>`.
+    ///
+    /// It used to be `mcp__<server>__<tool>`, which said "MCP" twice — the server
+    /// half is already derived from the server's own name, so the prefix only
+    /// repeated what the namespace had just said. Five characters per tool, paid
+    /// on every request and against a hard 64-character ceiling that long
+    /// namespaces were already pressing against.
+    ///
+    /// The double underscore stays. It is the one thing that has to survive: a
+    /// single underscore is what native tools use (`read_file`), so `__` is
+    /// reserved for the server boundary and a collision with a built-in name is
+    /// not reachable by accident.
+    ///
     /// The server half is lower-cased so it agrees with
     /// `MCPServerConfig.namespace` — one server must not be addressable under two
     /// different prefixes. The tool half keeps its case for readability in the
     /// tool list; routing is by lookup table, not by the wire name.
     public static func namespaced(server: String, tool: String) -> String {
-        sanitize("mcp__\(server.lowercased())__\(tool)")
+        sanitize("\(sanitize(server.lowercased()))__\(tool)")
     }
 }

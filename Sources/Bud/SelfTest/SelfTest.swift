@@ -423,7 +423,7 @@ public enum BudSelfTest {
         c.equal("empty falls back", ToolNaming.sanitize(""), "tool")
 
         let namespaced = ToolNaming.namespaced(server: "GitHub MCP", tool: "create.issue")
-        c.equal("namespaced form", namespaced, "mcp__github_mcp__create_issue")
+        c.equal("namespaced form", namespaced, "github_mcp__create_issue")
         c.check(
             "namespaced result is model-legal",
             namespaced.range(of: #"^[a-zA-Z0-9_-]+$"#, options: .regularExpression) != nil
@@ -435,7 +435,7 @@ public enum BudSelfTest {
         let config = MCPServerConfig(name: "GitHub MCP", command: "x")
         c.equal(
             "namespaced prefix matches server namespace",
-            ToolNaming.namespaced(server: config.name, tool: "t").contains("mcp__\(config.namespace)__"),
+            ToolNaming.namespaced(server: config.name, tool: "t").contains("\(config.namespace)__"),
             true
         )
 

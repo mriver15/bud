@@ -207,6 +207,15 @@ public enum BudLiveVerification {
             return c.report()
         }
 
+        // Registered *before* the server exists, which is the order the app uses
+        // and the reason this went unnoticed: registered after a server connects,
+        // the routing table is built with the tools already in it and everything
+        // works. In the app the provider is registered at launch with no servers
+        // at all, so a server added later had tools that were listed and could
+        // not be called.
+        let registryTools = ToolRegistry()
+        await registryTools.register(mcp)
+
         await mcp.addServer(MCPServerConfig(
             id: echoID,
             name: "echo",
@@ -229,18 +238,16 @@ public enum BudLiveVerification {
         c.equal(
             "mcp: tools are namespaced",
             tools,
-            ["mcp__echo__add", "mcp__echo__echo"]
+            ["echo__add", "echo__echo"]
         )
 
         // MARK: Tool registry routing
 
-        let registryTools = ToolRegistry()
-        await registryTools.register(mcp)
         let names = await registryTools.descriptors().map(\.name)
-        c.check("registry: exposes MCP tools", names.contains("mcp__echo__echo"))
+        c.check("registry: exposes MCP tools", names.contains("echo__echo"))
 
         let echoResult = await registryTools.invoke(
-            name: "mcp__echo__echo",
+            name: "echo__echo",
             arguments: .object(["message": .string("hello")]),
             callID: "verify-1"
         )
@@ -248,21 +255,21 @@ public enum BudLiveVerification {
         c.check("registry: echo was not an error", !echoResult.isError)
 
         let addResult = await registryTools.invoke(
-            name: "mcp__echo__add",
+            name: "echo__add",
             arguments: .object(["a": .number(19), "b": .number(23)]),
             callID: "verify-2"
         )
         c.check("registry: arithmetic over the wire", addResult.text.contains("42"))
 
         let failResult = await registryTools.invoke(
-            name: "mcp__echo__fail",
+            name: "echo__fail",
             arguments: .object([:]),
             callID: "verify-3"
         )
         c.check("registry: unknown tool is reported, not crashed", failResult.isError)
 
         let missing = await registryTools.invoke(
-            name: "mcp__echo__nope",
+            name: "echo__nope",
             arguments: .object([:]),
             callID: "verify-4"
         )
