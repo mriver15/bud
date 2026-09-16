@@ -40,6 +40,15 @@ public struct MCPServerConfig: Sendable, Codable, Hashable, Identifiable {
     public var headers: [String: String]
     public var enabled: Bool
     public var autoStart: Bool
+    /// Which of this server's tools are sent to the model.
+    ///
+    /// `nil` means all of them — the default, and what every server did before
+    /// this existed. An empty array means none. Those have to stay distinguishable:
+    /// "send everything" and "send nothing" are both things a person means, and a
+    /// single empty value cannot say both. An allowlist rather than a denylist
+    /// because the point of it is to keep a handful out of a large surface, and
+    /// unticking twenty of twenty-five is not a way to choose five.
+    public var enabledTools: [String]?
     /// Registry slug when installed from the marketplace; used to show provenance
     /// and to detect "already installed".
     public var registryName: String?
@@ -56,6 +65,7 @@ public struct MCPServerConfig: Sendable, Codable, Hashable, Identifiable {
         headers: [String: String] = [:],
         enabled: Bool = true,
         autoStart: Bool = true,
+        enabledTools: [String]? = nil,
         registryName: String? = nil,
         notes: String? = nil
     ) {
@@ -69,8 +79,15 @@ public struct MCPServerConfig: Sendable, Codable, Hashable, Identifiable {
         self.headers = headers
         self.enabled = enabled
         self.autoStart = autoStart
+        self.enabledTools = enabledTools
         self.registryName = registryName
         self.notes = notes
+    }
+
+    /// Whether this server's `tool` is allowed to reach the model.
+    public func sends(tool: String) -> Bool {
+        guard let enabledTools else { return true }
+        return enabledTools.contains(tool)
     }
 
     /// Namespace prefix for this server's tools, e.g. `mcp__github__`.

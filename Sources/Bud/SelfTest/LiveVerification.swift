@@ -275,6 +275,44 @@ public enum BudLiveVerification {
         )
         c.check("registry: missing tool yields an error", missing.isError)
 
+        // MARK: Tool selection
+
+        // The point of the allowlist is that a tool which is not sent cannot be
+        // called either. A surface that hides a tool while routing still answers
+        // to it would be the same visible/callable disagreement that made every
+        // MCP tool unusable, so both halves are asserted.
+        await mcp.setEnabledTools(["echo"], for: echoID)
+
+        let served = await registryTools.descriptors().map(\.name).sorted()
+        c.equal("selection: only the chosen tool is offered", served, ["echo__echo"])
+        c.equal(
+            "selection: the server still discovered both",
+            mcp.discoveredTools(id: echoID).count,
+            2
+        )
+
+        let withheld = await registryTools.invoke(
+            name: "echo__add",
+            arguments: .object(["a": .number(1), "b": .number(1)]),
+            callID: "verify-5"
+        )
+        c.check("selection: a withheld tool cannot be called", withheld.isError)
+        c.check(
+            "selection: the refusal says the tool is switched off",
+            withheld.text.contains("not switched on")
+        )
+
+        let stillWorks = await registryTools.invoke(
+            name: "echo__echo",
+            arguments: .object(["message": .string("kept")]),
+            callID: "verify-6"
+        )
+        c.check("selection: the chosen tool still works", stillWorks.text.contains("echo: kept"))
+
+        await mcp.setEnabledTools(nil, for: echoID)
+        let restored = await registryTools.descriptors().map(\.name).sorted()
+        c.equal("selection: clearing offers every tool again", restored, ["echo__add", "echo__echo"])
+
         // MARK: Generative UI tool
 
         let genui = GenUIToolProvider()

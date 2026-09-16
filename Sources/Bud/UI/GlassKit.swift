@@ -390,6 +390,21 @@ public enum BudFormat {
         return "\(m)m \(s)s"
     }
 
+    /// Thousands-separated. Character counts and byte totals only mean anything
+    /// next to each other, and a run of unbroken digits is not a number you can
+    /// compare at a glance.
+    public static func count(_ value: Int) -> String {
+        let digits = String(value)
+        guard digits.count > 3 else { return digits }
+        var out = ""
+        out.reserveCapacity(digits.count + digits.count / 3)
+        for (offset, character) in digits.enumerated() {
+            if offset > 0, (digits.count - offset) % 3 == 0 { out.append(",") }
+            out.append(character)
+        }
+        return out
+    }
+
     public static func tokens(_ count: Int) -> String {
         if count < 1000 { return "\(count)" }
         return String(format: "%.1fk", Double(count) / 1000)

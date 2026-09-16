@@ -46,6 +46,28 @@ public enum UIRender {
         Task { await store.loadInitial() }
         runLoop(8.0)
 
+        // MARK: MCP tool selection
+
+        // The picker only exists inside an expanded server row, and it is the one
+        // place a server's cost is visible before a request. Rendered against
+        // whatever server is actually connected rather than a fixture, so the
+        // numbers in the picture are real ones.
+        if let server = model.mcp.servers.first(where: { !model.mcp.discoveredTools(id: $0.id).isEmpty }) {
+            emit(
+                "mcp-tools",
+                DiagnosticsPanel(config: server, mcp: model.mcp)
+                    .padding(Bud.Space.md)
+                    .background(Color.black.opacity(0.30)),
+                width: Bud.contentMeasure,
+                // Tall enough for the whole panel. A frame smaller than its
+                // content does not clip it — SwiftUI draws the overflow — so an
+                // undersized harness invents collisions that the app never has.
+                height: 620,
+                directory: directory,
+                into: &written
+            )
+        }
+
         // MARK: Chat surfaces
 
         for (name, turn) in Self.sampleTurns() {
@@ -337,7 +359,7 @@ public enum UIRender {
         tool.segments.append(
             .tool(
                 id: "t1",
-                call: ToolCall(id: "c1", name: "mcp__infra__list_services", arguments: #"{"region":"eu-west-1"}"#),
+                call: ToolCall(id: "c1", name: "infra__list_services", arguments: #"{"region":"eu-west-1"}"#),
                 providerName: "infra",
                 state: .succeeded,
                 resultText: "worker  degraded  p95=812ms\napi     healthy   p95=141ms",
@@ -350,7 +372,7 @@ public enum UIRender {
         failed.segments.append(
             .tool(
                 id: "f1",
-                call: ToolCall(id: "c2", name: "mcp__infra__restart", arguments: #"{"service":"worker"}"#),
+                call: ToolCall(id: "c2", name: "infra__restart", arguments: #"{"service":"worker"}"#),
                 providerName: "infra",
                 state: .failed,
                 resultText: "The server exited with status 3.\nstderr: permission denied for region eu-west-1",

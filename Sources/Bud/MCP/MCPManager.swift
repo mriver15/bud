@@ -16,6 +16,10 @@ public final class MCPManager: MCPManaging, ToolProvider {
     public private(set) var servers: [MCPServerConfig] = []
     public private(set) var statuses: [String: MCPServerStatus] = [:]
     public private(set) var allTools: [ToolDescriptor] = []
+    /// Everything each server offers, whether or not it is being sent. Observable
+    /// because the tool picker chooses *from* this: it is the tools that are not
+    /// being sent that it exists to show, so it cannot read the served surface.
+    public private(set) var discoveredByServer: [String: [ToolDescriptor]] = [:]
 
     @ObservationIgnored private var clients: [String: MCPClient] = [:]
     /// Bumped by every teardown and every connect attempt for a server, so an
@@ -72,6 +76,22 @@ public final class MCPManager: MCPManaging, ToolProvider {
             appendLog(config.id, "Disabled.")
             await refreshTools()
         }
+    }
+
+    /// Changes which of a server's tools are sent, without touching its
+    /// connection.
+    ///
+    /// Deliberately not `updateServer`: that treats every difference as a new
+    /// endpoint and tears the process down, which for a server started with `npx`
+    /// costs seconds of handshake to decide whether one checkbox is ticked. The
+    /// tools are already in hand — `refreshTools` re-publishes from the client's
+    /// own cache without going near the wire.
+    public func setEnabledTools(_ tools: [String]?, for id: String) async {
+        guard let index = servers.firstIndex(where: { $0.id == id }) else { return }
+        guard servers[index].enabledTools != tools else { return }
+        servers[index].enabledTools = tools
+        persist()
+        await refreshTools()
     }
 
     public func removeServer(id: String) async {
@@ -251,12 +271,16 @@ public final class MCPManager: MCPManaging, ToolProvider {
     /// rendering; call `refreshTools()` when a fresh read is needed.
     public func serverTools(id: String) -> [ToolDescriptor] { toolsByServer[id] ?? [] }
 
+    /// Every tool the server offers, including the ones switched off.
+    public func discoveredTools(id: String) -> [ToolDescriptor] { discoveredByServer[id] ?? [] }
+
     /// Re-publishes the tool surface from what the clients already hold. Never
     /// re-lists over the wire, so it is cheap enough to call after any mutation.
     public func refreshTools() async {
         let collected = await collect()
         if allTools != collected.flat { allTools = collected.flat }
         if toolsByServer != collected.byServer { toolsByServer = collected.byServer }
+        if discoveredByServer != collected.discovered { discoveredByServer = collected.discovered }
     }
 
     // MARK: Internals
@@ -267,9 +291,28 @@ public final class MCPManager: MCPManaging, ToolProvider {
         var tool: String
     }
 
-    private func collect() async -> (byServer: [String: [ToolDescriptor]], flat: [ToolDescriptor]) {
+    /// The tools this server is allowed to contribute.
+    ///
+    /// One function, read by both the descriptor pass and by routing, so what the
+    /// model is offered and what it can call are the same list by construction.
+    /// A tool hidden from the request that still answered a call would be the
+    /// same disagreement as the one that made every MCP tool uncallable.
+    private func servedTools(for config: MCPServerConfig, from cached: [MCPTool]) -> [MCPTool] {
+        guard let enabled = config.enabledTools else { return cached }
+        let wanted = Set(enabled)
+        return cached.filter { wanted.contains($0.name) }
+    }
+
+    private struct Collected {
         var byServer: [String: [ToolDescriptor]] = [:]
         var flat: [ToolDescriptor] = []
+        var discovered: [String: [ToolDescriptor]] = [:]
+    }
+
+    private func collect() async -> Collected {
+        var byServer: [String: [ToolDescriptor]] = [:]
+        var flat: [ToolDescriptor] = []
+        var discovered: [String: [ToolDescriptor]] = [:]
         for config in servers {
             guard statuses[config.id]?.state == .ready else { continue }
             guard let client = clients[config.id], await client.isConnected else {
@@ -279,20 +322,38 @@ public final class MCPManager: MCPManaging, ToolProvider {
                 continue
             }
             let cached = await client.cachedTools
-            let descriptors = cached.map { descriptor(for: $0, config: config) }
-            byServer[config.id] = descriptors
-            flat.append(contentsOf: descriptors)
+            discovered[config.id] = cached.map { descriptor(for: $0, config: config) }
+            let served = servedTools(for: config, from: cached).map { descriptor(for: $0, config: config) }
+            byServer[config.id] = served
+            flat.append(contentsOf: served)
         }
-        return (byServer, flat)
+        return Collected(byServer: byServer, flat: flat, discovered: discovered)
     }
 
     private func route(for name: String) async -> Route? {
         for config in servers {
             guard statuses[config.id]?.state == .ready, let client = clients[config.id] else { continue }
-            let cached = await client.cachedTools
-            for tool in cached
+            for tool in servedTools(for: config, from: await client.cachedTools)
             where ToolNaming.namespaced(server: config.name, tool: tool.name) == name {
                 return Route(serverID: config.id, serverName: config.name, tool: tool.name)
+            }
+        }
+        return nil
+    }
+
+    public func withheldReason(for tool: String) async -> String? {
+        guard let owner = await serverWithholding(tool) else { return nil }
+        return "'\(tool)' is provided by '\(owner)' but is not switched on. "
+            + "Enable it in Settings › MCP › \(owner) › Tools."
+    }
+
+    /// The server that has this tool and is not sending it.
+    private func serverWithholding(_ name: String) async -> String? {
+        for config in servers {
+            guard statuses[config.id]?.state == .ready, let client = clients[config.id] else { continue }
+            for tool in await client.cachedTools
+            where ToolNaming.namespaced(server: config.name, tool: tool.name) == name {
+                return config.sends(tool: tool.name) ? nil : config.name
             }
         }
         return nil

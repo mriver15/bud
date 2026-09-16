@@ -158,22 +158,9 @@ public enum RequestMeasureCLI {
         return sample
     }
 
-    /// Thousands-separated. These numbers only mean anything next to each
-    /// other, and a run of unbroken digits is not a number you can compare.
-    private static func grouped(_ value: Int) -> String {
-        let digits = String(value)
-        guard digits.count > 3 else { return digits }
-        var out = ""
-        for (offset, character) in digits.enumerated() {
-            if offset > 0, (digits.count - offset) % 3 == 0 { out.append(",") }
-            out.append(character)
-        }
-        return out
-    }
-
     private static func report(_ cost: RequestCost, mcp: MCPManager) -> String {
         func line(_ label: String, _ chars: Int, _ note: String = "") -> String {
-            let count = grouped(chars)
+            let count = BudFormat.count(chars)
             let padded = count.padding(toLength: max(count.count, 9), withPad: " ", startingAt: 0)
             return "  \(label.padding(toLength: 18, withPad: " ", startingAt: 0))\(padded)   \(note)\n"
         }
@@ -189,13 +176,13 @@ public enum RequestMeasureCLI {
         out += line("tools", cost.toolChars, "\(cost.toolCount) tools")
 
         out += "  " + String(repeating: "─", count: 46) + "\n"
-        out += line("prefix", cost.totalChars, "≈ \(grouped(cost.estimatedTokens)) tokens per request")
+        out += line("prefix", cost.totalChars, "≈ \(BudFormat.count(cost.estimatedTokens)) tokens per request")
 
         if !cost.servers.isEmpty {
             out += "\nMCP servers\n"
             for server in cost.servers {
                 out += "  \(server.name.padding(toLength: 24, withPad: " ", startingAt: 0))"
-                out += "\(grouped(server.chars).padding(toLength: 9, withPad: " ", startingAt: 0))"
+                out += "\(BudFormat.count(server.chars).padding(toLength: 9, withPad: " ", startingAt: 0))"
                 out += "  \(server.count) tool\(server.count == 1 ? "" : "s")\n"
             }
         }
@@ -203,7 +190,7 @@ public enum RequestMeasureCLI {
         out += "\nHeaviest tools\n"
         for tool in cost.heaviestTools {
             out += "  \(tool.name.padding(toLength: 40, withPad: " ", startingAt: 0))"
-            out += "\(grouped(tool.chars))\n"
+            out += "\(BudFormat.count(tool.chars))\n"
         }
 
         let ready = mcp.servers.filter { mcp.statuses[$0.id]?.state == .ready }.count

@@ -467,6 +467,37 @@ public enum BudSelfTest {
             RegistryInstallOption(id: "npm:x", label: "npx -y x", transport: .stdio, command: "npx", args: ["-y", "x"])
         )
 
+        // MARK: Tool selection
+
+        let everything = MCPServerConfig(name: "s", command: "x")
+        c.equal("no selection sends every tool", everything.sends(tool: "anything"), true)
+
+        var narrowed = everything
+        narrowed.enabledTools = ["a"]
+        c.equal("a listed tool is sent", narrowed.sends(tool: "a"), true)
+        c.equal("an unlisted tool is withheld", narrowed.sends(tool: "b"), false)
+
+        // An empty selection is not the same as no selection. "Send none" and
+        // "send everything" are both things a person means, and one value cannot
+        // say both without turning one of them into the other.
+        var none = everything
+        none.enabledTools = []
+        c.equal("an empty selection withholds everything", none.sends(tool: "a"), false)
+
+        let encoded = try? JSONEncoder().encode(narrowed)
+        let decoded = encoded.flatMap { try? JSONDecoder().decode(MCPServerConfig.self, from: $0) }
+        c.equal("a selection survives persistence", decoded?.enabledTools, ["a"])
+
+        // Every server already on disk predates this key. Missing must mean
+        // "everything", or upgrading would silently disable every MCP tool
+        // someone had.
+        let legacy = """
+        {"id":"1","name":"old","transport":"stdio","args":[],"env":{},"headers":{},\
+        "enabled":true,"autoStart":true}
+        """
+        let parsed = try? JSONDecoder().decode(MCPServerConfig.self, from: Data(legacy.utf8))
+        c.equal("a config written before this existed sends everything", parsed?.sends(tool: "a"), true)
+
         return c.report()
     }
 

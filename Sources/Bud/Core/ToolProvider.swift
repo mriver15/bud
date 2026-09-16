@@ -20,6 +20,17 @@ public protocol ToolProvider: Sendable {
     var providerName: String { get }
     func toolDescriptors() async -> [ToolDescriptor]
     func invoke(tool: String, arguments: JSONValue, callID: String) async -> ToolResult
+    /// Why this provider knows the name but will not answer to it — a tool it has
+    /// and is not offering. `nil` when the name means nothing here.
+    ///
+    /// The registry only routes names that were offered, so a withheld tool never
+    /// reaches its owner and would otherwise fail as a typo. This is what lets a
+    /// withheld tool say so.
+    func withheldReason(for tool: String) async -> String?
+}
+
+public extension ToolProvider {
+    func withheldReason(for tool: String) async -> String? { nil }
 }
 
 /// Providers that must be brought up and torn down (MCP servers, subagent pools).
@@ -98,6 +109,10 @@ public actor ToolRegistry {
 
     public func invoke(name: String, arguments: JSONValue, callID: String) async -> ToolResult {
         guard let pid = routing[name], let provider = providers[pid] else {
+            for pid in order {
+                guard let p = providers[pid] else { continue }
+                if let reason = await p.withheldReason(for: name) { return .error(reason) }
+            }
             let known = routing.keys.sorted().prefix(40).joined(separator: ", ")
             return .error("Unknown tool '\(name)'. Available tools: \(known)")
         }
@@ -110,9 +125,11 @@ public actor ToolRegistry {
         return await p.providerName
     }
 
+    /// Routing is built by `descriptors`, in the same pass that builds the list
+    /// the model is offered. This only exists to force that pass to run now, so a
+    /// registration is reflected before the next request.
     private func rebuildRouting() async {
-        routing = [:]
-        for d in await descriptors() { routing[d.name] = d.providerID }
+        _ = await descriptors()
     }
 }
 

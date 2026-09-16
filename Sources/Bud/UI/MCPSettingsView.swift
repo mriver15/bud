@@ -252,7 +252,7 @@ private struct ServerRow: View {
             Spacer(minLength: 0)
             Button(action: toggleDiagnostics) {
                 HStack(spacing: Bud.Space.xs) {
-                    Text(isExpanded ? "Hide log" : "Log")
+                    Text(isExpanded ? "Hide tools" : "Tools & log")
                         .font(Bud.Font.caption)
                     Image(systemName: "chevron.right")
                         .font(Bud.Font.micro.weight(.bold))
@@ -300,9 +300,15 @@ private struct ServerRow: View {
         )
     }
 
+    /// Sent over discovered, when they differ. "25 tools" and "5 of 25 tools"
+    /// are different facts about what a request costs, and only the second one
+    /// explains the number `--measure` reports.
     private var toolCountLabel: String {
-        let count = status?.toolCount ?? 0
-        return "\(count) \(count == 1 ? "tool" : "tools")"
+        let discovered = max(mcp.discoveredTools(id: config.id).count, status?.toolCount ?? 0)
+        guard discovered > 0 else { return "" }
+        let sent = mcp.serverTools(id: config.id).count
+        if sent == discovered { return "\(discovered) \(discovered == 1 ? "tool" : "tools")" }
+        return "\(sent) of \(discovered) tools"
     }
 
     private var dotColor: Color {
@@ -320,16 +326,43 @@ private struct ServerRow: View {
 /// The expanded row body: what the server said, what it offers, and the tail of
 /// its transport log. `stderr` from a crashed stdio server lands in that log,
 /// which is usually the only evidence of *why* a handshake failed.
-private struct DiagnosticsPanel: View {
+struct DiagnosticsPanel: View {
     let config: MCPServerConfig
     let mcp: MCPManager
 
     private var status: MCPServerStatus? { mcp.statuses[config.id] }
     private var logs: [String] { mcp.logs(id: config.id) }
     private var tools: [ToolDescriptor] { mcp.serverTools(id: config.id) }
+    private var discovered: [ToolDescriptor] { mcp.discoveredTools(id: config.id) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Bud.Space.sm) {
+        VStack(alignment: .leading, spacing: Bud.Space.md) {
+            // Tools first, diagnostics second. Choosing what a server may send is
+            // configuration and the log is troubleshooting; a picker buried under
+            // a "Diagnostics" heading reads as a debugging aid rather than the
+            // control that decides what every request costs.
+            if !discovered.isEmpty {
+                VStack(alignment: .leading, spacing: Bud.Space.sm) {
+                    // Actions live beside the heading, as they do for the log
+                    // below. Placed after the list they sat directly against a
+                    // row cut off by the scroll edge, which read as a collision.
+                    HStack(spacing: Bud.Space.sm) {
+                        SectionHeader("Tools", subtitle: toolSubtitle)
+                        Spacer(minLength: Bud.Space.sm)
+                        Button("Send all") { setEnabledTools(nil) }
+                            .buttonStyle(.plain)
+                            .font(Bud.Font.caption)
+                            .foregroundStyle(Bud.Palette.accent)
+                        Button("Send none") { setEnabledTools([]) }
+                            .buttonStyle(.plain)
+                            .font(Bud.Font.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    toolList
+                }
+            }
+
+            VStack(alignment: .leading, spacing: Bud.Space.sm) {
             HStack(spacing: Bud.Space.sm) {
                 SectionHeader("Diagnostics", subtitle: logSubtitle)
                 Spacer(minLength: Bud.Space.sm)
@@ -357,10 +390,6 @@ private struct DiagnosticsPanel: View {
                     }
             }
 
-            if !tools.isEmpty {
-                toolChips
-            }
-
             if logs.isEmpty {
                 Text("No log entries yet. Bud records the handshake, every call, and any stderr the server writes.")
                     .font(Bud.Font.caption)
@@ -381,26 +410,111 @@ private struct DiagnosticsPanel: View {
                         .fill(Color.black.opacity(0.20))
                 }
             }
+            }
         }
         .padding(.top, Bud.Space.xs)
+    }
+
+    /// The figure a person needs to decide whether to keep a server switched on:
+    /// how much of it reaches the model, and what that costs per request.
+    private var toolSubtitle: String {
+        let sent = discovered.filter { config.sends(tool: $0.name) }
+        guard !sent.isEmpty else {
+            return "Nothing sent — connected, but invisible to the model"
+        }
+        let sizes = requestSizes
+        var cost = 0
+        for tool in sent { cost += sizes[tool.name] ?? 0 }
+        let amount = "\(BudFormat.count(cost)) characters per request"
+        guard sent.count < discovered.count else { return "\(sent.count) tools · \(amount)" }
+        return "\(sent.count) of \(discovered.count) sent · \(amount)"
     }
 
     private var logSubtitle: String {
         logs.isEmpty ? "Nothing recorded yet" : "\(logs.count) entries"
     }
 
-    private var toolChips: some View {
-        // The full list can run to dozens of names; a preview plus a count keeps
-        // the row readable while still answering "what did this server give me".
-        let shown = tools.prefix(8)
-        return HStack(spacing: Bud.Space.xs) {
-            ForEach(Array(shown)) { tool in
-                GlassChip(tool.name, systemImage: "wrench.and.screwdriver")
+    /// Which of this server's tools are sent, and what each one costs.
+    ///
+    /// The sizes are the serialised request definitions rather than estimates, so
+    /// the figure beside a checkbox is exactly what that checkbox buys back on
+    /// every request. A server's tool block is charged whether or not any of it
+    /// is used, which is the whole reason this exists.
+    private var toolList: some View {
+        let sizes = requestSizes
+
+        return VStack(alignment: .leading, spacing: Bud.Space.sm) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(discovered) { tool in
+                        toolRow(tool, size: sizes[tool.name] ?? 0)
+                    }
+                }
+                .padding(.vertical, Bud.Space.xs)
             }
-            if tools.count > shown.count {
-                GlassChip("+\(tools.count - shown.count) more")
+            .frame(height: 190)
+            // A list whose height is not a whole number of rows cuts one in half
+            // at the edge. Clipped hard and held clear of the controls below it,
+            // that reads as a scroll region; unclipped and touching them, it read
+            // as a row colliding with the buttons.
+            .clipShape(RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous))
+            .background {
+                RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)
+                    .fill(Color.black.opacity(0.14))
             }
         }
+    }
+
+    /// The request definition of every tool, serialised once. Encoding them again
+    /// per row per reference is the same work for the layout engine three times
+    /// over, on a list that can run to a hundred entries.
+    private var requestSizes: [String: Int] {
+        var out: [String: Int] = [:]
+        out.reserveCapacity(discovered.count)
+        for tool in discovered {
+            out[tool.name] = tool.openAIToolDefinition.encodedString().count
+        }
+        return out
+    }
+
+    private func toolRow(_ tool: ToolDescriptor, size: Int) -> some View {
+        let on = config.sends(tool: tool.name)
+        return Toggle(isOn: sentBinding(for: tool)) {
+            HStack(spacing: Bud.Space.sm) {
+                Text(tool.name)
+                    .font(Bud.Font.mono)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: Bud.Space.sm)
+                Text(BudFormat.count(size))
+                    .font(Bud.Font.mono)
+                    .foregroundStyle(Color.secondary.opacity(0.7))
+            }
+        }
+        .toggleStyle(.checkbox)
+        .foregroundStyle(on ? Color.primary : Color.secondary.opacity(0.55))
+    }
+
+    private func sentBinding(for tool: ToolDescriptor) -> Binding<Bool> {
+        Binding(
+            get: { config.sends(tool: tool.name) },
+            set: { setSent(tool.name, $0) }
+        )
+    }
+
+    private func setEnabledTools(_ selection: [String]?) {
+        let id = config.id
+        Task { await mcp.setEnabledTools(selection, for: id) }
+    }
+
+    /// Switching the last tool on stores `nil` rather than the full list. The two
+    /// mean the same thing today; only `nil` still means it after the server
+    /// ships a new tool, because a frozen list would hide it without saying so.
+    private func setSent(_ name: String, _ on: Bool) {
+        let all = discovered.map(\.name)
+        var current = Set(all.filter(config.sends(tool:)))
+        if on { current.insert(name) } else { current.remove(name) }
+        setEnabledTools(current.count == all.count ? nil : all.filter(current.contains))
     }
 
     private func copyDiagnostics() {
@@ -410,7 +524,7 @@ private struct DiagnosticsPanel: View {
             "transport: \(config.transport.label)",
             "target:    \(config.summary)",
             "state:     \(status?.state.label ?? MCPConnectionState.stopped.label)",
-            "tools:     \(tools.count)",
+            "tools:     \(tools.count) of \(discovered.count) sent",
         ]
         if let version = status?.serverVersion, !version.isEmpty {
             lines.append("version:   \(version)")
