@@ -670,6 +670,13 @@ private struct GeneralSettingsTab: View {
         )
     }
 
+    private var tokenBudgetBinding: Binding<Int> {
+        Binding(
+            get: { model.config.conversationTokenBudget },
+            set: { model.config.conversationTokenBudget = $0 }
+        )
+    }
+
     private var temperatureBinding: Binding<Double> {
         Binding(
             get: { model.config.temperature ?? 1.0 },
@@ -690,7 +697,15 @@ private struct GeneralSettingsTab: View {
                     Stepper(value: subagentConcurrencyBinding, in: 1...32) {
                         limitRow("Subagents in parallel", "\(model.config.allowParallelSubagents)")
                     }
-                    Text("Tool rounds cap how many times the model may call tools before it must answer. Parallel subagents bound how many slices run at once.")
+                    Stepper(value: tokenBudgetBinding, in: 0...2_000_000, step: 10_000) {
+                        limitRow(
+                            "Token budget per chat",
+                            model.config.conversationTokenBudget > 0
+                                ? BudFormat.tokens(model.config.conversationTokenBudget)
+                                : "Off"
+                        )
+                    }
+                    Text("Tool rounds cap how many times the model may call tools before it must answer. Parallel subagents bound how many slices run at once. The token budget stops Bud starting a new turn once one conversation has spent it — a new chat clears it. Off by default, because a ceiling nobody asked for is the app deciding when to stop working.")
                         .font(Bud.Font.caption)
                         .foregroundStyle(.tertiary)
                 }

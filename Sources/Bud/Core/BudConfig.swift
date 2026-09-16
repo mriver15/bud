@@ -56,6 +56,10 @@ public struct BudConfig: Sendable, Codable, Hashable {
     /// Whether Bud looks for updates on its own. Checking is silent; nothing is
     /// ever downloaded without the user asking.
     public var autoCheckUpdates: Bool
+    /// Tokens a single conversation may spend before Bud stops starting turns.
+    /// Zero means no ceiling, which is the default: a limit nobody asked for
+    /// would be the app deciding when to stop working.
+    public var conversationTokenBudget: Int
 
     public static let defaultSystemPrompt = """
     You are Bud, a native macOS assistant living in a floating Liquid Glass panel.
@@ -96,7 +100,8 @@ public struct BudConfig: Sendable, Codable, Hashable {
         updateFeedURL: String = "",
         updateToken: String = "",
         updateChannel: String = "stable",
-        autoCheckUpdates: Bool = true
+        autoCheckUpdates: Bool = true,
+        conversationTokenBudget: Int = 0
     ) {
         self.provider = provider
         self.providerModels = providerModels
@@ -115,6 +120,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         self.updateToken = updateToken
         self.updateChannel = updateChannel
         self.autoCheckUpdates = autoCheckUpdates
+        self.conversationTokenBudget = conversationTokenBudget
     }
 
     public var displayModel: String { model }
@@ -300,6 +306,7 @@ public enum BudConfigLoader {
         if let v = stored.updateToken { config.updateToken = v }
         if let v = stored.updateChannel { config.updateChannel = v }
         if let v = stored.autoCheckUpdates { config.autoCheckUpdates = v }
+        if let v = stored.conversationTokenBudget { config.conversationTokenBudget = v }
 
         // Migration from the single-provider shape. The key and URL used to
         // belong to DeepSeek implicitly, because DeepSeek was the only provider;
@@ -517,6 +524,7 @@ public enum BudConfigLoader {
         public var updateToken: String?
         public var updateChannel: String?
         public var autoCheckUpdates: Bool?
+        public var conversationTokenBudget: Int?
         public var glamaAPIKey: String?
         public var reasoningEffort: String?
         public var temperature: Double?
@@ -547,6 +555,7 @@ public enum BudConfigLoader {
             self.updateToken = config.updateToken
             self.updateChannel = config.updateChannel
             self.autoCheckUpdates = config.autoCheckUpdates
+            self.conversationTokenBudget = config.conversationTokenBudget
             self.glamaAPIKey = config.glamaAPIKey
             self.reasoningEffort = config.reasoningEffort
             self.temperature = config.temperature
@@ -568,6 +577,7 @@ public enum BudConfigLoader {
             updateToken: String? = nil,
             updateChannel: String? = nil,
             autoCheckUpdates: Bool? = nil,
+            conversationTokenBudget: Int? = nil,
             glamaAPIKey: String? = nil,
             reasoningEffort: String? = nil,
             temperature: Double? = nil,
@@ -589,6 +599,7 @@ public enum BudConfigLoader {
             self.updateToken = updateToken
             self.updateChannel = updateChannel
             self.autoCheckUpdates = autoCheckUpdates
+            self.conversationTokenBudget = conversationTokenBudget
             self.glamaAPIKey = glamaAPIKey
             self.reasoningEffort = reasoningEffort
             self.temperature = temperature

@@ -1787,6 +1787,30 @@ public enum BudSelfTest {
         c.equal("a title flattens newlines", titled("first\nsecond"), "first second")
         c.equal("an empty conversation still has a name", Conversation.title(from: []), "New chat")
 
+        // MARK: Cost
+
+        // The split is kept apart rather than summed, because reopening a
+        // conversation seeds the live counters from it — a total alone would turn
+        // every historical figure into "all prompt".
+        BudStore.save(Conversation(
+            id: "conv_cost", title: "costly", turns: [turn], messages: [],
+            promptTokens: 12_000, completionTokens: 3_000
+        ))
+        let costed = BudStore.list().first { $0.id == "conv_cost" }
+        c.equal("a conversation remembers its prompt tokens", costed?.promptTokens, 12_000)
+        c.equal("a conversation remembers its completion tokens", costed?.completionTokens, 3_000)
+        c.equal("a conversation totals what it cost", costed?.tokens, 15_000)
+
+        // Overwriting must replace the figure, not add to it: a conversation is
+        // saved on every turn, and an accumulating column would grow by the whole
+        // conversation each time it was written.
+        BudStore.save(Conversation(
+            id: "conv_cost", title: "costly", turns: [turn], messages: [],
+            promptTokens: 20_000, completionTokens: 4_000
+        ))
+        let rewritten = BudStore.list().first { $0.id == "conv_cost" }
+        c.equal("re-saving replaces the figure", rewritten?.tokens, 24_000)
+
         // MARK: Round trip
 
         BudStore.save(Conversation(
@@ -1836,7 +1860,14 @@ public enum BudSelfTest {
             turns: [Turn(role: .user, segments: [.text(id: "a", text: "a much older question about otters")])]
         ))
         let listed = BudStore.list()
-        c.equal("the list has all three", listed.count, 3)
+        // The fixtures that must be there, not a total. A total fails the moment
+        // any other case in this suite saves a conversation, which says nothing
+        // about whether the list works — the same trap the ordering check below
+        // already fell into once.
+        c.check(
+            "the list holds every fixture",
+            Set(listed.map(\.id)).isSuperset(of: ["conv_0", "conv_1", "conv_pair"])
+        )
         // The ordering contract, not a particular row: asserting which id lands
         // first makes the check fail whenever an unrelated fixture is added,
         // which is how it failed.

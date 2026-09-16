@@ -33,7 +33,7 @@ public final class BudDatabase: @unchecked Sendable {
     /// Bumped when the schema changes. `user_version` is SQLite's own slot for
     /// this, which is better than a table of our own: it cannot be dropped by a
     /// stray query and it is read without preparing a statement.
-    public static let schemaVersion = 1
+    public static let schemaVersion = 2
 
     public static var defaultURL: URL {
         BudConfigLoader.budDirectory.appendingPathComponent("bud.sqlite")
@@ -75,9 +75,43 @@ public final class BudDatabase: @unchecked Sendable {
 
     // MARK: - Schema
 
+    /// Copies the database aside before the schema changes.
+    ///
+    /// `VACUUM INTO` rather than a file copy. A database in WAL mode is its main
+    /// file *plus* the write-ahead log, and copying only the first loses every
+    /// transaction that has not been checkpointed — which is all of the recent
+    /// ones. This is the one operation that rewrites data nobody can regenerate,
+    /// so it is the one place worth paying for a snapshot.
+    private func backUpBeforeMigrating(from version: Int) {
+        let destination = BudConfigLoader.budDirectory
+            .appendingPathComponent("bud.sqlite.backup-v\(version)")
+        guard !FileManager.default.fileExists(atPath: destination.path) else { return }
+        _ = exec("VACUUM INTO '\(destination.path)';")
+        // Same permissions as the database it copies. A backup of a private
+        // conversation is not less private for being a backup.
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o600], ofItemAtPath: destination.path
+        )
+    }
+
+    /// Adds a column when the table does not already have it.
+    private func addColumnIfMissing(_ name: String, in table: String, definition: String) {
+        let existing = read { handle -> Set<String> in
+            guard let statement = Statement(handle, "PRAGMA table_info(\(table));") else { return [] }
+            var names: Set<String> = []
+            while statement.next() { names.insert(statement.string(1) ?? "") }
+            return names
+        } ?? []
+        guard !existing.contains(name) else { return }
+        exec("ALTER TABLE \(table) ADD COLUMN \(name) \(definition);")
+    }
+
     private func migrate() {
         let current = int("PRAGMA user_version;")
         guard current < Self.schemaVersion else { return }
+        // Before anything is rewritten. A database that has a version is one
+        // somebody has been using.
+        if current > 0 { backUpBeforeMigrating(from: current) }
         exec("""
         CREATE TABLE IF NOT EXISTS conversations (
             id          TEXT PRIMARY KEY,
@@ -85,7 +119,11 @@ public final class BudDatabase: @unchecked Sendable {
             created_at  REAL NOT NULL,
             updated_at  REAL NOT NULL,
             provider    TEXT,
-            model       TEXT
+            model       TEXT,
+            -- v2. What this conversation has cost so far, so reopening it shows
+            -- the same figure it showed when it was closed.
+            prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+            completion_tokens INTEGER NOT NULL DEFAULT 0
         );
 
         -- One row per visible turn. The turn is stored as its own JSON rather
@@ -151,6 +189,12 @@ public final class BudDatabase: @unchecked Sendable {
             value TEXT
         );
         """)
+        // Both paths reach here: a database created just now has these columns
+        // from the statement above, an older one does not. Checking the table
+        // rather than the version means running this twice is harmless.
+        addColumnIfMissing("prompt_tokens", in: "conversations", definition: "INTEGER NOT NULL DEFAULT 0")
+        addColumnIfMissing("completion_tokens", in: "conversations", definition: "INTEGER NOT NULL DEFAULT 0")
+
         exec("PRAGMA user_version = \(Self.schemaVersion);")
     }
 

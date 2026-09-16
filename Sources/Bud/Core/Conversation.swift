@@ -14,6 +14,12 @@ public struct Conversation: Sendable, Identifiable, Codable {
     public var updatedAt: Date
     public var turns: [Turn]
     public var messages: [ChatMessage]
+    /// What this conversation has cost, kept with it so the figure survives being
+    /// closed and reopened.
+    public var promptTokens: Int
+    public var completionTokens: Int
+
+    public var totalTokens: Int { promptTokens + completionTokens }
 
     public init(
         id: String = UUID().uuidString,
@@ -21,7 +27,9 @@ public struct Conversation: Sendable, Identifiable, Codable {
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         turns: [Turn] = [],
-        messages: [ChatMessage] = []
+        messages: [ChatMessage] = [],
+        promptTokens: Int = 0,
+        completionTokens: Int = 0
     ) {
         self.id = id
         self.title = title
@@ -29,6 +37,8 @@ public struct Conversation: Sendable, Identifiable, Codable {
         self.updatedAt = updatedAt
         self.turns = turns
         self.messages = messages
+        self.promptTokens = promptTokens
+        self.completionTokens = completionTokens
     }
 
     public var isEmpty: Bool { turns.isEmpty }

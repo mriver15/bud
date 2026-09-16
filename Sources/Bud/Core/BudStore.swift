@@ -9,13 +9,31 @@ public struct ConversationSummary: Sendable, Identifiable, Equatable {
     public let turnCount: Int
     /// The opening of the last thing said, for the second line of a row.
     public let preview: String
+    /// What this conversation cost, so the archive can say which of them were
+    /// expensive rather than only how long they were. Kept apart rather than
+    /// summed: a reopened conversation seeds the live counters from these, and a
+    /// total alone would turn every historical figure into "all prompt".
+    public let promptTokens: Int
+    public let completionTokens: Int
 
-    public init(id: String, title: String, updatedAt: Date, turnCount: Int, preview: String) {
+    public var tokens: Int { promptTokens + completionTokens }
+
+    public init(
+        id: String,
+        title: String,
+        updatedAt: Date,
+        turnCount: Int,
+        preview: String,
+        promptTokens: Int = 0,
+        completionTokens: Int = 0
+    ) {
         self.id = id
         self.title = title
         self.updatedAt = updatedAt
         self.turnCount = turnCount
         self.preview = preview
+        self.promptTokens = promptTokens
+        self.completionTokens = completionTokens
     }
 }
 
@@ -57,17 +75,22 @@ public enum BudStore {
 
         db.transaction { handle in
             guard let upsert = Statement(handle, """
-                INSERT INTO conversations (id, title, created_at, updated_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO conversations
+                    (id, title, created_at, updated_at, prompt_tokens, completion_tokens)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     title = excluded.title,
-                    updated_at = excluded.updated_at;
+                    updated_at = excluded.updated_at,
+                    prompt_tokens = excluded.prompt_tokens,
+                    completion_tokens = excluded.completion_tokens;
                 """)
             else { return }
             upsert.bind(1, conversation.id)
                 .bind(2, conversation.title)
                 .bind(3, conversation.createdAt)
                 .bind(4, conversation.updatedAt)
+                .bind(5, conversation.promptTokens)
+                .bind(6, conversation.completionTokens)
                 .run()
 
             guard let prune = Statement(handle, """
@@ -160,7 +183,8 @@ public enum BudStore {
                        (SELECT COUNT(*) FROM turns t WHERE t.conversation_id = c.id),
                        COALESCE((SELECT t.payload FROM turns t
                                  WHERE t.conversation_id = c.id
-                                 ORDER BY t.ordinal DESC LIMIT 1), '')
+                                 ORDER BY t.ordinal DESC LIMIT 1), ''),
+                       c.prompt_tokens, c.completion_tokens
                 FROM conversations c
                 ORDER BY c.updated_at DESC
                 LIMIT ?;
@@ -175,7 +199,9 @@ public enum BudStore {
                     title: statement.string(1) ?? "",
                     updatedAt: statement.date(2) ?? Date(),
                     turnCount: statement.int(3),
-                    preview: preview(fromTurnPayload: payload)
+                    preview: preview(fromTurnPayload: payload),
+                    promptTokens: statement.int(5),
+                    completionTokens: statement.int(6)
                 ))
             }
             return rows
@@ -214,7 +240,8 @@ public enum BudStore {
                        (SELECT COUNT(*) FROM turns t WHERE t.conversation_id = c.id),
                        COALESCE((SELECT t.payload FROM turns t
                                  WHERE t.conversation_id = c.id
-                                 ORDER BY t.ordinal DESC LIMIT 1), '')
+                                 ORDER BY t.ordinal DESC LIMIT 1), ''),
+                       c.prompt_tokens, c.completion_tokens
                 FROM conversations c
                 WHERE c.title LIKE ?
                    OR EXISTS (SELECT 1 FROM turns t
@@ -231,7 +258,9 @@ public enum BudStore {
                     title: statement.string(1) ?? "",
                     updatedAt: statement.date(2) ?? Date(),
                     turnCount: statement.int(3),
-                    preview: preview(fromTurnPayload: statement.string(4) ?? "")
+                    preview: preview(fromTurnPayload: statement.string(4) ?? ""),
+                    promptTokens: statement.int(5),
+                    completionTokens: statement.int(6)
                 ))
             }
             return rows

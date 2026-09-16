@@ -237,6 +237,16 @@ public final class AppModel {
     public func send(_ text: String? = nil) async {
         let message = (text ?? composerText).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty, !runtime.isStreaming else { return }
+        // Refused here rather than inside the runtime so the reason is visible: a
+        // turn that started and then declined to call the model would look like a
+        // failure rather than a limit. The ceiling is on the conversation, so a
+        // new chat clears it without anything being reset by hand.
+        if isOverBudget {
+            errorMessage = "This conversation has spent its "
+                + "\(BudFormat.tokens(conversationTokens)) token budget. "
+                + "Raise it in Settings › General, or start a new chat."
+            return
+        }
         composerText = ""
         errorMessage = nil
         runtime.send(message)
@@ -245,6 +255,33 @@ public final class AppModel {
     }
 
     public func stop() { runtime.stop() }
+
+    // MARK: - Cost
+
+    /// What the open conversation has spent, prompt and completion together.
+    public var conversationTokens: Int {
+        let usage = env.conversationUsage
+        return usage.prompt + usage.completion
+    }
+
+    public var conversationUsage: (prompt: Int, completion: Int) { env.conversationUsage }
+
+    /// The ceiling for one conversation, or nil when none is set.
+    public var conversationBudget: Int? {
+        config.conversationTokenBudget > 0 ? config.conversationTokenBudget : nil
+    }
+
+    /// Whether the conversation has spent its ceiling.
+    public var isOverBudget: Bool {
+        guard let budget = conversationBudget else { return false }
+        return conversationTokens >= budget
+    }
+
+    /// What is left before Bud stops asking, as a fraction of the ceiling.
+    public var budgetFraction: Double? {
+        guard let budget = conversationBudget else { return nil }
+        return min(1, Double(conversationTokens) / Double(budget))
+    }
 
     // MARK: - Message actions
 
@@ -301,6 +338,8 @@ public final class AppModel {
 
     public func newConversation() {
         persistConversations()
+        // Before the id changes, so the conversation being left keeps its figure.
+        env.resetConversationUsage()
         currentConversationID = UUID().uuidString
         runtime.clear()
         composerText = ""
@@ -313,6 +352,14 @@ public final class AppModel {
     public func openConversation(id: String) {
         guard id != currentConversationID else { return }
         persistConversations()
+        // Seeded from the saved conversation, so the figure the header shows is
+        // the one this conversation cost rather than the one this session has
+        // spent since it was opened.
+        let summary = conversations.first { $0.id == id }
+        env.resetConversationUsage(
+            prompt: summary?.promptTokens ?? 0,
+            completion: summary?.completionTokens ?? 0
+        )
         currentConversationID = id
         BudStore.setCurrentConversation(id)
         guard let saved = BudStore.load(id: id) else { return }
@@ -375,13 +422,16 @@ public final class AppModel {
         guard !turns.isEmpty else { return }
 
         let previous = BudStore.load(id: id)
+        let spent = env.conversationUsage
         BudStore.save(Conversation(
             id: id,
             title: Conversation.title(from: turns),
             createdAt: previous?.createdAt ?? Date(),
             updatedAt: Date(),
             turns: turns,
-            messages: runtime.modelHistory
+            messages: runtime.modelHistory,
+            promptTokens: spent.prompt,
+            completionTokens: spent.completion
         ))
         refreshConversations()
     }

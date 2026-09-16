@@ -88,6 +88,7 @@ struct RootView: View {
             HStack(spacing: Bud.Space.xs) {
                 providerMenu
                 connectionPill(showsText: showsStatusText)
+                spendChip(showsText: showsStatusText)
             }
 
             Spacer(minLength: Bud.Space.xs)
@@ -195,6 +196,50 @@ struct RootView: View {
         .help(total == 0
               ? "No MCP servers connected"
               : "\(ready) of \(total) MCP servers ready · \(model.availableTools.count) tools")
+    }
+
+    /// What this conversation has cost.
+    ///
+    /// Beside the connection state because both describe the session you are in,
+    /// and a figure that only appears once you go looking for it changes no
+    /// decision. Absent at zero: a chat that has spent nothing does not need to
+    /// say so.
+    @ViewBuilder
+    private func spendChip(showsText: Bool) -> some View {
+        let tokens = model.conversationTokens
+        if tokens > 0 {
+            let usage = model.conversationUsage
+            let fraction = model.budgetFraction
+            HStack(spacing: Bud.Space.xs) {
+                Image(systemName: "gauge.with.dots.needle.bottom.50percent")
+                    .font(.system(size: 9, weight: .medium))
+                // The number is the cheapest thing to lose when space is tight:
+                // the tooltip spells the whole thing out either way.
+                if showsText {
+                    Text(BudFormat.tokens(tokens))
+                        .font(Bud.Font.caption)
+                        .lineLimit(1)
+                }
+            }
+            .foregroundStyle(spendTint(fraction))
+            .help(spendHelp(usage: usage, fraction: fraction))
+        }
+    }
+
+    private func spendTint(_ fraction: Double?) -> Color {
+        guard let fraction else { return .secondary }
+        if fraction >= 1 { return Bud.Palette.danger }
+        if fraction >= 0.8 { return Bud.Palette.warning }
+        return .secondary
+    }
+
+    private func spendHelp(usage: (prompt: Int, completion: Int), fraction: Double?) -> String {
+        var text = "This conversation: \(BudFormat.tokens(usage.prompt)) in, "
+            + "\(BudFormat.tokens(usage.completion)) out"
+        if let budget = model.conversationBudget, let fraction {
+            text += " · \(Int(fraction * 100))% of a \(BudFormat.tokens(budget)) budget"
+        }
+        return text
     }
 
     private func surfacePicker(showsLabels: Bool) -> some View {

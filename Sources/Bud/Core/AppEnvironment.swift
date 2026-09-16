@@ -12,6 +12,8 @@ public final class AppEnvironment: @unchecked Sendable {
     private var _config: BudConfig
     private var _promptTokens = 0
     private var _completionTokens = 0
+    private var _conversationPrompt = 0
+    private var _conversationCompletion = 0
 
     public let registry = ToolRegistry()
 
@@ -47,6 +49,12 @@ public final class AppEnvironment: @unchecked Sendable {
         lock.withLock {
             _promptTokens += prompt
             _completionTokens += completion
+            // Attributed here rather than by the caller because every path that
+            // spends tokens — rounds, retries, subagents a turn spawned — comes
+            // through this one function, and a per-conversation figure assembled
+            // from some of them would be wrong in the direction that matters.
+            _conversationPrompt += prompt
+            _conversationCompletion += completion
         }
     }
 
@@ -54,6 +62,19 @@ public final class AppEnvironment: @unchecked Sendable {
         lock.withLock {
             _promptTokens = 0
             _completionTokens = 0
+        }
+    }
+
+    /// What the open conversation has cost. Reset when the conversation changes,
+    /// and seeded from the archive when one is reopened.
+    public var conversationUsage: (prompt: Int, completion: Int) {
+        lock.withLock { (_conversationPrompt, _conversationCompletion) }
+    }
+
+    public func resetConversationUsage(prompt: Int = 0, completion: Int = 0) {
+        lock.withLock {
+            _conversationPrompt = prompt
+            _conversationCompletion = completion
         }
     }
 }
