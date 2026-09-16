@@ -18,6 +18,8 @@ public struct Conversation: Sendable, Identifiable, Codable {
     /// closed and reopened.
     public var promptTokens: Int
     public var completionTokens: Int
+    /// Kept at the top of the archive regardless of when it was last touched.
+    public var isPinned: Bool
 
     public var totalTokens: Int { promptTokens + completionTokens }
 
@@ -29,7 +31,8 @@ public struct Conversation: Sendable, Identifiable, Codable {
         turns: [Turn] = [],
         messages: [ChatMessage] = [],
         promptTokens: Int = 0,
-        completionTokens: Int = 0
+        completionTokens: Int = 0,
+        isPinned: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -39,6 +42,7 @@ public struct Conversation: Sendable, Identifiable, Codable {
         self.messages = messages
         self.promptTokens = promptTokens
         self.completionTokens = completionTokens
+        self.isPinned = isPinned
     }
 
     public var isEmpty: Bool { turns.isEmpty }
@@ -88,5 +92,67 @@ public struct ConversationArchive: Sendable, Codable {
         self.version = version
         self.currentID = currentID
         self.conversations = conversations
+    }
+}
+
+// MARK: - Export
+
+extension Conversation {
+    /// The conversation as a Markdown document.
+    ///
+    /// Built from the turns rather than the model-facing history. The turns are
+    /// what was on screen; the history is a wire format, and exporting it would
+    /// put tool-call scaffolding in a document meant to be read.
+    ///
+    /// Tool output is included but clipped. One tool call can be larger than the
+    /// whole conversation around it, and an export is for keeping, not for
+    /// reconstituting a session.
+    public func markdown(now: Date = Date()) -> String {
+        var out = "# \(title)\n\n"
+        let stamp = now.formatted(date: .abbreviated, time: .shortened)
+        let turns_ = turns.count == 1 ? "1 turn" : "\(turns.count) turns"
+        if totalTokens > 0 {
+            out += "_\(turns_) · \(totalTokens) tokens · exported \(stamp)_\n\n"
+        } else {
+            out += "_\(turns_) · exported \(stamp)_\n\n"
+        }
+
+        for turn in turns {
+            out += turn.role == .user ? "### You\n\n" : "### Bud\n\n"
+            for segment in turn.segments {
+                switch segment {
+                case .text(_, let text):
+                    out += text.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n"
+
+                case .reasoning(_, let text):
+                    // Quoted: in the app this is folded away by default, and a
+                    // wall of it would bury the answer it was working toward.
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { break }
+                    out += trimmed.split(separator: "\n", omittingEmptySubsequences: false)
+                        .map { "> \($0)" }
+                        .joined(separator: "\n") + "\n\n"
+
+                case .tool(_, let call, let providerName, let state, let resultText, _):
+                    out += "> `\(call.name)` · \(providerName) · \(state.rawValue)\n\n"
+                    if let resultText, !resultText.isEmpty {
+                        out += "```\n\(Self.clipped(resultText))\n```\n\n"
+                    }
+
+                case .notice(_, let text, _):
+                    out += "> \(text)\n\n"
+                }
+            }
+            if let error = turn.error, !error.isEmpty {
+                out += "> ✗ \(error)\n\n"
+            }
+        }
+        return out
+    }
+
+    private static func clipped(_ text: String, limit: Int = 4_000) -> String {
+        guard text.count > limit else { return text }
+        let dropped = text.count - limit
+        return String(text.prefix(limit)) + "\n…[clipped \(dropped) characters]"
     }
 }

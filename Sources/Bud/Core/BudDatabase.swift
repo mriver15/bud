@@ -33,7 +33,7 @@ public final class BudDatabase: @unchecked Sendable {
     /// Bumped when the schema changes. `user_version` is SQLite's own slot for
     /// this, which is better than a table of our own: it cannot be dropped by a
     /// stray query and it is read without preparing a statement.
-    public static let schemaVersion = 2
+    public static let schemaVersion = 3
 
     public static var defaultURL: URL {
         BudConfigLoader.budDirectory.appendingPathComponent("bud.sqlite")
@@ -123,7 +123,10 @@ public final class BudDatabase: @unchecked Sendable {
             -- v2. What this conversation has cost so far, so reopening it shows
             -- the same figure it showed when it was closed.
             prompt_tokens     INTEGER NOT NULL DEFAULT 0,
-            completion_tokens INTEGER NOT NULL DEFAULT 0
+            completion_tokens INTEGER NOT NULL DEFAULT 0,
+            -- v3. Pinned conversations sort above the rest, which is the only
+            -- thing that makes an archive of a hundred usable.
+            pinned      INTEGER NOT NULL DEFAULT 0
         );
 
         -- One row per visible turn. The turn is stored as its own JSON rather
@@ -194,6 +197,7 @@ public final class BudDatabase: @unchecked Sendable {
         // rather than the version means running this twice is harmless.
         addColumnIfMissing("prompt_tokens", in: "conversations", definition: "INTEGER NOT NULL DEFAULT 0")
         addColumnIfMissing("completion_tokens", in: "conversations", definition: "INTEGER NOT NULL DEFAULT 0")
+        addColumnIfMissing("pinned", in: "conversations", definition: "INTEGER NOT NULL DEFAULT 0")
 
         exec("PRAGMA user_version = \(Self.schemaVersion);")
     }

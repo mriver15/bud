@@ -382,6 +382,42 @@ public final class AppModel {
         refreshConversations()
     }
 
+    /// Keeps a conversation at the top of the archive, or lets it fall back into
+    /// date order.
+    public func togglePin(id: String) {
+        let pinned = conversations.first { $0.id == id }?.isPinned ?? false
+        BudStore.setPinned(!pinned, id: id)
+        refreshConversations()
+    }
+
+    /// Renames a conversation.
+    ///
+    /// A blank name is refused rather than stored: the automatic title is what
+    /// the archive falls back on, and an empty row would have nothing to click.
+    public func renameConversation(id: String, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        BudStore.setTitle(trimmed, id: id)
+        refreshConversations()
+    }
+
+    /// The conversation as Markdown, or nil when it is no longer in the archive.
+    public func markdown(for id: String) -> String? {
+        guard let saved = BudStore.load(id: id) else { return nil }
+        let summary = conversations.first { $0.id == id }
+        return Conversation(
+            id: saved.id,
+            title: summary?.title ?? Conversation.title(from: saved.turns),
+            createdAt: saved.createdAt,
+            updatedAt: saved.updatedAt,
+            turns: saved.turns,
+            messages: saved.messages,
+            promptTokens: summary?.promptTokens ?? 0,
+            completionTokens: summary?.completionTokens ?? 0,
+            isPinned: summary?.isPinned ?? false
+        ).markdown()
+    }
+
     /// Narrows the history list. An empty query restores the full list.
     public func searchConversations(_ query: String) {
         conversationQuery = query
@@ -425,7 +461,10 @@ public final class AppModel {
         let spent = env.conversationUsage
         BudStore.save(Conversation(
             id: id,
-            title: Conversation.title(from: turns),
+            // A stored title wins once there is one. It is derived from the first
+            // thing said, and recomputing it on every save would silently undo a
+            // rename — the one edit the archive offers — on the next turn.
+            title: previous?.title ?? Conversation.title(from: turns),
             createdAt: previous?.createdAt ?? Date(),
             updatedAt: Date(),
             turns: turns,

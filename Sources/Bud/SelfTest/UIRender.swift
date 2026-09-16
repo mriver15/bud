@@ -128,6 +128,22 @@ public enum UIRender {
             into: &written
         )
 
+        // MARK: History
+
+        // Against the real archive rather than fixtures, so the rows in the
+        // picture are rows that exist. Empty when there is nothing saved, which
+        // is itself a state worth seeing.
+        emit(
+            "history",
+            ConversationHistoryView(model: model)
+                .frame(width: Bud.panelWidth, height: Bud.panelHeight)
+                .background(Color.black.opacity(0.30)),
+            width: Bud.panelWidth,
+            height: Bud.panelHeight,
+            directory: directory,
+            into: &written
+        )
+
         // MARK: Find
 
         // The find state is driven directly. The bar itself needs a keystroke to

@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The whole conversation archive: everything Bud has saved, with the search and
 /// the actions that a dropdown of five cannot carry.
@@ -19,6 +21,11 @@ struct ConversationHistoryView: View {
     /// scanning rather than aiming at, so the click arms the delete and the
     /// dialog is what performs it — the same shape as removing an MCP server.
     @BudState private var pendingDelete: ConversationSummary?
+    /// The conversation whose name is being edited, and what is in the field.
+    /// Held here rather than in the row because only one can be open at a time
+    /// and the row is rebuilt on every refresh.
+    @BudState private var renaming: ConversationSummary?
+    @BudState private var draftName = ""
 
     init(model: AppModel) {
         self.model = model
@@ -148,7 +155,14 @@ struct ConversationHistoryView: View {
                         conversation: conversation,
                         isCurrent: conversation.id == model.currentConversationID,
                         open: { open(conversation) },
-                        confirmDelete: { pendingDelete = conversation }
+                        confirmDelete: { pendingDelete = conversation },
+                        togglePin: { model.togglePin(id: conversation.id) },
+                        rename: {
+                            draftName = conversation.title
+                            renaming = conversation
+                        },
+                        copyMarkdown: { copyMarkdown(conversation) },
+                        exportMarkdown: { export(conversation) }
                     )
                 }
             }
@@ -188,6 +202,36 @@ struct ConversationHistoryView: View {
     private func open(_ conversation: ConversationSummary) {
         model.openConversation(id: conversation.id)
         NotificationCenter.default.post(name: .budShowChat, object: nil)
+    }
+
+    /// Writes the conversation to a file the user picks.
+    ///
+    /// The save panel rather than a fixed location: an export is something
+    /// somebody does once, on purpose, and where it lands is theirs to decide.
+    private func export(_ conversation: ConversationSummary) {
+        guard let markdown = model.markdown(for: conversation.id) else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = Self.fileName(for: conversation.title)
+        panel.allowedContentTypes = [UTType(filenameExtension: "md")].compactMap { $0 }
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        try? markdown.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private func copyMarkdown(_ conversation: ConversationSummary) {
+        guard let markdown = model.markdown(for: conversation.id) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(markdown, forType: .string)
+    }
+
+    /// A title with the path separators taken out. A slash in a conversation
+    /// name would otherwise be read as a directory that does not exist.
+    private static func fileName(for title: String) -> String {
+        let cleaned = title
+            .components(separatedBy: CharacterSet(charactersIn: "/\\:*?\"<>|"))
+            .joined(separator: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (cleaned.isEmpty ? "Conversation" : String(cleaned.prefix(80))) + ".md"
     }
 
     /// A new chat is only useful on the composer, so the panel goes there too.
@@ -233,6 +277,10 @@ private struct ConversationRow: View {
     let isCurrent: Bool
     let open: () -> Void
     let confirmDelete: () -> Void
+    let togglePin: () -> Void
+    let rename: () -> Void
+    let copyMarkdown: () -> Void
+    let exportMarkdown: () -> Void
 
     @BudState private var isHovering = false
 
@@ -258,11 +306,29 @@ private struct ConversationRow: View {
             }
         }
         .onHover { isHovering = $0 }
+        // On the row rather than on a button of its own: these are all things
+        // done to a conversation you are looking at in a list, and a row of six
+        // buttons would be louder than the list they sit in.
+        .contextMenu {
+            Button(conversation.isPinned ? "Unpin" : "Pin") { togglePin() }
+            Button("Rename…") { rename() }
+            Divider()
+            Button("Copy as Markdown") { copyMarkdown() }
+            Button("Export Markdown…") { exportMarkdown() }
+            Divider()
+            Button("Delete…", role: .destructive) { confirmDelete() }
+        }
     }
 
     private var summary: some View {
         VStack(alignment: .leading, spacing: Bud.Space.xs) {
             HStack(spacing: Bud.Space.xs) {
+                if conversation.isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Bud.Palette.accent)
+                        .help("Pinned to the top")
+                }
                 Text(conversation.title)
                     .font(Bud.Font.body)
                     .lineLimit(1)

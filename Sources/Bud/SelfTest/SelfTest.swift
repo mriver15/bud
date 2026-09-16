@@ -1811,6 +1811,59 @@ public enum BudSelfTest {
         let rewritten = BudStore.list().first { $0.id == "conv_cost" }
         c.equal("re-saving replaces the figure", rewritten?.tokens, 24_000)
 
+        // MARK: Pinning and export
+
+        BudStore.save(Conversation(id: "conv_pin", title: "pinned one", turns: [turn]))
+        BudStore.save(Conversation(id: "conv_free", title: "unpinned one", turns: [turn]))
+        BudStore.setPinned(true, id: "conv_pin")
+        let pinned = BudStore.list()
+        c.equal("a pinned conversation sorts first", pinned.first?.id, "conv_pin")
+        c.equal("pinning is remembered", pinned.first?.isPinned, true)
+        c.equal("an unpinned conversation is not", pinned.first { $0.id == "conv_free" }?.isPinned, false)
+
+        // A rename is the only edit the archive offers, and it is silently undone
+        // by any path that recomputes the title from the transcript — which the
+        // save path does, on every turn.
+        BudStore.setTitle("renamed by hand", id: "conv_pin")
+        c.equal("a rename sticks", BudStore.load(id: "conv_pin")?.title, "renamed by hand")
+
+        let exported = Conversation(
+            id: "conv_1", title: "kept",
+            turns: [
+                Turn(role: .user, segments: [.text(id: "u1", text: "what is the state of things")]),
+                Turn(role: .assistant, segments: [
+                    .reasoning(id: "r1", text: "checking first"),
+                    .text(id: "a1", text: "**All good.**"),
+                    .tool(
+                        id: "s1",
+                        call: ToolCall(id: "c9", name: "infra__status", arguments: "{}"),
+                        providerName: "Infra", state: .succeeded, resultText: "green", ui: nil
+                    ),
+                ]),
+            ]
+        ).markdown(now: Date(timeIntervalSince1970: 1_700_000_000))
+        c.check("the export names the conversation", exported.contains("# kept"))
+        c.check("the export keeps what was asked", exported.contains("what is the state of things"))
+        c.check("the export keeps the answer's markdown", exported.contains("**All good.**"))
+        c.check("the export quotes reasoning rather than burying the answer", exported.contains("> checking first"))
+        c.check("the export records the tool call", exported.contains("`infra__status`"))
+        c.check("the export fences tool output", exported.contains("```\ngreen\n```"))
+
+        // A tool call can be larger than the conversation around it.
+        let bulky = Conversation(
+            id: "conv_huge", title: "huge",
+            turns: [Turn(role: .assistant, segments: [
+                .tool(
+                    id: "s2",
+                    call: ToolCall(id: "c10", name: "dump", arguments: "{}"),
+                    providerName: "Infra", state: .succeeded,
+                    resultText: String(repeating: "x", count: 9_000), ui: nil
+                ),
+            ])]
+        ).markdown(now: Date(timeIntervalSince1970: 1_700_000_000))
+        c.check("a huge tool result is clipped", bulky.contains("clipped"))
+        c.check("the clipped export stays small", bulky.count < 6_000)
+
         // MARK: Round trip
 
         BudStore.save(Conversation(
@@ -1870,9 +1923,14 @@ public enum BudSelfTest {
         )
         // The ordering contract, not a particular row: asserting which id lands
         // first makes the check fail whenever an unrelated fixture is added,
-        // which is how it failed.
-        c.check("newest first",
-                zip(listed, listed.dropFirst()).allSatisfy { $0.updatedAt >= $1.updatedAt })
+        // which is how it failed. Pinned conversations are the deliberate
+        // exception to it, so the comparison is within each group.
+        let unpinned = listed.filter { !$0.isPinned }
+        c.check("newest first among the unpinned",
+                zip(unpinned, unpinned.dropFirst()).allSatisfy { $0.updatedAt >= $1.updatedAt })
+        let firstUnpinned = listed.firstIndex { !$0.isPinned } ?? listed.count
+        c.check("everything pinned comes before everything unpinned",
+                !listed.prefix(firstUnpinned).contains { !$0.isPinned })
         let kept = listed.first { $0.id == "conv_1" }
         c.equal("with a turn count", kept?.turnCount, 1)
         c.check("and a preview of the last thing said", !(kept?.preview.isEmpty ?? true))

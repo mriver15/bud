@@ -15,6 +15,7 @@ public struct ConversationSummary: Sendable, Identifiable, Equatable {
     /// total alone would turn every historical figure into "all prompt".
     public let promptTokens: Int
     public let completionTokens: Int
+    public let isPinned: Bool
 
     public var tokens: Int { promptTokens + completionTokens }
 
@@ -25,7 +26,8 @@ public struct ConversationSummary: Sendable, Identifiable, Equatable {
         turnCount: Int,
         preview: String,
         promptTokens: Int = 0,
-        completionTokens: Int = 0
+        completionTokens: Int = 0,
+        isPinned: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -34,6 +36,7 @@ public struct ConversationSummary: Sendable, Identifiable, Equatable {
         self.preview = preview
         self.promptTokens = promptTokens
         self.completionTokens = completionTokens
+        self.isPinned = isPinned
     }
 }
 
@@ -76,13 +79,15 @@ public enum BudStore {
         db.transaction { handle in
             guard let upsert = Statement(handle, """
                 INSERT INTO conversations
-                    (id, title, created_at, updated_at, prompt_tokens, completion_tokens)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (id, title, created_at, updated_at,
+                     prompt_tokens, completion_tokens, pinned)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     title = excluded.title,
                     updated_at = excluded.updated_at,
                     prompt_tokens = excluded.prompt_tokens,
-                    completion_tokens = excluded.completion_tokens;
+                    completion_tokens = excluded.completion_tokens,
+                    pinned = excluded.pinned;
                 """)
             else { return }
             upsert.bind(1, conversation.id)
@@ -91,6 +96,7 @@ public enum BudStore {
                 .bind(4, conversation.updatedAt)
                 .bind(5, conversation.promptTokens)
                 .bind(6, conversation.completionTokens)
+                .bind(7, conversation.isPinned ? 1 : 0)
                 .run()
 
             guard let prune = Statement(handle, """
@@ -132,6 +138,28 @@ public enum BudStore {
                     .bind(4, message)
                     .run()
             }
+        }
+    }
+
+    /// Keeps a conversation at the top of the archive, or lets it fall back into
+    /// date order.
+    public static func setPinned(_ pinned: Bool, id: String) {
+        db.transaction { handle in
+            Statement(handle, "UPDATE conversations SET pinned = ? WHERE id = ?;")?
+                .bind(1, pinned ? 1 : 0)
+                .bind(2, id)
+                .run()
+        }
+    }
+
+    /// Renames a conversation. The title is written as given, and from then on
+    /// `save` leaves it alone.
+    public static func setTitle(_ title: String, id: String) {
+        db.transaction { handle in
+            Statement(handle, "UPDATE conversations SET title = ? WHERE id = ?;")?
+                .bind(1, title)
+                .bind(2, id)
+                .run()
         }
     }
 
@@ -184,9 +212,9 @@ public enum BudStore {
                        COALESCE((SELECT t.payload FROM turns t
                                  WHERE t.conversation_id = c.id
                                  ORDER BY t.ordinal DESC LIMIT 1), ''),
-                       c.prompt_tokens, c.completion_tokens
+                       c.prompt_tokens, c.completion_tokens, c.pinned
                 FROM conversations c
-                ORDER BY c.updated_at DESC
+                ORDER BY c.pinned DESC, c.updated_at DESC
                 LIMIT ?;
                 """) else { return [] }
             statement.bind(1, limit)
@@ -201,7 +229,8 @@ public enum BudStore {
                     turnCount: statement.int(3),
                     preview: preview(fromTurnPayload: payload),
                     promptTokens: statement.int(5),
-                    completionTokens: statement.int(6)
+                    completionTokens: statement.int(6),
+                    isPinned: statement.int(7) != 0
                 ))
             }
             return rows
@@ -241,12 +270,12 @@ public enum BudStore {
                        COALESCE((SELECT t.payload FROM turns t
                                  WHERE t.conversation_id = c.id
                                  ORDER BY t.ordinal DESC LIMIT 1), ''),
-                       c.prompt_tokens, c.completion_tokens
+                       c.prompt_tokens, c.completion_tokens, c.pinned
                 FROM conversations c
                 WHERE c.title LIKE ?
                    OR EXISTS (SELECT 1 FROM turns t
                               WHERE t.conversation_id = c.id AND t.payload LIKE ?)
-                ORDER BY c.updated_at DESC
+                ORDER BY c.pinned DESC, c.updated_at DESC
                 LIMIT ?;
                 """) else { return [] }
             statement.bind(1, needle).bind(2, needle).bind(3, limit)
@@ -260,7 +289,8 @@ public enum BudStore {
                     turnCount: statement.int(3),
                     preview: preview(fromTurnPayload: statement.string(4) ?? ""),
                     promptTokens: statement.int(5),
-                    completionTokens: statement.int(6)
+                    completionTokens: statement.int(6),
+                    isPinned: statement.int(7) != 0
                 ))
             }
             return rows
