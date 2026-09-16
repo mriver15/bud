@@ -95,10 +95,10 @@ public final class AppModel {
         }
     }
 
-    /// Bumped whenever something wants the caret in the composer — currently
-    /// expanding Bud from the collapsed bubble, so a click on it lands ready to
-    /// type. A counter rather than a flag because the request has to be
-    /// observable even when it repeats.
+    /// Bumped whenever something wants the caret in the composer: text arriving
+    /// from outside the panel, so a Services invocation or a dropped file lands
+    /// ready to send rather than one click short of it. A counter rather than a
+    /// flag because the request has to be observable even when it repeats.
     public var composerFocusToken = 0
 
     public func focusComposer() {

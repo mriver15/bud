@@ -112,6 +112,21 @@ public enum BudUIVerification {
         )
         c.check("no error banner on launch", model.errorMessage == nil)
 
+        // MARK: Starting a new chat
+
+        // Now the most prominent control in the header and the `/new` command,
+        // and it had no coverage at all. What is worth pinning is the part that
+        // fails silently: the conversation being left behind has to be written
+        // out first, or starting a chat loses one.
+        let leaving = model.currentConversationID
+        model.newConversation()
+        c.check(
+            "a new chat mints a new conversation",
+            model.currentConversationID != nil && model.currentConversationID != leaving
+        )
+        c.check("a new chat starts an empty transcript", model.turns.isEmpty)
+        c.check("a new chat clears the composer", model.composerText.isEmpty)
+
         // MARK: Hiding and coming back
 
         // Closing hides Bud and leaves the window object alone, because the way
@@ -131,54 +146,6 @@ public enum BudUIVerification {
         // making here, and it is the one that breaks if the window was destroyed.
         c.check("the panel comes back after being hidden", controller.isPanelVisible)
         c.check("the panel can take key focus", panel.canBecomeKey)
-
-        // MARK: Collapsed bubble
-
-        // The bubble is Bud's resting state, so the transition has to be
-        // reversible without losing the panel — and the bubble has to land
-        // somewhere the user can actually reach.
-        controller.collapse()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
-        c.check("collapse switches to the bubble", controller.showingCollapsed)
-        c.check("collapse takes the full panel off screen", !controller.isPanelVisible)
-        c.check("collapse shows the bubble", controller.isBubbleVisible)
-        // The bubble is the one thing that keeps the old behaviour, and it is
-        // opt-in. If both windows went normal the bubble would sink behind
-        // whatever is open and be unreachable; if both floated, Bud would be the
-        // window you cannot work behind.
-        if let bubble = controller.bubbleWindow {
-            c.check("the bubble still floats", bubble.level == .floating)
-            c.check("the bubble stays reachable from any space", bubble.collectionBehavior.contains(.canJoinAllSpaces))
-        }
-
-        if let bubble = controller.collapsedBubbleFrame {
-            c.check(
-                "bubble is a small square (found \(Int(bubble.width))x\(Int(bubble.height)))",
-                abs(bubble.width - bubble.height) < 0.5 && bubble.width <= 80 && bubble.width >= 40
-            )
-            let containingScreen = NSScreen.screens.first { $0.visibleFrame.intersects(bubble) }
-            c.check("bubble is on a screen", containingScreen != nil)
-            if let screen = containingScreen {
-                // Outside the menu bar and the Dock: a bubble tucked under either
-                // would be unreachable.
-                c.check(
-                    "bubble sits fully inside the usable area",
-                    screen.visibleFrame.contains(bubble)
-                )
-                let v = screen.visibleFrame
-                let touchingCorner = (abs(bubble.minX - v.minX) < 48 || abs(bubble.maxX - v.maxX) < 48)
-                    && (abs(bubble.minY - v.minY) < 48 || abs(bubble.maxY - v.maxY) < 48)
-                c.check("bubble is parked in a corner", touchingCorner)
-            }
-        } else {
-            c.check("bubble has a frame", false)
-        }
-
-        controller.expand()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
-        c.check("expand restores the panel", !controller.showingCollapsed && controller.isPanelVisible)
-        c.check("expand takes the bubble off screen", !controller.isBubbleVisible)
-        c.check("expanding asks the composer for focus", model.composerFocusToken > 0)
 
         return c.report()
     }

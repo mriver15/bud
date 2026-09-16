@@ -41,8 +41,8 @@ public struct Composer: View {
         }
         .onAppear { isFocused = true }
         .onChange(of: model.composerFocusToken) { _, _ in
-            // Set when Bud expands from the collapsed bubble: the panel window is
-            // ordered back in, so the caret has to be placed explicitly.
+            // Text staged from outside the panel, or the panel ordered back on
+            // screen: either way the caret has to be placed rather than assumed.
             isFocused = true
         }
     }
@@ -313,14 +313,14 @@ public struct Composer: View {
 // MARK: - Command catalog
 
 private enum SlashCommand: String, CaseIterable, Identifiable {
-    case clear, tools, settings, mcp, marketplace, agents
+    case new, tools, settings, mcp, marketplace, agents
 
     var id: String { rawValue }
     var name: String { "/" + rawValue }
 
     var summary: String {
         switch self {
-        case .clear: return "Clear the transcript"
+        case .new: return "Start a new chat"
         case .tools: return "Reload tools from every provider"
         case .settings: return "Open general settings"
         case .mcp: return "Manage MCP servers"
@@ -331,7 +331,7 @@ private enum SlashCommand: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
-        case .clear: return "eraser"
+        case .new: return "square.and.pencil"
         case .tools: return "wrench.and.screwdriver"
         case .settings: return "gearshape"
         case .mcp: return "server.rack"
@@ -343,7 +343,7 @@ private enum SlashCommand: String, CaseIterable, Identifiable {
     @MainActor
     func run(on model: AppModel) async {
         switch self {
-        case .clear: model.clearTranscript()
+        case .new: model.newConversation()
         case .tools: await model.refreshTools()
         case .settings: model.openSettings(tab: .general)
         case .mcp: model.openSettings(tab: .mcp)

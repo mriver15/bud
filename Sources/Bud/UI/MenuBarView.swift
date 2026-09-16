@@ -211,9 +211,6 @@ extension Notification.Name {
     /// outside the panel wants it visible, and must not hide it if it already
     /// is, which is what toggling would do.
     static let budShowPanel = Notification.Name("bud.showPanel")
-    /// Park Bud in a screen corner as the bubble. Only the panel's own collapse
-    /// control asks for this; nothing does it on the user's behalf.
-    static let budCollapsePanel = Notification.Name("bud.collapsePanel")
     /// Put the panel on its history surface: the full archive, beyond the few
     /// the menu bar shows. The panel keeps its surface while it is hidden, so
     /// this is a separate signal from showing the panel at all.

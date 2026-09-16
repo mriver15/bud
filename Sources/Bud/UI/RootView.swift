@@ -98,15 +98,17 @@ struct RootView: View {
                 HStack(spacing: Bud.Space.md) {
                     surfacePicker(showsLabels: showsTabLabels)
 
-                    // Collapsing is a first-class action, not a window control:
-                    // the bubble is where Bud lives when it is not being read.
-                    // It is the only way into that state — Escape and the summon
-                    // shortcut both take Bud off screen instead.
+                    // A new chat is the most likely thing anyone wants next and
+                    // the one action that had no home on this surface at all —
+                    // it lived behind ⌘N, a slash command, and a button on the
+                    // History tab, which is a strange place to go to start
+                    // something new.
                     GlassIconButton(
-                        systemImage: "arrow.down.right.and.arrow.up.left",
-                        help: "Park in the corner"
+                        systemImage: "square.and.pencil",
+                        help: "New chat (⌘N)"
                     ) {
-                        NotificationCenter.default.post(name: .budCollapsePanel, object: nil)
+                        model.newConversation()
+                        model.surface = .chat
                     }
 
                     GlassIconButton(

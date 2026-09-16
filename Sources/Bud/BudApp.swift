@@ -88,7 +88,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var toggleObserver: NSObjectProtocol?
     private var showObserver: NSObjectProtocol?
     private var hideObserver: NSObjectProtocol?
-    private var collapseObserver: NSObjectProtocol?
     private var isTerminating = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -125,7 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.panels?.expand() }
+            MainActor.assumeIsolated { self?.panels?.show() }
         }
 
         hideObserver = NotificationCenter.default.addObserver(
@@ -134,14 +133,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.panels?.hide() }
-        }
-
-        collapseObserver = NotificationCenter.default.addObserver(
-            forName: .budCollapsePanel,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.panels?.collapse() }
         }
 
         // `bud://` links arrive as Apple events. Handled here rather than through
@@ -165,11 +156,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await model.start() }
     }
 
-    /// `bud://ask?text=…` sends a message, `bud://toggle` collapses or expands,
-    /// `bud://collapse` and `bud://expand` set the shape explicitly,
-    /// `bud://settings?tab=marketplace` opens that settings pane, and `bud://new`
-    /// starts a fresh transcript. Anything else is ignored — an
-    /// unrecognised link must never leave the app in a half-open state.
+    /// `bud://ask?text=…` sends a message, `bud://toggle` shows or hides Bud,
+    /// `bud://settings?tab=marketplace` opens that settings pane,
+    /// `bud://history` shows the archive, and `bud://new` starts a fresh
+    /// conversation. Anything else is ignored — an unrecognised link must never
+    /// leave the app in a half-open state.
     @objc private func handleURLEvent(_ event: NSAppleEventDescriptor, replyEvent: NSAppleEventDescriptor) {
         guard let string = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
               let url = URL(string: string) else { return }
@@ -184,19 +175,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let text = items.first { $0.name == "text" }?.value ?? ""
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
-            // Expand rather than `show()`: asking from a link is a deliberate
-            // question, so the answer should be on screen when it arrives.
-            panels?.expand()
+            // Shown before the question is sent: asking from a link is a
+            // deliberate question, so the answer should be on screen when it
+            // arrives rather than waiting behind a hidden window.
+            panels?.show()
             Task { await model.send(trimmed) }
 
         case "toggle":
             panels?.toggle()
-
-        case "collapse":
-            panels?.collapse()
-
-        case "expand":
-            panels?.expand()
 
         case "settings":
             let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
