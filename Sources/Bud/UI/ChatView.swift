@@ -80,7 +80,11 @@ public struct ChatView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: Bud.Space.md) {
                     ForEach(model.turns) { turn in
-                        TranscriptRow(turn: turn, model: model)
+                        TranscriptRow(
+                            turn: turn,
+                            model: model,
+                            isLatest: turn.id == model.turns.last?.id
+                        )
                     }
                     Color.clear.frame(height: 1).id(Self.bottomAnchor)
                 }

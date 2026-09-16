@@ -8,20 +8,36 @@ import SwiftUI
 public struct TranscriptRow: View {
     private let turn: Turn
     private let model: AppModel
+    /// The newest turn in the transcript. Its actions are always on show, because
+    /// the answer just received is the one anyone copies or retries, and a control
+    /// that only exists once the pointer happens to cross it does not exist.
+    private let isLatest: Bool
 
     @BudState private var rowWidth: CGFloat = 0
+    @BudState private var isHovering = false
+    @BudState private var didCopy = false
 
-    public init(turn: Turn, model: AppModel) {
+    public init(turn: Turn, model: AppModel, isLatest: Bool = false) {
         self.turn = turn
         self.model = model
+        self.isLatest = isLatest
     }
 
     public var body: some View {
-        Group {
-            if turn.role == .user {
-                userBubble
-            } else {
-                assistantBody
+        VStack(alignment: turn.role == .user ? .trailing : .leading, spacing: Bud.Space.xs) {
+            Group {
+                if turn.role == .user {
+                    userBubble
+                } else {
+                    assistantBody
+                }
+            }
+
+            // In flow rather than overlaid: an overlay would have to sit on top
+            // of the text it acts on, and a fixed reserved strip under every turn
+            // would cost more empty space than the transcript has to give.
+            if showsActions {
+                actions
             }
         }
         // The bubble's 78% cap is a fraction of the row, not of the panel, so it
@@ -30,6 +46,69 @@ public struct TranscriptRow: View {
             proxy.size.width
         } action: { width in
             rowWidth = width
+        }
+        .onHover { isHovering = $0 }
+        // The same actions on right-click. Hover is invisible until you happen to
+        // pass over a turn, and the actions people most want on a bad answer are
+        // the ones they go looking for.
+        .contextMenu { menu }
+    }
+
+    // MARK: - Actions
+
+    /// Nothing to offer means nothing is drawn. A turn that is only a notice has
+    /// no prose to copy and, once the session ends, no exchange to retry — an
+    /// empty strip under it would be spacing pretending to be a control.
+    private var showsActions: Bool {
+        (isHovering || isLatest) && (!copyableText.isEmpty || model.canRewind(from: turn))
+    }
+
+    private var actions: some View {
+        HStack(spacing: Bud.Space.hairline) {
+            if turn.role == .user { Spacer(minLength: 0) }
+            if !copyableText.isEmpty {
+                RowAction(symbol: didCopy ? "checkmark" : "doc.on.doc", help: "Copy") { copy() }
+            }
+            if model.canRewind(from: turn) {
+                RowAction(symbol: "arrow.clockwise", help: "Retry") { model.retry(turn) }
+            }
+            if turn.role != .user { Spacer(minLength: 0) }
+        }
+    }
+
+    @ViewBuilder
+    private var menu: some View {
+        if !copyableText.isEmpty {
+            Button("Copy") { copy() }
+        }
+        if model.canRewind(from: turn) {
+            Button("Retry") { model.retry(turn) }
+            Divider()
+            Button("Delete from here", role: .destructive) { model.deleteFrom(turn) }
+        }
+    }
+
+    /// What copying a turn means: the prose, in arrival order.
+    ///
+    /// Reasoning and tool activity are how the answer was reached, not the answer
+    /// — pasting either is never what was wanted, and a copy button that included
+    /// them would be one nobody trusted.
+    private var copyableText: String {
+        if turn.role == .user { return userText }
+        return turn.segments.compactMap { segment in
+            if case .text(_, let text) = segment { return text }
+            return nil
+        }
+        .joined(separator: "\n\n")
+    }
+
+    private func copy() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(copyableText, forType: .string)
+        didCopy = true
+        Task {
+            try? await Task.sleep(for: .seconds(1.2))
+            didCopy = false
         }
     }
 
@@ -125,6 +204,37 @@ public struct TranscriptRow: View {
     /// turn. Only that one gets a caret, a shimmer, or a pulse.
     private func isTail(_ id: String) -> Bool {
         turn.isStreaming && turn.segments.last?.id == id
+    }
+}
+
+/// A transcript action: plain, small, and unlit until hovered.
+///
+/// Deliberately not `GlassIconButton`. Apple's rule puts Liquid Glass on the
+/// navigation layer that floats above content, and these sit on the content they
+/// act on — the same reason the message bubble is a material fill rather than
+/// glass.
+private struct RowAction: View {
+    let symbol: String
+    let help: String
+    let action: () -> Void
+
+    @BudState private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(isHovering ? Color.primary : Color.secondary)
+                .frame(width: 22, height: 20)
+                .contentShape(Rectangle())
+                .background {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(Color.primary.opacity(isHovering ? 0.10 : 0))
+                }
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .onHover { isHovering = $0 }
     }
 }
 

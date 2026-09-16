@@ -37,6 +37,27 @@ public final class AgentRuntime {
     /// The model-facing half of the transcript, for persistence.
     public var modelHistory: [ChatMessage] { history }
 
+    /// One user message and everything it produced, remembered as it was before
+    /// the message was sent.
+    ///
+    /// Retry and "delete from here" are the same operation with different
+    /// endings: put things back how they were, then either ask again or stop.
+    /// They cannot be done by unwinding the turns, because the model-facing
+    /// history holds messages no turn records — every tool round contributes a
+    /// call and a result that exist only in `history`. Snapshotting the
+    /// before-state is cheaper than reconstructing it and, unlike a reconstruction,
+    /// cannot silently disagree with what was actually sent.
+    private struct Checkpoint {
+        var turns: [Turn]
+        var history: [ChatMessage]
+        var prompt: String
+        /// How many turns existed before this exchange began, which is how a turn
+        /// is traced back to the exchange that produced it.
+        var turnCount: Int
+    }
+
+    private var checkpoints: [Checkpoint] = []
+
     /// Replaces the transcript with a saved conversation.
     ///
     /// Stops first. A restore during a live run would leave the loop appending
@@ -44,6 +65,9 @@ public final class AgentRuntime {
     /// half of it already in flight lands in the wrong one.
     public func restore(turns savedTurns: [Turn], history savedHistory: [ChatMessage]) {
         stop()
+        // A conversation loaded from the archive has no checkpoints: nothing in
+        // this session ran it, and the exchange boundaries were not saved.
+        checkpoints.removeAll()
         turns = savedTurns
         history = savedHistory
         lastError = nil
@@ -56,6 +80,7 @@ public final class AgentRuntime {
 
     public func clear() {
         stop()
+        checkpoints.removeAll()
         turns.removeAll()
         history.removeAll()
         lastError = nil
@@ -80,6 +105,9 @@ public final class AgentRuntime {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isStreaming else { return }
 
+        checkpoints.append(
+            Checkpoint(turns: turns, history: history, prompt: trimmed, turnCount: turns.count)
+        )
         turns.append(Turn(role: .user, segments: [.text(id: UUID().uuidString, text: trimmed)]))
         history.append(ChatMessage(role: .user, content: trimmed))
         lastError = nil
@@ -88,6 +116,61 @@ public final class AgentRuntime {
         runTask = Task { [weak self] in
             await self?.runLoop()
         }
+    }
+
+    // MARK: - Rewinding
+
+    /// Whether the turn at `index` belongs to an exchange this session ran.
+    public func canRewind(toTurnAt index: Int) -> Bool {
+        checkpointIndex(forTurnAt: index) != nil
+    }
+
+    /// Re-runs the exchange that produced the turn at `index`, discarding
+    /// whatever that exchange had produced.
+    ///
+    /// Retry means "that answer was wrong, ask again": the transcript and the
+    /// model's history both go back to how they stood before the question was
+    /// asked, and it is asked once more. Anything after it goes too — leaving it
+    /// would put answers ahead of the question that prompted them.
+    @discardableResult
+    public func retry(turnAt index: Int) -> Bool {
+        guard !isStreaming, let position = checkpointIndex(forTurnAt: index) else { return false }
+        let checkpoint = checkpoints[position]
+        // Dropped before restoring, so the re-send below records itself as the
+        // newest exchange rather than being shadowed by the one it replaces.
+        checkpoints.removeSubrange(position...)
+        apply(checkpoint)
+        send(checkpoint.prompt)
+        return true
+    }
+
+    /// Drops the exchange that produced the turn at `index`, without re-running it.
+    @discardableResult
+    public func deleteFrom(turnAt index: Int) -> Bool {
+        guard !isStreaming, let position = checkpointIndex(forTurnAt: index) else { return false }
+        let checkpoint = checkpoints[position]
+        checkpoints.removeSubrange(position...)
+        apply(checkpoint)
+        return true
+    }
+
+    /// The exchange that produced the turn at `index`: the last one that began at
+    /// or before it.
+    private func checkpointIndex(forTurnAt index: Int) -> Int? {
+        var found: Int?
+        for (offset, checkpoint) in checkpoints.enumerated() where checkpoint.turnCount <= index {
+            found = offset
+        }
+        return found
+    }
+
+    private func apply(_ checkpoint: Checkpoint) {
+        stop()
+        turns = checkpoint.turns
+        history = checkpoint.history
+        lastError = nil
+        statusText = ""
+        lastRoundCount = 0
     }
 
     // MARK: - The loop

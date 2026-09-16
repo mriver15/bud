@@ -73,7 +73,7 @@ public enum UIRender {
         for (name, turn) in Self.sampleTurns() {
             emit(
                 name,
-                TranscriptRow(turn: turn, model: model)
+                TranscriptRow(turn: turn, model: model, isLatest: true)
                     .frame(width: Bud.contentMeasure - 24),
                 width: Bud.contentMeasure,
                 height: 360,
@@ -101,9 +101,16 @@ public enum UIRender {
         emit(
             "chat-transcript",
             ScrollView {
+                // Built once: `sampleTurns` assembles fresh turns every call, and
+                // asking for it per row would build the whole set once per row.
+                let sample = Self.sampleTurns()
                 VStack(alignment: .leading, spacing: Bud.Space.lg) {
-                    ForEach(Self.sampleTurns(), id: \.1.id) { _, turn in
-                        TranscriptRow(turn: turn, model: model)
+                    ForEach(Array(sample.enumerated()), id: \.element.1.id) { index, pair in
+                        TranscriptRow(
+                            turn: pair.1,
+                            model: model,
+                            isLatest: index == sample.count - 1
+                        )
                     }
                 }
                 .padding(Bud.Space.md)

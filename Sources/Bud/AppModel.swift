@@ -246,6 +246,35 @@ public final class AppModel {
 
     public func stop() { runtime.stop() }
 
+    // MARK: - Message actions
+
+    /// Whether this turn can be retried or dropped.
+    ///
+    /// Only turns from an exchange this session ran qualify. A conversation
+    /// loaded from the archive was saved as turns, and neither the exchange
+    /// boundaries nor the model-facing history were — so its rows offer Copy and
+    /// nothing else, rather than a Retry that would quietly do the wrong thing.
+    public func canRewind(from turn: Turn) -> Bool {
+        guard let index = turns.firstIndex(where: { $0.id == turn.id }) else { return false }
+        return runtime.canRewind(toTurnAt: index)
+    }
+
+    /// Asks the same question again, discarding the answer being looked at.
+    public func retry(_ turn: Turn) {
+        guard let index = turns.firstIndex(where: { $0.id == turn.id }) else { return }
+        runtime.retry(turnAt: index)
+    }
+
+    /// Drops this turn and everything after it from the conversation. The
+    /// archive is written immediately: there is no streaming turn to coalesce
+    /// with, and a delete that only reached the screen would come back on
+    /// relaunch.
+    public func deleteFrom(_ turn: Turn) {
+        guard let index = turns.firstIndex(where: { $0.id == turn.id }) else { return }
+        guard runtime.deleteFrom(turnAt: index) else { return }
+        persistConversations()
+    }
+
     /// Starts a fresh conversation.
     ///
     /// "New chat" has never meant "discard what I just said", so the current one

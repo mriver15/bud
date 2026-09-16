@@ -369,6 +369,37 @@ public enum BudLiveVerification {
         c.check("runtime: tool result reached the transcript", succeeded)
         c.check("runtime: produced a final answer", !runtime.turns.compactMap { $0.plainText.isEmpty ? nil : $0 }.isEmpty)
 
+        // MARK: Rewinding
+
+        // Retry and delete-from-here both restore a checkpoint, and having a
+        // checkpoint is what makes them correct: the model-facing history holds
+        // tool call and result messages that no turn records, so it cannot be
+        // unwound from the turns. Asserted on the state immediately after the
+        // call, before the re-send has streamed anything back.
+        let lastIndex = runtime.turns.count - 1
+        c.check("rewind: a live exchange can be rewound", runtime.canRewind(toTurnAt: lastIndex))
+        c.check("rewind: the exchange left model history", runtime.messageCount >= 2)
+
+        let question = runtime.turns.first?.plainText ?? ""
+        c.check("rewind: retry reports success", runtime.retry(turnAt: lastIndex))
+        // Back to the question alone, plus the re-ask — which is the same
+        // question, so one turn and one message.
+        c.equal("rewind: retry leaves only the question", runtime.turns.count, 1)
+        c.equal("rewind: retry rewinds the model history", runtime.messageCount, 1)
+        c.equal("rewind: retry asks the same question again", runtime.turns.first?.plainText, question)
+        runtime.stop()
+
+        // The negative: a conversation loaded from the archive has no
+        // checkpoints, so it must not offer a retry that would silently do the
+        // wrong thing.
+        let loaded = AgentRuntime(env: runtimeEnv)
+        loaded.restore(turns: runtime.turns, history: runtime.modelHistory)
+        c.check("rewind: a loaded conversation cannot rewind", !loaded.canRewind(toTurnAt: 0))
+        c.check(
+            "rewind: dropping an unknown exchange is refused",
+            !loaded.deleteFrom(turnAt: 0)
+        )
+
         // MARK: Subagent
 
         let supervisor = SubagentSupervisor(env: runtimeEnv)
