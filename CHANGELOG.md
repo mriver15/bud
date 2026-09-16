@@ -12,6 +12,67 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 0.3.0
+
+An optimisation release, and an honest one: I found and fixed a real hot spot, and
+**I could not reproduce the slowdown that prompted this**.
+
+### What was actually slow
+
+The prompt is rebuilt on every round, and it lists every installed skill. That
+meant reading and parsing every `SKILL.md` and walking every skill folder — to
+produce the same string, twenty-four times a turn.
+
+| | before | after |
+|---|---|---|
+| skill list | 1.07 ms | **0.06 ms** |
+| per request | 1.32 ms | **0.30 ms** |
+| per 24-round turn | 32 ms | **8 ms** |
+
+The listing is now cached, keyed on a fingerprint of what it was built from —
+the size and modification time of each manifest and its folder. Not a flag: this
+design invites you to edit a skill by hand, and a cache that stopped noticing
+would quietly undo that. Two bugs found while proving it: a file added beside a
+`SKILL.md` did not change the fingerprint, and the timestamp was rounded to the
+second, so two edits in one tick looked like one.
+
+### `--profile`
+
+New. Reports what a request costs **in time**, where `--measure` reports it in
+characters. Same reason: the expensive part of an assistant is the part that runs
+on every request, and none of it is visible from outside.
+
+### What I could not reproduce
+
+Measured with the marketplace open and a multi-round run going:
+
+- **CPU 1.9%**, memory flat at ~196MB
+- a turn took **3.2s with the marketplace open and 3.2s with it closed**
+- the marketplace itself costs ~34MB and about 1% CPU
+
+Nothing in that is heavy. The honest conclusion is that I have not found your
+slowdown, and the fix above — while real — is too small to be the cause.
+
+### The hypothesis I tried and backed out of
+
+Markets and lists draw every row as `.ultraThinMaterial`. A material blurs
+whatever is behind it, so a streaming transcript animating behind three hundred
+cards makes all of them re-sample, every frame. That cost lands on the
+compositor, so it never appears as CPU time in the process — and **with a locked
+screen nothing is drawn at all**, which is very likely why my measurements show
+nothing.
+
+I built a flat, unblurred row surface and switched the seven per-row call sites.
+It rendered the cards near-white with their text invisible. I could not diagnose
+it by measurement — the fill behaved nothing like its stated alpha — and I cannot
+see the screen to iterate, so **I reverted it**. Shipping a visual regression for
+an unmeasured gain is the wrong trade.
+
+The enum and the parameter are gone with it; there is no half-finished switch
+left in the tree.
+
+---
+
 ## Bud 0.2.1
 
 ### Skills are checked before they are installed

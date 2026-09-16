@@ -40,6 +40,12 @@ if arguments.contains("--verify-live") {
     exit(report.ok ? 0 : 1)
 }
 
+// Reports what a request costs in time, and where the time goes.
+if arguments.contains("--profile") {
+    let ok = await PerformanceProfileCLI.run(arguments: arguments)
+    exit(ok ? 0 : 1)
+}
+
 // Reports what a request costs before any conversation: the tool block, the
 // system prompt, and the notes that ride along on every message.
 if arguments.contains("--measure") {
