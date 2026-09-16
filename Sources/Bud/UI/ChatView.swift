@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The chat surface: transcript, live status strip, error banner, composer.
 ///
@@ -8,6 +9,7 @@ public struct ChatView: View {
 
     @BudState private var isNearBottom = true
     @BudState private var isUserScrolling = false
+    @BudState private var isDropTargeted = false
 
     private static let bottomAnchor = "bud.chat.bottom"
     private static let starterPrompts = [
@@ -43,6 +45,19 @@ public struct ChatView: View {
                 .padding(.bottom, Bud.Space.md)
                 .contentColumn()
         }
+        // The drop is taken by the surface rather than by the transcript: a file
+        // has no target inside a conversation, so wherever the user lets go of it
+        // is the panel, and the only question left is what Bud does with it.
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: { receiveDrop($0) })
+        .overlay {
+            // Wide enough to be unmissable, translucent enough that the
+            // transcript stays readable under it — a drag the user abandons must
+            // not have cost them their place in the conversation.
+            if isDropTargeted {
+                DropAffordance()
+            }
+        }
+        .animation(.snappy(duration: 0.14), value: isDropTargeted)
     }
 
     // MARK: - Transcript
@@ -134,6 +149,81 @@ public struct ChatView: View {
         .padding(.bottom, Bud.Space.xs)
     }
 
+    // MARK: - Drop
+
+    /// Stages the paths of whatever was dropped.
+    ///
+    /// A drop is a way of pointing at something, not a way of asking about it, so
+    /// nothing is sent: the paths land in the composer and stay there until the
+    /// user says what they want done with them. The whole drop is staged as one
+    /// string because staging each path on its own would leave the caret on
+    /// whichever load finished last.
+    private func receiveDrop(_ providers: [NSItemProvider]) -> Bool {
+        let files = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
+        guard !files.isEmpty else { return false }
+
+        let model = model
+        Task {
+            var dropped: [URL] = []
+            for provider in files {
+                // Loading an item hands back an `NSSecureCoding` that is not
+                // sendable, so it is reduced to a URL here and only that crosses
+                // back to the main actor.
+                let item = try? await provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil)
+                if let url = Self.fileURL(from: item) { dropped.append(url) }
+            }
+            guard !dropped.isEmpty else { return }
+            model.compose(Self.stagingText(for: dropped), appending: true)
+        }
+        return true
+    }
+
+    /// A file URL arrives as an `NSURL` from some sources and as the UTF-8 bytes
+    /// of the URL from others; both are file URLs by the time they are used. The
+    /// check matters because a provider can hand back a plain web URL, which is
+    /// nothing Bud could read.
+    private static func fileURL(from item: NSSecureCoding?) -> URL? {
+        let url: URL? = switch item {
+        case let url as URL: url
+        case let data as Data: URL(dataRepresentation: data, relativeTo: nil)
+        default: nil
+        }
+        return url?.isFileURL == true ? url : nil
+    }
+
+    /// The dropped paths, in the order they were dropped, plus a note for
+    /// anything Bud cannot read.
+    ///
+    /// A picture is named rather than staged. Bud has no image input, so the path
+    /// of a PNG would reach the model as a file no tool can turn into anything it
+    /// can look at — the user would get an answer about a filename. Saying so is
+    /// the one useful thing to do with it.
+    private static func stagingText(for urls: [URL]) -> String {
+        var paths: [String] = []
+        var images: [String] = []
+        for url in urls {
+            if isImage(url) {
+                images.append(url.lastPathComponent)
+            } else {
+                paths.append(url.path)
+            }
+        }
+        if !images.isEmpty {
+            let noun = images.count == 1 ? "image" : "images"
+            paths.append("(\(images.count) \(noun) dropped — Bud cannot read image files yet: \(images.joined(separator: ", ")))")
+        }
+        return paths.joined(separator: "\n")
+    }
+
+    /// Reads the content type rather than the extension: a file with no suffix, or
+    /// the wrong one, still has to be recognised. This is a metadata-only query,
+    /// which is what makes it cheap enough to run on the drop itself.
+    private static func isImage(_ url: URL) -> Bool {
+        let type = (try? url.resourceValues(forKeys: [.contentTypeKey]).contentType)
+            ?? UTType(filenameExtension: url.pathExtension)
+        return type?.conforms(to: .image) ?? false
+    }
+
     // MARK: - Empty state
 
     private var emptyState: some View {
@@ -217,5 +307,40 @@ private struct StarterPromptButton: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
+    }
+}
+
+// MARK: - Drop affordance
+
+/// The panel's answer to a drag that is over it.
+///
+/// It sits on top of the content instead of replacing it, and it takes no hit
+/// testing: a drag that passes over Bud on its way somewhere else must leave the
+/// composer exactly as the user left it, with their caret where they put it.
+private struct DropAffordance: View {
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: Bud.Radius.card, style: .continuous)
+                .fill(Bud.Palette.accent.opacity(0.08))
+
+            RoundedRectangle(cornerRadius: Bud.Radius.card, style: .continuous)
+                .strokeBorder(
+                    Bud.Palette.accent.opacity(0.6),
+                    style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])
+                )
+
+            VStack(spacing: Bud.Space.sm) {
+                Image(systemName: "arrow.down.doc")
+                    .font(.system(size: 18, weight: .semibold))
+                Text("Drop to add paths to your question")
+                    .font(Bud.Font.callout)
+            }
+            .foregroundStyle(Bud.Palette.accent)
+            .padding(.horizontal, Bud.Space.lg)
+            .padding(.vertical, Bud.Space.md)
+            .glassEffect(.regular, in: .rect(cornerRadius: Bud.Radius.control))
+        }
+        .padding(Bud.Space.sm)
+        .allowsHitTesting(false)
     }
 }

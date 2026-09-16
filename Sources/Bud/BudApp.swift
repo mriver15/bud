@@ -86,6 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = AppModel()
     private var panels: PanelController?
     private var toggleObserver: NSObjectProtocol?
+    private var showObserver: NSObjectProtocol?
     private var hideObserver: NSObjectProtocol?
     private var collapseObserver: NSObjectProtocol?
     private var isTerminating = false
@@ -117,6 +118,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { self?.panels?.toggle() }
         }
 
+        showObserver = NotificationCenter.default.addObserver(
+            forName: .budShowPanel,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.panels?.expand() }
+        }
+
         hideObserver = NotificationCenter.default.addObserver(
             forName: .budHidePanel,
             object: nil,
@@ -142,6 +151,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             forEventClass: AEEventClass(kInternetEventClass),
             andEventID: AEEventID(kAEGetURL)
         )
+
+        // The Services entry ("Ask Bud about this") is declared in the bundle's
+        // NSServices list; this is what gives it an object to message. The
+        // dynamic-services update is what makes a freshly-built bundle's entry
+        // appear without a relaunch or a log out — the services database holds
+        // the copy it read the last time this app was registered.
+        NSApp.servicesProvider = self
+        NSUpdateDynamicServices()
 
         Task { await model.start() }
     }
@@ -192,6 +209,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         default:
             break
         }
+    }
+
+    /// Services entry point for "Ask Bud about this".
+    ///
+    /// The selector name has to match `NSMessage` in the bundle's NSServices
+    /// declaration, and the selection arrives on the general pasteboard rather
+    /// than as an argument. Both out-parameters are optional because the system
+    /// passes nil for a service that declares neither user data nor an error —
+    /// a non-optional bridge would trap on the first invocation.
+    ///
+    /// Staged, never sent. The entry exists so that a selection can be carried
+    /// across without a copy and paste; it is not an answer to a question the
+    /// user has not finished asking.
+    @objc func askBud(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
+        guard let text = pboard.string(forType: .string) else { return }
+        model.compose(text, reveal: true)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

@@ -86,6 +86,10 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp "$BIN" "$APP/Contents/MacOS/$APP_NAME"
 
+# The Services entry is declared here rather than registered in code: a Services
+# menu is built from this list, and the message name is the selector the app has
+# to answer. `NSPortName` has to be the app's own name, because that is the port
+# Services uses to reach a running copy of Bud.
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -109,6 +113,22 @@ cat > "$APP/Contents/Info.plist" <<PLIST
         </dict>
     </array>
     <key>NSHighResolutionCapable</key><true/>
+    <key>NSServices</key>
+    <array>
+        <dict>
+            <key>NSMenuItem</key>
+            <dict>
+                <key>default</key><string>Ask Bud about this</string>
+            </dict>
+            <key>NSMessage</key><string>askBud</string>
+            <key>NSPortName</key><string>$APP_NAME</string>
+            <key>NSSendTypes</key>
+            <array>
+                <string>public.utf8-plain-text</string>
+                <string>NSStringPboardType</string>
+            </array>
+        </dict>
+    </array>
     <key>NSSupportsAutomaticTermination</key><false/>
     <key>NSSupportsSuddenTermination</key><false/>
     <key>NSHumanReadableCopyright</key><string>Bud — a native macOS assistant.</string>

@@ -74,6 +74,7 @@ public enum BudSelfTest {
             jsonValue,
             toolNaming,
             providers,
+        conversations,
             selfUpdate,
             mcpConfigMapping,
             glamaMapping,
@@ -1700,6 +1701,155 @@ public enum BudSelfTest {
             try? UpdateInstaller.bundleIdentifier(of: makeBundle(named: "Bud.app", identifier: "com.mriver15.bud")),
             "com.mriver15.bud"
         )
+
+        return c.report()
+    }
+
+
+    /// The transcript is the only thing Bud writes down that a user would
+    /// notice losing, and every failure here is silent: a coding mistake
+    /// produces a file that parses, opens, and is subtly not what was there.
+    static func conversations() -> SelfTestReport {
+        let c = Checker(suite: "conversations")
+
+        let call = ToolCall(id: "call_1", name: "read_file", arguments: "{\"path\":\"/tmp/x\"}")
+        let turn = Turn(
+            id: "turn_1",
+            role: .assistant,
+            segments: [
+                .reasoning(id: "s1", text: "thinking"),
+                .text(id: "s2", text: "here is the answer"),
+                .tool(id: "s3", call: call, providerName: "Files", state: .succeeded,
+                      resultText: "contents", ui: nil),
+                .notice(id: "s4", text: "heads up", kind: .warning),
+            ],
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let message = ChatMessage(role: .assistant, content: "hello")
+
+        // MARK: Titles
+
+        func titled(_ text: String) -> String {
+            Conversation.title(from: [Turn(role: .user, segments: [.text(id: "s", text: text)])])
+        }
+
+        c.equal("a title comes from the first thing the user said",
+                titled("how do I do X"), "how do I do X")
+        c.equal("a long title breaks on a word",
+                titled(String(repeating: "word ", count: 40)),
+                String(repeating: "word ", count: 9).trimmingCharacters(in: .whitespaces) + "…")
+        c.equal("a title flattens newlines", titled("first\nsecond"), "first second")
+        c.equal("an empty conversation still has a name", Conversation.title(from: []), "New chat")
+
+        // MARK: Round trip
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bud-selftest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("conversations.json")
+
+        let archive = ConversationArchive(currentID: "conv_1", conversations: [
+            Conversation(id: "conv_1", title: "kept", turns: [turn], messages: [message])
+        ])
+        ConversationStore.save(archive, to: url)
+        let loaded = ConversationStore.load(from: url)
+
+        c.equal("the conversation survives the round trip", loaded.conversations.count, 1)
+        c.equal("the open conversation is remembered", loaded.currentID, "conv_1")
+        c.equal("every format version is stamped", loaded.version, ConversationStore.currentVersion)
+
+        guard let restored = loaded.conversations.first else {
+            c.check("a conversation came back", false)
+            return c.report()
+        }
+        c.equal("the segments all come back", restored.turns.count, 1)
+        c.equal("with the same number of them", restored.turns.first?.segments.count, 4)
+        c.equal("the model-facing history is kept too", restored.messages.count, 1)
+
+        // The tool call is the part a positional encoding would silently mangle.
+        if case .tool(let id, let restoredCall, let provider, let state, let result, _)? = restored.turns.first?.segments[2] {
+            c.equal("a tool segment keeps its id", id, "s3")
+            c.equal("its call", restoredCall, call)
+            c.equal("its provider", provider, "Files")
+            c.equal("its state", state, .succeeded)
+            c.equal("its result", result, "contents")
+        } else {
+            c.check("the tool segment is a tool segment", false)
+        }
+        if case .notice(_, let text, let kind)? = restored.turns.first?.segments[3] {
+            c.equal("a notice keeps its kind", kind, .warning)
+            c.equal("and its text", text, "heads up")
+        } else {
+            c.check("the notice segment is a notice", false)
+        }
+
+        // The coding is spelled out rather than synthesised; a synthesised enum
+        // encodes its payload positionally and reordering a case would rename
+        // history out from under itself.
+        let raw = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        c.check("segments carry a named discriminator", raw.contains("\"kind\" : \"tool\""))
+        c.check("and not a positional one", !raw.contains("\"_0\""))
+
+        // MARK: Sanitising
+
+        let interrupted = Conversation(id: "conv_2", turns: [
+            Turn(role: .assistant, segments: [
+                .text(id: "t", text: "half an answer"),
+                .tool(id: "u", call: call, providerName: "Files", state: .running,
+                      resultText: nil, ui: nil),
+            ], isStreaming: true)
+        ])
+        ConversationStore.save(ConversationArchive(currentID: "conv_2", conversations: [interrupted]), to: url)
+        let reloaded = ConversationStore.load(from: url).conversations.first
+
+        c.equal("a turn saved mid-stream does not come back streaming",
+                reloaded?.turns.first?.isStreaming, false)
+        if case .tool(_, _, _, let state, _, _)? = reloaded?.turns.first?.segments[1] {
+            c.equal("a tool that was still running comes back failed", state, .failed)
+        } else {
+            c.check("the interrupted tool segment survived", false)
+        }
+
+        let huge = String(repeating: "x", count: ConversationStore.resultTextLimit + 500)
+        let bulky = Conversation(id: "conv_3", turns: [
+            Turn(role: .assistant, segments: [
+                .tool(id: "v", call: call, providerName: "Shell", state: .succeeded,
+                      resultText: huge, ui: nil)
+            ])
+        ])
+        ConversationStore.save(ConversationArchive(currentID: "conv_3", conversations: [bulky]), to: url)
+        let clamped = ConversationStore.load(from: url).conversations.first
+        if case .tool(_, _, _, _, let result, _)? = clamped?.turns.first?.segments[0] {
+            c.check("an enormous tool result is truncated on the way to disk",
+                    (result?.count ?? 0) < huge.count)
+            c.check("and says so rather than ending mid-sentence",
+                    result?.contains("characters not saved") ?? false)
+        } else {
+            c.check("the bulky tool segment survived", false)
+        }
+
+        // MARK: Retention and damage
+
+        let many = (0..<(ConversationStore.retentionLimit + 5)).map { index in
+            Conversation(id: "c\(index)", title: "c\(index)",
+                         updatedAt: Date(timeIntervalSince1970: TimeInterval(index)))
+        }
+        ConversationStore.save(ConversationArchive(currentID: "c0", conversations: many), to: url)
+        let pruned = ConversationStore.load(from: url)
+        c.equal("retention caps how many are kept",
+                pruned.conversations.count, ConversationStore.retentionLimit)
+        c.equal("and keeps the newest",
+                pruned.conversations.first?.id, "c\(ConversationStore.retentionLimit + 4)")
+        c.check("the oldest are the ones dropped",
+                !pruned.conversations.contains { $0.id == "c0" })
+
+        try? Data("not json at all".utf8).write(to: url)
+        let damaged = ConversationStore.load(from: url)
+        c.equal("a damaged archive reads as empty rather than failing", damaged.conversations.count, 0)
+        c.nilValue("with no conversation open", damaged.currentID)
+
+        let missing = ConversationStore.load(from: directory.appendingPathComponent("absent.json"))
+        c.equal("a missing archive reads as empty too", missing.conversations.count, 0)
 
         return c.report()
     }

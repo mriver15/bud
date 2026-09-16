@@ -239,3 +239,79 @@ public struct Turn: Sendable, Identifiable {
         }.joined()
     }
 }
+
+// MARK: - Persistence
+
+/// `Segment` is written to disk, so its coding is spelled out rather than
+/// synthesised.
+///
+/// Swift will synthesise `Codable` for an enum with associated values, but it
+/// encodes the payload positionally — `{"tool":{"_0":…}}` — which turns
+/// reordering a case into silently unreadable history, and makes the file
+/// readable only by the build that wrote it. A named discriminator survives
+/// both, and can be read by eye when something has gone wrong.
+extension Segment: Codable {
+    private enum Kind: String, Codable {
+        case reasoning, text, tool, notice
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, id, text, call, providerName, state, resultText, ui, noticeKind
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try c.decode(Kind.self, forKey: .kind)
+        let id = try c.decode(String.self, forKey: .id)
+        switch kind {
+        case .reasoning:
+            self = .reasoning(id: id, text: try c.decode(String.self, forKey: .text))
+        case .text:
+            self = .text(id: id, text: try c.decode(String.self, forKey: .text))
+        case .tool:
+            self = .tool(
+                id: id,
+                call: try c.decode(ToolCall.self, forKey: .call),
+                providerName: try c.decode(String.self, forKey: .providerName),
+                state: try c.decode(ToolRunState.self, forKey: .state),
+                resultText: try c.decodeIfPresent(String.self, forKey: .resultText),
+                ui: try c.decodeIfPresent(JSONValue.self, forKey: .ui)
+            )
+        case .notice:
+            self = .notice(
+                id: id,
+                text: try c.decode(String.self, forKey: .text),
+                kind: try c.decode(NoticeKind.self, forKey: .noticeKind)
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .reasoning(let id, let text):
+            try c.encode(Kind.reasoning, forKey: .kind)
+            try c.encode(id, forKey: .id)
+            try c.encode(text, forKey: .text)
+        case .text(let id, let text):
+            try c.encode(Kind.text, forKey: .kind)
+            try c.encode(id, forKey: .id)
+            try c.encode(text, forKey: .text)
+        case .tool(let id, let call, let providerName, let state, let resultText, let ui):
+            try c.encode(Kind.tool, forKey: .kind)
+            try c.encode(id, forKey: .id)
+            try c.encode(call, forKey: .call)
+            try c.encode(providerName, forKey: .providerName)
+            try c.encode(state, forKey: .state)
+            try c.encodeIfPresent(resultText, forKey: .resultText)
+            try c.encodeIfPresent(ui, forKey: .ui)
+        case .notice(let id, let text, let kind):
+            try c.encode(Kind.notice, forKey: .kind)
+            try c.encode(id, forKey: .id)
+            try c.encode(text, forKey: .text)
+            try c.encode(kind, forKey: .noticeKind)
+        }
+    }
+}
+
+extension Turn: Codable {}

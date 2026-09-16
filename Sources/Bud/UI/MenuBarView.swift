@@ -17,6 +17,7 @@ struct MenuBarView: View {
             Divider().opacity(0.3)
             panelActions
             updateActions
+            recentActions
             Divider().opacity(0.3)
             settingsActions
             Divider().opacity(0.3)
@@ -98,6 +99,40 @@ struct MenuBarView: View {
         }
     }
 
+    /// The last few conversations, so yesterday's chat is one click from
+    /// wherever Bud is rather than something to go looking for.
+    ///
+    /// Capped because a menu is not a browser: the archive keeps fifty, and
+    /// nobody reads a dropdown of fifty. The current one is marked, because a
+    /// list of titles with no indication of which is open reads as five places
+    /// to go rather than four places and where you already are.
+    private static let recentLimit = 5
+
+    @ViewBuilder
+    private var recentActions: some View {
+        let recent = Array(model.conversations.prefix(Self.recentLimit))
+        if !recent.isEmpty {
+            Divider().opacity(0.3)
+            VStack(alignment: .leading, spacing: Bud.Space.hairline) {
+                Text("Recent")
+                    .font(Bud.Font.micro)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, Bud.Space.snug)
+                    .padding(.bottom, Bud.Space.hairline)
+                ForEach(recent) { conversation in
+                    let isCurrent = conversation.id == model.currentConversationID
+                    MenuActionRow(
+                        symbol: isCurrent ? "bubble.left.fill" : "bubble.left",
+                        title: conversation.title
+                    ) {
+                        model.openConversation(id: conversation.id)
+                        NotificationCenter.default.post(name: .budShowPanel, object: nil)
+                    }
+                }
+            }
+        }
+    }
+
     private var settingsActions: some View {
         VStack(alignment: .leading, spacing: Bud.Space.hairline) {
             ForEach(SettingsTab.allCases) { tab in
@@ -161,6 +196,10 @@ extension Notification.Name {
     static let budTogglePanel = Notification.Name("bud.togglePanel")
     /// Take Bud off screen.
     static let budHidePanel = Notification.Name("bud.hidePanel")
+    /// Put Bud on screen. Distinct from toggling: something arriving from
+    /// outside the panel wants it visible, and must not hide it if it already
+    /// is, which is what toggling would do.
+    static let budShowPanel = Notification.Name("bud.showPanel")
     /// Park Bud in a screen corner as the bubble. Only the panel's own collapse
     /// control asks for this; nothing does it on the user's behalf.
     static let budCollapsePanel = Notification.Name("bud.collapsePanel")

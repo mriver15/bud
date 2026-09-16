@@ -20,11 +20,37 @@ public final class AgentRuntime {
     private var history: [ChatMessage] = []
     private var runTask: Task<Void, Never>?
 
+    /// Called when a run settles, however it settled.
+    ///
+    /// `send` returns as soon as the turn has been started, so the only place
+    /// that knows a conversation has stopped changing is the end of the loop.
+    /// Persistence is driven from here rather than from the send site, which
+    /// would save a transcript that was still being written.
+    public var onTurnFinished: (@MainActor () -> Void)?
+
     public init(env: AppEnvironment) {
         self.env = env
     }
 
     public var messageCount: Int { history.count }
+
+    /// The model-facing half of the transcript, for persistence.
+    public var modelHistory: [ChatMessage] { history }
+
+    /// Replaces the transcript with a saved conversation.
+    ///
+    /// Stops first. A restore during a live run would leave the loop appending
+    /// its next delta to a conversation that is no longer on screen, so the
+    /// half of it already in flight lands in the wrong one.
+    public func restore(turns savedTurns: [Turn], history savedHistory: [ChatMessage]) {
+        stop()
+        turns = savedTurns
+        history = savedHistory
+        lastError = nil
+        statusText = ""
+        lastRoundCount = 0
+        isStreaming = false
+    }
 
     // MARK: - Public control
 
@@ -68,7 +94,10 @@ public final class AgentRuntime {
 
     private func runLoop() async {
         let config = env.config
-        defer { isStreaming = false }
+        defer {
+            isStreaming = false
+            onTurnFinished?()
+        }
 
         var round = 0
         while round < max(1, config.maxToolRounds) {
@@ -97,6 +126,11 @@ public final class AgentRuntime {
                 turns[turnIndex] = assistant
                 statusText = "Stopped"
 
+                // What was streamed before the stop is on screen, so the model
+                // should know it said it — otherwise asking it to continue has
+                // nothing to continue from.
+                recordAnswer(assistant)
+
                 return
 
             case .answered:
@@ -104,6 +138,8 @@ public final class AgentRuntime {
                 turns[turnIndex] = assistant
                 statusText = ""
                 lastError = nil
+
+                recordAnswer(assistant)
 
                 return
 
@@ -146,6 +182,19 @@ public final class AgentRuntime {
     }
 
     // MARK: - One streaming round
+
+    /// Puts a finished answer into the model-facing history.
+    ///
+    /// Only the tool-call path used to append anything, so an assistant's prose
+    /// went on screen and nowhere else: every follow-up was sent with the user's
+    /// questions and none of the answers, and "what did you just say?" had
+    /// nothing to refer to. The transcript looked like a conversation; the
+    /// context was a monologue.
+    private func recordAnswer(_ assistant: Turn) {
+        let answer = assistant.plainText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !answer.isEmpty, assistant.error == nil else { return }
+        history.append(ChatMessage(role: .assistant, content: answer))
+    }
 
     private enum RoundOutcome {
         case answered

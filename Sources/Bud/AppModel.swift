@@ -74,9 +74,28 @@ public final class AppModel {
         composerFocusToken &+= 1
     }
 
+    /// Text arriving from outside the panel — a Services invocation, or files
+    /// dropped on it.
+    ///
+    /// Deliberately never sent on the user's behalf. An assistant that fires a
+    /// request because you right-clicked something is one you learn not to
+    /// right-click, so this stages the text and puts the caret after it.
+    public func compose(_ text: String, appending: Bool = false, reveal: Bool = false) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if appending, !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            composerText += composerText.hasSuffix("\n") ? trimmed : "\n" + trimmed
+        } else {
+            composerText = trimmed
+        }
+        focusComposer()
+        if reveal {
+            NotificationCenter.default.post(name: .budShowPanel, object: nil)
+        }
+    }
+
     /// Set by the shell to present the settings window.
     public var onPresentSettings: (@MainActor (SettingsTab) -> Void)?
-    /// Set by the shell to toggle the floating panel.
     /// Set by the shell to quit.
     public var onQuit: (@MainActor () -> Void)?
 
@@ -95,6 +114,7 @@ public final class AppModel {
         // to be captured. The closure reads `onQuit` when it is called, not when
         // it is set, so the app delegate can still be the one to fill it in.
         update.onQuit = { [weak self] in self?.onQuit?() }
+        runtime.onTurnFinished = { [weak self] in self?.scheduleConversationSave() }
     }
 
     // MARK: Derived state
@@ -134,6 +154,7 @@ public final class AppModel {
         didStart = true
 
         BudConfigLoader.ensureDirectory()
+        restoreConversations()
         let providers: [any ToolProvider] = [
             NativeToolsProvider(),
             mcp,
@@ -170,6 +191,10 @@ public final class AppModel {
 
     public func shutdown() async {
         runtime.stop()
+        // Before the socket closes and before anything else can fail: a turn in
+        // flight is still worth keeping, and this is the last moment it exists.
+        saveTask?.cancel()
+        persistConversations()
         await mcp.shutdown()
         BudConfigLoader.save(config)
     }
@@ -188,9 +213,118 @@ public final class AppModel {
 
     public func stop() { runtime.stop() }
 
+    /// Starts a fresh conversation.
+    ///
+    /// "New chat" has never meant "discard what I just said", so the current one
+    /// is folded into the archive before the transcript is cleared. Before this
+    /// existed the button was a quiet way to lose the last hour's work.
     public func clearTranscript() {
+        newConversation()
+    }
+
+    // MARK: Conversations
+
+    /// Saved conversations, most recently touched first.
+    public private(set) var conversations: [Conversation] = []
+    /// The conversation the live transcript belongs to.
+    public private(set) var currentConversationID: String?
+
+    private var saveTask: Task<Void, Never>?
+
+    public func newConversation() {
+        persistConversations()
+        currentConversationID = UUID().uuidString
         runtime.clear()
+        composerText = ""
         errorMessage = nil
+    }
+
+    public func openConversation(id: String) {
+        guard id != currentConversationID else { return }
+        persistConversations()
+        currentConversationID = id
+        guard let saved = conversations.first(where: { $0.id == id }) else { return }
+        runtime.restore(turns: saved.turns, history: saved.messages)
+        errorMessage = nil
+    }
+
+    public func deleteConversation(id: String) {
+        conversations.removeAll { $0.id == id }
+        if currentConversationID == id {
+            currentConversationID = nil
+            runtime.clear()
+        }
+        persistConversations()
+    }
+
+    /// Folds the live transcript into the archive and writes it.
+    public func persistConversations() {
+        captureCurrentConversation()
+        ConversationStore.save(
+            ConversationArchive(currentID: currentConversationID, conversations: conversations)
+        )
+    }
+
+    /// Writes the archive, coalescing bursts.
+    ///
+    /// A turn mutates the transcript dozens of times while it streams, and the
+    /// file is rewritten whole, so saving on every change would rewrite the
+    /// entire history for every token.
+    private func scheduleConversationSave() {
+        saveTask?.cancel()
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            self?.persistConversations()
+        }
+    }
+
+    private func captureCurrentConversation() {
+        guard let id = currentConversationID else { return }
+        let turns = runtime.turns
+        // Nothing worth keeping yet. Recording an empty conversation would fill
+        // the history with rows that open onto a blank panel.
+        guard !turns.isEmpty else { return }
+
+        let messages = runtime.modelHistory
+        let now = Date()
+        if let index = conversations.firstIndex(where: { $0.id == id }) {
+            conversations[index].turns = turns
+            conversations[index].messages = messages
+            conversations[index].updatedAt = now
+            conversations[index].title = Conversation.title(from: turns)
+        } else {
+            conversations.insert(
+                Conversation(
+                    id: id,
+                    title: Conversation.title(from: turns),
+                    createdAt: now,
+                    updatedAt: now,
+                    turns: turns,
+                    messages: messages
+                ),
+                at: 0
+            )
+        }
+        conversations.sort { $0.updatedAt > $1.updatedAt }
+    }
+
+    /// Brings back the conversation that was open when Bud last quit.
+    private func restoreConversations() {
+        let archive = ConversationStore.load()
+        conversations = archive.conversations
+        guard let id = archive.currentID,
+              let saved = conversations.first(where: { $0.id == id })
+        else {
+            // Nothing to resume — a first run, or an archive that was cleared.
+            // There still has to be an open conversation to write into, or the
+            // first thing the user says has nowhere to go and the archive stays
+            // empty for ever, which is exactly what it did.
+            currentConversationID = UUID().uuidString
+            return
+        }
+        currentConversationID = id
+        runtime.restore(turns: saved.turns, history: saved.messages)
     }
 
     /// Handles a button press from a generated UI surface: an action carrying a
