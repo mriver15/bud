@@ -29,6 +29,35 @@ public enum SettingsTab: String, CaseIterable, Sendable, Identifiable {
     }
 }
 
+/// The panel's top-level surfaces.
+///
+/// Lives here rather than inside the view that draws it because it is reachable
+/// from outside that view — the menu bar switches to History, and `bud://history`
+/// does the same. As view-local state those requests could only be delivered by
+/// notification, and a notification posted before the panel has ever been shown
+/// has no subscriber and is dropped on the floor.
+public enum Surface: String, CaseIterable, Sendable, Identifiable {
+    case chat, agents, history
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .chat: return "Chat"
+        case .agents: return "Agents"
+        case .history: return "History"
+        }
+    }
+
+    public var symbol: String {
+        switch self {
+        case .chat: return "bubble.left.and.text.bubble.right"
+        case .agents: return "person.3.sequence"
+        case .history: return "clock.arrow.circlepath"
+        }
+    }
+}
+
 /// Root application state. Owns the subsystems, exposes one coherent surface to
 /// the views, and is the only writer of the live config.
 @MainActor
@@ -50,6 +79,8 @@ public final class AppModel {
     public var availableTools: [ToolDescriptor] = []
     public var settingsTab: SettingsTab = .general
     public var showingSettings = false
+    /// Which surface the panel is showing.
+    public var surface: Surface = .chat
     public var showingSubagents = false
 
     /// Live config. Mirrored into `env` on every write so background work always

@@ -10,28 +10,6 @@ struct RootView: View {
     @Bindable var model: AppModel
     @Environment(\.openWindow) private var openWindow
 
-    private enum Surface: String, CaseIterable {
-        case chat, agents, history
-
-        var label: String {
-            switch self {
-            case .chat: return "Chat"
-            case .agents: return "Agents"
-            case .history: return "History"
-            }
-        }
-
-        var symbol: String {
-            switch self {
-            case .chat: return "bubble.left.and.text.bubble.right"
-            case .agents: return "person.3.sequence"
-            case .history: return "clock.arrow.circlepath"
-            }
-        }
-    }
-
-    @BudState private var surface: Surface = .chat
-
     init(model: AppModel) {
         self.model = model
     }
@@ -248,9 +226,9 @@ struct RootView: View {
                 .buttonStyle(.plain)
                 // Keeps the meaning discoverable when the label is dropped.
                 .help(option.label)
-                .foregroundStyle(surface == option ? .primary : .secondary)
+                .foregroundStyle(model.surface == option ? .primary : .secondary)
                 .glassEffect(
-                    surface == option
+                    model.surface == option
                         ? .regular.tint(Bud.Palette.accent.opacity(0.45)).interactive()
                         : .identity,
                     in: .capsule
@@ -264,12 +242,12 @@ struct RootView: View {
     /// One place that changes the surface, so the animation is the same whether
     /// the switch came from the picker or from outside the panel.
     private func select(_ next: Surface) {
-        withAnimation(.snappy(duration: 0.18)) { surface = next }
+        withAnimation(.snappy(duration: 0.18)) { model.surface = next }
     }
 
     @ViewBuilder
     private var content: some View {
-        switch surface {
+        switch model.surface {
         case .chat:
             ChatView(model: model)
         case .agents:

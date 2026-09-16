@@ -202,7 +202,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             model.openSettings(tab: SettingsTab(rawValue: requested) ?? .general)
             NSApp.activate(ignoringOtherApps: true)
 
+        case "history":
+            model.surface = .history
+            panels?.show()
+
         case "new":
+            model.surface = .chat
             model.clearTranscript()
             panels?.show()
 
