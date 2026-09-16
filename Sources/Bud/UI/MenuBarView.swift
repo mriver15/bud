@@ -53,11 +53,9 @@ struct MenuBarView: View {
 
     private var panelActions: some View {
         VStack(alignment: .leading, spacing: Bud.Space.hairline) {
-            MenuActionRow(
-                symbol: "macwindow",
-                title: "Open Bud",
-                shortcut: GlobalHotKey.summonShortcutLabel
-            ) {
+            // No shortcut hint: the summon hot key is gone, and advertising one
+            // that no longer exists is worse than advertising none.
+            MenuActionRow(symbol: "macwindow", title: "Open Bud") {
                 NotificationCenter.default.post(name: .budTogglePanel, object: nil)
             }
             MenuActionRow(symbol: "eye.slash", title: "Hide Bud") {

@@ -79,7 +79,7 @@ struct CollapsedPill: View {
                     }
                 }
         )
-        .help(model.isStreaming ? "Bud is working — click to open" : "Open Bud (\(GlobalHotKey.summonShortcutLabel))")
+        .help(model.isStreaming ? "Bud is working — click to open" : "Open Bud")
     }
 }
 

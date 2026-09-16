@@ -1,34 +1,51 @@
 import AppKit
 import SwiftUI
 
-/// The floating panel.
+/// Bud's windows.
 ///
-/// `nonactivatingPanel` is what makes this feel like a widget rather than an app:
-/// summoning it does not steal focus from whatever the user was typing in, and
-/// clicking it does not pull the whole application forward.
+/// Two shapes with opposite jobs. The full panel is an ordinary window: it comes
+/// forward when clicked, goes behind when anything else is activated, and takes
+/// part in Cmd-Tab and the window menu like every other app's. It used to be a
+/// non-activating panel pinned above everything on every Space, which made it
+/// impossible to work behind — an assistant you cannot put down is one you close.
+///
+/// The collapsed bubble keeps the widget behaviour, because that is what it is
+/// for: parked in a corner, answering a click from whatever you are doing. It is
+/// only ever reached by asking for it.
 final class FloatingPanel: NSPanel {
     override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
+    override var canBecomeMain: Bool { !isCompact }
 
     /// Called when the user presses Escape. The controller decides what that
     /// means — collapsing back to the bubble, not vanishing.
     var onCancel: (() -> Void)?
 
+    private let isCompact: Bool
+
     /// A compact bubble is borderless and has no resize chrome; the full panel is
     /// a titled, resizable window. Everything else about the two is identical.
     init(contentRect: NSRect, compact: Bool = false) {
+        self.isCompact = compact
         super.init(
             contentRect: contentRect,
             styleMask: compact
                 ? [.nonactivatingPanel, .borderless]
-                : [.nonactivatingPanel, .titled, .fullSizeContentView, .resizable, .closable],
+                : [.titled, .fullSizeContentView, .resizable, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
-        isFloatingPanel = true
-        // Above normal windows, below the menu bar and system alerts.
-        level = .floating
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        if compact {
+            isFloatingPanel = true
+            // Above normal windows, below the menu bar and system alerts.
+            level = .floating
+            collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        } else {
+            // `.normal` and no `canJoinAllSpaces` are the whole change: the panel
+            // now has an order in the window stack that the user controls.
+            isFloatingPanel = false
+            level = .normal
+            collectionBehavior = [.fullScreenAuxiliary]
+        }
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
         // The panel draws its own glass; the window must be invisible so the
@@ -40,13 +57,11 @@ final class FloatingPanel: NSPanel {
         // server, because a window-background drag would swallow the click that
         // expands it.
         isMovableByWindowBackground = !compact
-        // A widget should never be the thing that traps the user.
         hidesOnDeactivate = false
-        animationBehavior = .utilityWindow
-        if !compact {
-            standardWindowButton(.miniaturizeButton)?.isHidden = true
-            standardWindowButton(.zoomButton)?.isHidden = true
-        }
+        animationBehavior = compact ? .utilityWindow : .documentWindow
+        // Reopened rather than recreated: the controller hides this window when
+        // it is closed, and a closed `NSWindow` cannot be ordered back on screen.
+        isReleasedWhenClosed = false
     }
 
     override func cancelOperation(_ sender: Any?) {
@@ -74,10 +89,9 @@ enum PillCorner: String, CaseIterable, Sendable {
 /// ordering a window out does not tear down its SwiftUI state. Resizing a single
 /// window would rebuild the view tree on every collapse.
 @MainActor
-final class PanelController {
+final class PanelController: NSObject, NSWindowDelegate {
     private var panel: FloatingPanel?
     private var pill: FloatingPanel?
-    private var hotKey: GlobalHotKey?
     private let model: AppModel
 
     private var isCollapsed = false
@@ -101,6 +115,7 @@ final class PanelController {
 
     init(model: AppModel) {
         self.model = model
+        super.init()
     }
 
     var isVisible: Bool {
@@ -108,6 +123,11 @@ final class PanelController {
     }
 
     var showingCollapsed: Bool { isCollapsed }
+
+    /// The bubble window, or nil before it has ever been shown. Exposed so the
+    /// two window behaviours can be told apart by assertion rather than by
+    /// reading the constructor.
+    var bubbleWindow: NSPanel? { pill }
 
     /// The bubble's frame, or nil before it has ever been shown. Exposed so
     /// placement can be asserted rather than eyeballed.
@@ -130,6 +150,7 @@ final class PanelController {
         let panel = FloatingPanel(contentRect: NSRect(origin: .zero, size: size))
         panel.contentView = NSHostingView(rootView: RootView(model: model))
         panel.onCancel = { [weak self] in self?.hide() }
+        if panel.delegate == nil { panel.delegate = self }
         panel.setFrameAutosaveName(Self.frameAutosaveName)
         // `setFrameAutosaveName` gives no way to tell a restored frame from one
         // still sitting at the origin, so the restore is done explicitly and the
@@ -245,16 +266,6 @@ final class PanelController {
 
     // MARK: - State
 
-    func installHotKey() {
-        guard hotKey == nil else { return }
-        // One shortcut, one meaning: bring Bud up if it is not on screen, take it
-        // away if it is. The corner bubble is a deliberate choice made from the
-        // panel, so the summon shortcut can never land you in it.
-        hotKey = GlobalHotKey.summon { [weak self] in
-            self?.toggle()
-        }
-    }
-
     func toggle() {
         if isVisible { hide() } else { show() }
     }
@@ -268,8 +279,11 @@ final class PanelController {
         isCollapsed = false
         let panel = makePanelIfNeeded()
         pill?.orderOut(nil)
+        // A regular app is allowed to come forward, and a window that arrives
+        // behind whatever you were reading is one you have to hunt for. This is
+        // the difference between launching Bud and merely having launched it.
+        NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
-        panel.orderFrontRegardless()
     }
 
     /// Takes Bud off screen entirely. This is what Escape does, and what the
@@ -304,6 +318,18 @@ final class PanelController {
         pill?.close()
         panel = nil
         pill = nil
+    }
+
+    /// The red button hides Bud; it does not end it.
+    ///
+    /// Closing the last window of a regular app normally leaves it running with
+    /// nothing on screen, which for an assistant with a menu bar item and a Dock
+    /// icon is exactly right — the way back is the icon you just used. Tearing the
+    /// window down instead would leave `makePanelIfNeeded` returning a closed
+    /// window that can never be ordered back on screen.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        hide()
+        return false
     }
 
     // MARK: - Placement

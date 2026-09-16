@@ -60,9 +60,21 @@ public enum BudUIVerification {
         c.check("panel has a real size", panel.frame.width > 300 && panel.frame.height > 400)
         c.check("panel is not opaque", !panel.isOpaque)
         c.check("panel is transparent-backed", panel.backgroundColor == .clear)
-        c.check("panel floats above normal windows", panel.level == .floating)
-        c.check("panel does not activate the app", panel.styleMask.contains(.nonactivatingPanel))
-        c.check("panel joins all spaces", panel.collectionBehavior.contains(.canJoinAllSpaces))
+        // A normal window, and these are what "normal" means: it sits at the
+        // ordinary level so anything can be put in front of it, it activates the
+        // app so clicking it does not leave focus in another window, and it
+        // stays on the Space it was opened on instead of following the user
+        // everywhere. The floating panel these replaced was the feature; it made
+        // Bud impossible to work behind.
+        c.check("panel is an ordinary window, not a floating one", panel.level == .normal)
+        c.check("panel activates the app", !panel.styleMask.contains(.nonactivatingPanel))
+        c.check("panel does not follow across spaces", !panel.collectionBehavior.contains(.canJoinAllSpaces))
+        c.check("panel can become the main window", panel.canBecomeMain)
+        c.check("panel is not a floating panel", !panel.isFloatingPanel)
+        c.check(
+            "panel has standard window controls",
+            panel.styleMask.contains(.miniaturizable) && panel.styleMask.contains(.closable)
+        )
 
         // MARK: Layer tree — is Liquid Glass actually live?
 
@@ -100,10 +112,25 @@ public enum BudUIVerification {
         )
         c.check("no error banner on launch", model.errorMessage == nil)
 
-        // MARK: Hot key
+        // MARK: Hiding and coming back
 
-        controller.installHotKey()
-        c.check("summon hotkey is \(GlobalHotKey.summonShortcutLabel)", true)
+        // Closing hides Bud and leaves the window object alone, because the way
+        // back is the Dock icon — a closed `NSWindow` cannot be ordered back on
+        // screen, so an app that destroyed its window here would answer the icon
+        // with nothing.
+        controller.hide()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        c.check("hiding takes the panel off screen", !controller.isPanelVisible)
+        c.check("the window survives being closed", panel.isReleasedWhenClosed == false)
+
+        controller.show()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        // Not `isKeyWindow`: whether a window can become key depends on the
+        // session having an active app, and this harness may run with the screen
+        // locked. That the hidden window becomes visible again is the claim worth
+        // making here, and it is the one that breaks if the window was destroyed.
+        c.check("the panel comes back after being hidden", controller.isPanelVisible)
+        c.check("the panel can take key focus", panel.canBecomeKey)
 
         // MARK: Collapsed bubble
 
@@ -115,6 +142,14 @@ public enum BudUIVerification {
         c.check("collapse switches to the bubble", controller.showingCollapsed)
         c.check("collapse takes the full panel off screen", !controller.isPanelVisible)
         c.check("collapse shows the bubble", controller.isBubbleVisible)
+        // The bubble is the one thing that keeps the old behaviour, and it is
+        // opt-in. If both windows went normal the bubble would sink behind
+        // whatever is open and be unreachable; if both floated, Bud would be the
+        // window you cannot work behind.
+        if let bubble = controller.bubbleWindow {
+            c.check("the bubble still floats", bubble.level == .floating)
+            c.check("the bubble stays reachable from any space", bubble.collectionBehavior.contains(.canJoinAllSpaces))
+        }
 
         if let bubble = controller.collapsedBubbleFrame {
             c.check(

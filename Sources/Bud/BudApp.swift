@@ -94,7 +94,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Accessory: no Dock icon, no app switcher entry. Bud is summoned, not
         // launched into — this is the difference between a widget and an app.
-        NSApp.setActivationPolicy(.accessory)
 
         // Quitting is what makes an update stick. `open` on an app that is still
         // running only brings the old instance forward, so the updater spawns a
@@ -104,11 +103,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let panels = PanelController(model: model)
         self.panels = panels
-        panels.installHotKey()
-        // Deliberately no window at launch. Bud lives in the menu bar and puts
-        // nothing on screen until it is asked to — an assistant that reappears
-        // in the corner every time you log in is one you learn to resent.
-        // `⌥⌘B`, the menu bar, or a bud:// link bring it up.
+        // Launching Bud opens Bud.
+        //
+        // It used to open nothing at all — the app was a menu bar agent that had
+        // to be summoned, on the theory that anything which reappeared unbidden
+        // every login would be resented. It is not that any more: nothing starts
+        // it but a person, so arriving from the Dock or Spotlight and getting no
+        // window is indistinguishable from a launch that failed.
+        panels.show()
 
         toggleObserver = NotificationCenter.default.addObserver(
             forName: .budTogglePanel,
@@ -230,6 +232,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func askBud(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
         guard let text = pboard.string(forType: .string) else { return }
         model.compose(text, reveal: true)
+    }
+
+    /// Clicking the Dock icon with no window up brings the panel back. Without
+    /// this the icon does nothing once the window has been closed, which is the
+    /// one moment a person is most likely to click it.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { panels?.show() }
+        return true
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
