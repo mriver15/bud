@@ -15,6 +15,7 @@ struct SkillsSettingsView: View {
     @BudState private var newSource = ""
     @BudState private var pendingRemoval: Skill?
     @BudState private var busy: String?
+    @BudState private var refusal: String?
 
     var body: some View {
         ScrollView {
@@ -27,6 +28,19 @@ struct SkillsSettingsView: View {
         }
         .onAppear { refresh() }
         .onChange(of: registry.installedNames) { _, _ in refresh() }
+        .sheet(item: Binding(
+            get: { registry.pending },
+            set: { if $0 == nil { registry.discardPending() } }
+        )) { pending in
+            SkillReviewSheet(
+                pending: pending,
+                onInstall: {
+                    try? registry.confirmPending()
+                    refresh()
+                },
+                onCancel: { registry.discardPending() }
+            )
+        }
         .alert(
             pendingRemoval.map { "Remove “\($0.name)”?" } ?? "Remove skill?",
             isPresented: Binding(
@@ -166,6 +180,26 @@ struct SkillsSettingsView: View {
                 searchField
             }
 
+            if let refusal {
+                HStack(alignment: .top, spacing: Bud.Space.xs) {
+                    Image(systemName: "hand.raised.fill")
+                        .font(Bud.Font.caption)
+                    Text(refusal)
+                        .font(Bud.Font.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    Button("Dismiss") { self.refusal = nil }
+                        .buttonStyle(.plain)
+                        .font(Bud.Font.caption)
+                }
+                .foregroundStyle(Bud.Palette.danger)
+                .padding(Bud.Space.sm)
+                .background {
+                    RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)
+                        .fill(Bud.Palette.danger.opacity(0.12))
+                }
+            }
+
             if let problem = registry.errorMessage {
                 Text(problem)
                     .font(Bud.Font.caption)
@@ -234,7 +268,15 @@ struct SkillsSettingsView: View {
                     Button(busy == entry.id ? "Installing…" : "Install") {
                         Task {
                             busy = entry.id
-                            try? await registry.install(entry)
+                            refusal = nil
+                            do {
+                                try await registry.prepare(entry)
+                            } catch {
+                                // Kept rather than swallowed: the reason a skill
+                                // was refused is the one thing the person needs
+                                // in order to decide what to do about it.
+                                refusal = error.localizedDescription
+                            }
                             busy = nil
                             refresh()
                         }
@@ -337,5 +379,118 @@ struct SkillsSettingsView: View {
         guard let source = parsedSource else { return }
         registry.add(source: source)
         newSource = ""
+    }
+}
+
+
+// MARK: - Review
+
+/// What was found in a skill, before it is allowed in.
+///
+/// Shown when something needed looking at, which is the only case where a screen
+/// is worth interrupting for. A skill with nothing to report installs without one,
+/// because a confirmation nobody has a reason to read is one they learn to click
+/// through.
+struct SkillReviewSheet: View {
+    let pending: SkillRegistry.PendingSkill
+    let onInstall: () -> Void
+    let onCancel: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Bud.Space.md) {
+            VStack(alignment: .leading, spacing: Bud.Space.xs) {
+                Text("Before installing “\(pending.entry.name)”")
+                    .font(Bud.Font.title)
+                Text(pending.report.summary)
+                    .font(Bud.Font.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: Bud.Space.sm) {
+                    ForEach([SkillFinding.Severity.dangerous, .caution, .note], id: \.self) { severity in
+                        let group = pending.report.findings(at: severity)
+                        if !group.isEmpty {
+                            VStack(alignment: .leading, spacing: Bud.Space.xs) {
+                                SectionHeader(severity.label, subtitle: "\(group.count)")
+                                ForEach(group) { finding in
+                                    findingCard(finding)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.trailing, Bud.Space.xs)
+            }
+            .frame(maxHeight: 340)
+
+            footer
+
+            HStack(spacing: Bud.Space.sm) {
+                Spacer(minLength: 0)
+                Button("Cancel") {
+                    onCancel()
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Button("Install anyway") {
+                    onInstall()
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(Bud.Space.lg)
+        .frame(width: 560)
+        .background(.regularMaterial)
+    }
+
+    private func findingCard(_ finding: SkillFinding) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(finding.title)
+                .font(Bud.Font.callout.weight(.medium))
+            Text(finding.detail)
+                .font(Bud.Font.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let file = finding.file {
+                Text(file)
+                    .font(Bud.Font.mono)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Bud.Space.sm)
+        .background {
+            RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)
+                .fill(tint(finding.severity).opacity(0.12))
+        }
+    }
+
+    private func tint(_ severity: SkillFinding.Severity) -> Color {
+        switch severity {
+        case .blocked: return Bud.Palette.danger
+        case .dangerous: return Bud.Palette.danger
+        case .caution: return Bud.Palette.warning
+        case .note: return .secondary
+        }
+    }
+
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(pending.report.fileCount) files · \(pending.report.byteCount / 1024)KB"
+                + (pending.report.executables.isEmpty
+                    ? ""
+                    : " · \(pending.report.executables.count) runnable"))
+                .font(Bud.Font.caption)
+                .foregroundStyle(.secondary)
+            Text("Everything installed is marked as downloaded, so macOS treats any script in it the same way it would a file from a browser.")
+                .font(Bud.Font.micro)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }

@@ -443,27 +443,50 @@ public enum BudLiveVerification {
                 // marketplace is that a folder arrives intact, so the check is
                 // the folder on disk and not the fact that a request succeeded.
                 if let candidate = found.first(where: { !$0.isInstalled }) {
-                    let installed = try await skills.install(candidate)
-                    c.equal("skills: the installed name matches what was offered",
-                            installed.name, candidate.name)
-                    c.check("skills: the skill landed on disk",
-                            FileManager.default.fileExists(
-                                atPath: SkillStore.directory
-                                    .appendingPathComponent(candidate.name)
-                                    .appendingPathComponent("SKILL.md").path
-                            ))
-                    c.check("skills: it reads back with its instructions",
-                            (installed.instructions.count) > 0)
-                    c.check("skills: it is listed as installed",
-                            SkillStore.installed().contains { $0.name == candidate.name })
+                    try await skills.prepare(candidate)
+                    // A real skill from a real repository should not be asking to
+                    // be reviewed: if it is, either the skill changed or a rule is
+                    // too eager, and both are worth knowing about here rather than
+                    // in front of a user.
+                    c.check("skills: a published skill needs no review",
+                            skills.pending == nil)
+                    if skills.pending != nil { try skills.confirmPending() }
 
-                    let resources = installed.resources
-                    c.check("skills: whatever else it carried came with it (\(resources.count) files)",
-                            !resources.isEmpty || candidate.folder.isEmpty)
+                    if let installed = SkillStore.read(name: candidate.name) {
+                        c.equal("skills: the installed name matches what was offered",
+                                installed.name, candidate.name)
+                        c.check("skills: the skill landed on disk",
+                                FileManager.default.fileExists(
+                                    atPath: SkillStore.directory
+                                        .appendingPathComponent(candidate.name)
+                                        .appendingPathComponent("SKILL.md").path
+                                ))
+                        c.check("skills: it reads back with its instructions",
+                                (installed.instructions.count) > 0)
+                        c.check("skills: it is listed as installed",
+                                SkillStore.installed().contains { $0.name == candidate.name })
 
-                    try skills.uninstall(candidate.name)
-                    c.check("skills: uninstalling removes it",
-                            !SkillStore.installed().contains { $0.name == candidate.name })
+                        let resources = installed.resources
+                        c.check("skills: whatever else it carried came with it (\(resources.count) files)",
+                                !resources.isEmpty || candidate.folder.isEmpty)
+
+                        // macOS's own marking, reused rather than reinvented:
+                        // what Bud downloaded should look downloaded.
+                        let manifest = SkillStore.directory
+                            .appendingPathComponent(candidate.name)
+                            .appendingPathComponent("SKILL.md")
+                        let quarantine = try? manifest
+                            .resourceValues(forKeys: [.quarantinePropertiesKey])
+                            .quarantineProperties
+                        c.check("skills: what was downloaded is marked as downloaded",
+                                quarantine != nil)
+
+                        try skills.uninstall(candidate.name)
+                        c.check("skills: uninstalling removes it",
+                                !SkillStore.installed().contains { $0.name == candidate.name })
+                    } else {
+                        c.check("skills: the skill is readable after installing", false)
+                    }
                 }
             } catch {
                 c.check("skills: browsing the shipped source (\(error.localizedDescription))", false)
