@@ -21,8 +21,10 @@ public nonisolated struct NativeToolsProvider: ToolProvider {
         [
             ToolDescriptor(
                 name: "read_file",
-                description: "Read a UTF-8 text file from disk. Returns numbered lines. "
-                    + "Use start_line/end_line to page large files instead of reading everything.",
+                description: "Read a file and return numbered lines. Text is read directly; a PDF "
+                    + "gives up its text layer, and any text inside an image is read from the "
+                    + "picture — so a screenshot of an error can be read, though Bud cannot see "
+                    + "the picture itself. Use start_line/end_line to page large files.",
                 schema: [
                     "type": "object",
                     "properties": [
@@ -142,11 +144,30 @@ public nonisolated struct NativeToolsProvider: ToolProvider {
             throw ToolFailure(message: "read_file requires 'path'.")
         }
         let path = expand(raw)
-        guard let data = FileManager.default.contents(atPath: path) else {
+
+        // Checked before reading rather than after: a video or a disk image is
+        // tens of megabytes, and loading one to discover it is not text costs
+        // more than the answer is worth.
+        if let size = try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int,
+           size > 40_000_000 {
+            throw ToolFailure(message: "\(path) is \(size / 1_000_000)MB, too large to read whole.")
+        }
+        guard let content = FileReading.read(path: path) else {
             throw ToolFailure(message: "No such file: \(path)")
         }
-        guard let text = String(data: data, encoding: .utf8) else {
-            throw ToolFailure(message: "\(path) is not UTF-8 text (\(data.count) bytes).")
+
+        let text: String
+        var caption: String?
+        switch content {
+        case .text(let body):
+            text = body
+        case .extracted(let body, let note):
+            // Worded as where the text came from, because the line numbers below
+            // are the lines of the extraction, not lines that exist on disk.
+            caption = note
+            text = body
+        case .unreadable(let reason):
+            throw ToolFailure(message: "\(path) is \(reason).")
         }
 
         let all = text.components(separatedBy: "\n")
@@ -164,6 +185,7 @@ public nonisolated struct NativeToolsProvider: ToolProvider {
 
         var header = "\(path) — lines \(start)-\(end) of \(all.count)"
         if end < all.count { header += " (\(all.count - end) more lines below)" }
+        if let caption { header += "\n(\(caption))" }
         return .ok(header + "\n" + body)
     }
 

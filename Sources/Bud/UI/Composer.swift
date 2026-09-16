@@ -149,7 +149,7 @@ public struct Composer: View {
                 .fill(.ultraThinMaterial)
         }
         .help(file.isImage
-              ? "\(file.path)\nBud cannot read images yet — the name is noted, not sent."
+              ? "\(file.path)\nBud reads the text inside a picture; it cannot see the picture itself."
               : file.path)
     }
 

@@ -235,17 +235,14 @@ public struct DroppedFile: Sendable, Identifiable, Equatable {
         self.isImage = isImage
     }
 
-    /// What this file contributes to the composer.
+    /// What this file contributes to the composer: its path.
     ///
     /// One line each, so the chip standing for a file and the line it put in the
-    /// composer can be removed together. An image is named rather than staged:
-    /// Bud has no image input, and a path would reach the model as a file no tool
-    /// can turn into anything it can look at.
-    public var stagingLine: String {
-        isImage
-            ? "(image\u{201C}\(name)\u{201D} \u{2014} Bud cannot read image files yet)"
-            : path
-    }
+    /// composer can be removed together. Every kind of file stages the same way
+    /// because `read_file` now reads whatever is legible in what it is given — a
+    /// PDF's text layer, or the words inside a picture — so an image is a path
+    /// the model can do something with rather than one that leads nowhere.
+    public var stagingLine: String { path }
 }
 
 /// One user or assistant turn in the transcript.

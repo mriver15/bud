@@ -44,8 +44,9 @@ public final class BrowserToolProvider: ToolProvider {
         return [
             tool(
                 "browser_open",
-                "Open a URL in the browser and wait for the page to load. After this, call "
-                    + "browser_snapshot to see what is on the page.",
+                "Open a URL and wait for the page. Returns the page outline, with a ref on "
+                    + "everything you can act on. Nothing needs to follow it — do not call "
+                    + "browser_snapshot afterwards; every action already returns a fresh outline.",
                 object([
                     "url": [
                         "type": "string",
@@ -55,9 +56,10 @@ public final class BrowserToolProvider: ToolProvider {
             ),
             tool(
                 "browser_snapshot",
-                "The page as an outline: headings, text, and every link, button, field and checkbox, "
-                    + "each action carrying a ref. Read this before acting — refs come from it, and "
-                    + "acting on a ref that is not here fails.",
+                "The page as an outline: headings, and every link, button, field and checkbox, each "
+                    + "action carrying a ref. Refs come from here and from the outline every action "
+                    + "returns, so call this only when the page has changed without you — one that "
+                    + "loads its own content, or one you have been waiting on.",
                 object([:])
             ),
             tool(
@@ -69,8 +71,8 @@ public final class BrowserToolProvider: ToolProvider {
             ),
             tool(
                 "browser_click",
-                "Click an element by the ref a snapshot gave it. Use for links, buttons, checkboxes "
-                    + "and anything that opens a menu.",
+                "Click an element by the ref an outline gave it. Use for links, buttons, checkboxes "
+                    + "and anything that opens a menu. Returns an updated outline.",
                 object([
                     "ref": ["type": "integer", "description": "From the latest snapshot."],
                     "snapshot_after": [

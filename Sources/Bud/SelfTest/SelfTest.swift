@@ -1,4 +1,7 @@
+import AppKit
 import CryptoKit
+import CoreGraphics
+import Foundation
 import Foundation
 
 /// Dependency-free assertion harness.
@@ -77,6 +80,7 @@ public enum BudSelfTest {
         conversations,
             selfUpdate,
             mcpConfigMapping,
+            fileReading,
             glamaMapping,
             npmResolution,
             toolTruncation,
@@ -1745,6 +1749,143 @@ public enum BudSelfTest {
     /// Runs against a database of its own. Pointing the store at the real one
     /// would make the suite write into the user's history and then assert
     /// against whatever it had left there on the previous run.
+    // MARK: Reading files
+
+    /// What `read_file` makes of the things people actually drop on it.
+    ///
+    /// Every check here guards a case that used to end in the same unhelpful
+    /// place: "not UTF-8 text". A screenshot of an error, a PDF, a note saved by
+    /// an app that does not write UTF-8 — the file somebody dropped is the thing
+    /// they want looked at, and refusing it is not an answer.
+    static func fileReading() -> SelfTestReport {
+        let c = Checker(suite: "reading")
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bud-reading-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        func write(_ name: String, _ data: Data) -> String {
+            let url = directory.appendingPathComponent(name)
+            try? data.write(to: url)
+            return url.path
+        }
+        func read(_ path: String) -> String? {
+            guard let content = FileReading.read(path: path) else { return nil }
+            switch content {
+            case .text(let body), .extracted(let body, _): return body
+            case .unreadable(let reason): return "UNREADABLE: \(reason)"
+            }
+        }
+
+        // MARK: Text
+
+        let utf8 = write("plain.txt", Data("hello from a text file".utf8))
+        c.equal("plain text is read", read(utf8), "hello from a text file")
+
+        // A single-byte encoding, which is what a text file that is not Unicode
+        // looks like. Refusing it would be refusing a text file.
+        var latin = Data("café note".data(using: .isoLatin1) ?? Data())
+        latin[3] = 0xE9  // é as Latin-1
+        let latinPath = write("latin.txt", latin)
+        c.check("a non-UTF-8 text file is still read", read(latinPath)?.contains("caf") == true)
+
+        // UTF-16 is full of NUL bytes, so a binary check that runs first would
+        // call it binary and refuse it.
+        let utf16 = write("utf16.txt", "wide characters".data(using: .utf16) ?? Data())
+        c.equal("UTF-16 text is read", read(utf16), "wide characters")
+
+        // MARK: Binary
+
+        // A blob with no name worth trusting and bytes that are not text.
+        let blob = write("thing.bin", Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] + [UInt8](repeating: 0, count: 400)))
+        let binary = read(blob)
+        c.check("binary data is not dumped as text", binary?.hasPrefix("UNREADABLE") == true)
+        c.check("and says what it found instead", binary?.contains("binary data") == true)
+
+        // Named as a picture but not one. Saying "no text in it" would send
+        // someone looking for the wrong thing entirely.
+        let fake = write("thing.png", Data(repeating: 0, count: 200))
+        c.check("a file that claims to be an image but is not says so",
+                read(fake)?.contains("could not be opened") == true)
+
+        // MARK: PDF
+
+        if let pdf = Self.makePDF(text: "quarterly revenue rose sharply") {
+            let path = write("report.pdf", pdf)
+            let extracted = read(path)
+            c.check("a PDF gives up its text layer", extracted?.contains("quarterly revenue") == true)
+        } else {
+            c.check("a PDF could be built to test with", false)
+        }
+
+        // MARK: Images
+
+        // Rendered here rather than shipped as a fixture, so the check is of the
+        // reading rather than of a file that might drift away from it.
+        let shotPath = Self.makeImage(text: "permission denied").map { write("shot.png", $0) }
+        var ocrText: String?
+        var ocrCaption: String?
+        if let shotPath, case .extracted(let text, let caption)? = FileReading.read(path: shotPath) {
+            ocrText = text
+            ocrCaption = caption
+        }
+        c.check("text inside an image is read (\(ocrText?.prefix(28) ?? "nothing"))",
+                ocrText?.lowercased().contains("permission") == true)
+        c.check("and the answer says it read the words, not the picture",
+                ocrCaption?.contains("not the picture") == true)
+
+        // An image with no words in it must not come back as a failure: there is
+        // a real difference between "nothing here" and "cannot open this".
+        if let blank = Self.makeImage(text: "") {
+            let result = read(write("blank.png", blank))
+            c.check("an image with no text says so rather than failing",
+                    result?.contains("no text in it") == true)
+        }
+
+        return c.report()
+    }
+
+    /// A one-page PDF with a real text layer, drawn rather than shipped.
+    private static func makePDF(text: String) -> Data? {
+        let data = NSMutableData()
+        var box = CGRect(x: 0, y: 0, width: 420, height: 200)
+        guard let consumer = CGDataConsumer(data: data),
+              let context = CGContext(consumer: consumer, mediaBox: &box, nil)
+        else { return nil }
+        context.beginPDFPage(nil)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+        NSAttributedString(
+            string: text,
+            attributes: [.font: NSFont.systemFont(ofSize: 22), .foregroundColor: NSColor.black]
+        ).draw(at: NSPoint(x: 40, y: 90))
+        NSGraphicsContext.restoreGraphicsState()
+        context.endPDFPage()
+        context.closePDF()
+        return data as Data
+    }
+
+    /// A PNG with the given text drawn into it — empty text draws a blank page.
+    private static func makeImage(text: String) -> Data? {
+        let size = text.isEmpty ? NSSize(width: 200, height: 80) : NSSize(width: 620, height: 120)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor.white.setFill()
+        NSRect(origin: .zero, size: size).fill()
+        if !text.isEmpty {
+            NSAttributedString(
+                string: text,
+                attributes: [.font: NSFont.systemFont(ofSize: 44), .foregroundColor: NSColor.black]
+            ).draw(at: NSPoint(x: 24, y: 38))
+        }
+        image.unlockFocus()
+        guard let tiff = image.tiffRepresentation,
+              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])
+        else { return nil }
+        return png
+    }
+
     static func conversations() -> SelfTestReport {
         let c = Checker(suite: "conversations")
 
@@ -2098,9 +2239,9 @@ public enum BudSelfTest {
         }
 
         c.equal("a file stages as its path", document.stagingLine, "/tmp/notes.txt")
-        c.check(
-            "an image is named, not staged as a path Bud cannot use",
-            picture.stagingLine.contains("shot.png") && !picture.stagingLine.hasPrefix("/tmp")
+        c.equal(
+            "an image stages its path, because read_file reads the text inside it",
+            picture.stagingLine, "/tmp/shot.png"
         )
         c.equal("both dropped files are remembered", staged.0, 2)
         c.check("the composer carries both", staged.1.contains("/tmp/notes.txt") && staged.1.contains("shot.png"))
