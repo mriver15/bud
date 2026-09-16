@@ -40,6 +40,9 @@ public struct Composer: View {
             }
         }
         .onAppear { isFocused = true }
+        .onReceive(NotificationCenter.default.publisher(for: .budCommandPalette)) { _ in
+            openCommandMenu()
+        }
         .onChange(of: model.composerFocusToken) { _, _ in
             // Text staged from outside the panel, or the panel ordered back on
             // screen: either way the caret has to be placed rather than assumed.
@@ -220,7 +223,12 @@ public struct Composer: View {
                             .font(Bud.Font.caption)
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
-                        Spacer(minLength: 0)
+                        Spacer(minLength: Bud.Space.sm)
+                        if let shortcut = command.shortcut {
+                            Text(shortcut)
+                                .font(Bud.Font.mono)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                     .padding(.horizontal, Bud.Space.md)
                     .padding(.vertical, 6)
@@ -326,6 +334,16 @@ private enum SlashCommand: String, CaseIterable, Identifiable {
         case .mcp: return "Manage MCP servers"
         case .marketplace: return "Browse the MCP registry"
         case .agents: return "Review subagent runs"
+        }
+    }
+
+    /// Shown beside the command. Only the ones that are real: a column of
+    /// invented shortcuts would be worse than an empty one.
+    var shortcut: String? {
+        switch self {
+        case .new: return "⌘N"
+        case .settings: return "⌘,"
+        case .tools, .mcp, .marketplace, .agents: return nil
         }
     }
 

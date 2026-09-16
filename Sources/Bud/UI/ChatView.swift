@@ -10,6 +10,10 @@ public struct ChatView: View {
     @BudState private var isNearBottom = true
     @BudState private var isUserScrolling = false
     @BudState private var isDropTargeted = false
+    @BudState private var isFinding = false
+    @BudState private var findQuery = ""
+    @BudState private var findCursor = 0
+    @FocusState private var isFindFocused: Bool
 
     private static let bottomAnchor = "bud.chat.bottom"
     private static let starterPrompts = [
@@ -24,8 +28,17 @@ public struct ChatView: View {
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
-            transcript
+        // The reader wraps the whole column so the find bar can scroll the
+        // transcript to a match. `transcriptScroll` keeps its own reader for
+        // following the stream; both address the same scroll view.
+        ScrollViewReader { proxy in
+            VStack(spacing: 0) {
+                if isFinding {
+                    findBar
+                        .contentColumn()
+                }
+
+                transcript
 
             if model.isStreaming {
                 statusStrip
@@ -39,11 +52,16 @@ public struct ChatView: View {
                     .contentColumn()
             }
 
-            Composer(model: model)
-                .padding(.horizontal, Bud.Space.md)
-                .padding(.top, Bud.Space.xs)
-                .padding(.bottom, Bud.Space.md)
-                .contentColumn()
+                Composer(model: model)
+                    .padding(.horizontal, Bud.Space.md)
+                    .padding(.top, Bud.Space.xs)
+                    .padding(.bottom, Bud.Space.md)
+                    .contentColumn()
+            }
+            .onChange(of: findCursor) { _, _ in scrollToCurrentMatch(proxy) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .budFindInChat)) { _ in
+            openFind()
         }
         // The drop is taken by the surface rather than by the transcript: a file
         // has no target inside a conversation, so wherever the user lets go of it
@@ -79,12 +97,19 @@ public struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: Bud.Space.md) {
+                    // Resolved once per pass rather than per row: filtering the
+                    // turns inside the loop would walk the whole transcript once
+                    // for every turn in it.
+                    let found = Set(matches)
                     ForEach(model.turns) { turn in
                         TranscriptRow(
                             turn: turn,
                             model: model,
-                            isLatest: turn.id == model.turns.last?.id
+                            isLatest: turn.id == model.turns.last?.id,
+                            highlight: isFinding ? findQuery : nil,
+                            isDimmed: isFinding && !found.contains(turn.id)
                         )
+                        .id(turn.id)
                     }
                     Color.clear.frame(height: 1).id(Self.bottomAnchor)
                 }
@@ -121,6 +146,111 @@ public struct ChatView: View {
                     proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
                 }
             }
+        }
+    }
+
+    // MARK: - Find
+
+    private var findBar: some View {
+        HStack(spacing: Bud.Space.sm) {
+            Image(systemName: "magnifyingglass")
+                .font(Bud.Font.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
+
+            TextField("Find in this chat", text: $findQuery)
+                .textFieldStyle(.plain)
+                .font(Bud.Font.callout)
+                .focused($isFindFocused)
+                .onSubmit { advance() }
+
+            Text(matchSummary)
+                .font(Bud.Font.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .fixedSize()
+
+            findStep(symbol: "chevron.up", help: "Previous", by: -1)
+            findStep(symbol: "chevron.down", help: "Next", by: 1)
+
+            Button { closeFind() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Close find")
+        }
+        .padding(.horizontal, Bud.Space.md)
+        .padding(.vertical, Bud.Space.sm)
+        .background {
+            RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)
+                .fill(.ultraThinMaterial)
+        }
+        .padding(.horizontal, Bud.Space.md)
+        .padding(.bottom, Bud.Space.xs)
+        .onExitCommand { closeFind() }
+        .onChange(of: findQuery) { _, _ in
+            // A new query is a new result set, so the cursor starts at the top of
+            // it rather than holding a position that no longer means anything.
+            findCursor = 0
+        }
+    }
+
+    private func findStep(symbol: String, help: String, by step: Int) -> some View {
+        Button { advance(by: step) } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(matches.isEmpty ? Color.secondary.opacity(0.4) : Color.secondary)
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(matches.isEmpty)
+        .help(help)
+    }
+
+    /// Turn ids containing the query, in transcript order.
+    private var matches: [String] {
+        guard isFinding, !findQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        return model.turns.filter { $0.matches(findQuery) }.map(\.id)
+    }
+
+    private var currentMatchIndex: Int? {
+        let count = matches.count
+        guard count > 0 else { return nil }
+        return min(max(findCursor, 0), count - 1)
+    }
+
+    private var matchSummary: String {
+        guard !findQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "" }
+        guard let index = currentMatchIndex else { return "No matches" }
+        return "\(index + 1) of \(matches.count)"
+    }
+
+    private func advance(by step: Int = 1) {
+        let count = matches.count
+        guard count > 0 else { return }
+        // Wraps, so holding Return walks the results rather than dead-ending.
+        findCursor = ((currentMatchIndex ?? 0) + step + count) % count
+    }
+
+    private func openFind() {
+        isFinding = true
+        isFindFocused = true
+    }
+
+    private func closeFind() {
+        isFinding = false
+        findQuery = ""
+        findCursor = 0
+    }
+
+    private func scrollToCurrentMatch(_ proxy: ScrollViewProxy) {
+        guard let index = currentMatchIndex else { return }
+        withAnimation(.snappy(duration: 0.2)) {
+            proxy.scrollTo(matches[index], anchor: .center)
         }
     }
 

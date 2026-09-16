@@ -189,6 +189,38 @@ public enum Segment: Sendable, Identifiable {
     }
 }
 
+extension Turn {
+    /// Everything in the turn a reader can see, for search.
+    ///
+    /// Generous on purpose. A find that skipped tool arguments and results would
+    /// miss the thing most worth finding — the output you are trying to get back
+    /// to, which is the reason you are searching a transcript rather than a list
+    /// of questions.
+    public var searchableText: String {
+        var parts: [String] = []
+        for segment in segments {
+            switch segment {
+            case .reasoning(_, let text), .text(_, let text), .notice(_, let text, _):
+                parts.append(text)
+            case .tool(_, let call, let providerName, _, let resultText, _):
+                parts.append(providerName)
+                parts.append(call.name)
+                parts.append(call.arguments)
+                if let resultText { parts.append(resultText) }
+            }
+        }
+        if let error { parts.append(error) }
+        return parts.joined(separator: "\n")
+    }
+
+    /// Whether this turn contains `query`, case- and diacritic-insensitively.
+    public func matches(_ query: String) -> Bool {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return searchableText.range(of: trimmed, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+    }
+}
+
 /// One user or assistant turn in the transcript.
 public struct Turn: Sendable, Identifiable {
     public var id: String

@@ -39,6 +39,24 @@ public struct BudApp: App {
                 Button("New Chat") { delegate.model.clearTranscript() }
                     .keyboardShortcut("n", modifiers: .command)
             }
+            // In the menu, not on a hidden button: this is the only place the
+            // shortcuts are discoverable at all, and a shortcut nobody can find
+            // is a shortcut nobody has.
+            CommandGroup(after: .toolbar) {
+                Button("Find in Chat") {
+                    NotificationCenter.default.post(name: .budShowPanel, object: nil)
+                    NotificationCenter.default.post(name: .budShowChat, object: nil)
+                    NotificationCenter.default.post(name: .budFindInChat, object: nil)
+                }
+                .keyboardShortcut("f", modifiers: .command)
+
+                Button("Command Palette") {
+                    NotificationCenter.default.post(name: .budShowPanel, object: nil)
+                    NotificationCenter.default.post(name: .budShowChat, object: nil)
+                    NotificationCenter.default.post(name: .budCommandPalette, object: nil)
+                }
+                .keyboardShortcut("k", modifiers: .command)
+            }
         }
     }
 }

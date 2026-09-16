@@ -219,4 +219,8 @@ extension Notification.Name {
     /// starts a conversation, so the panel is never left sitting on History
     /// showing a chat the user has already asked for.
     static let budShowChat = Notification.Name("bud.showChat")
+    /// Open the find bar over the transcript.
+    static let budFindInChat = Notification.Name("bud.findInChat")
+    /// Open the composer's command palette.
+    static let budCommandPalette = Notification.Name("bud.commandPalette")
 }

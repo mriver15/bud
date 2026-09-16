@@ -11,16 +11,29 @@ public struct TranscriptRow: View {
     /// The newest turn in the transcript. Its actions are always on show, because
     /// the answer just received is the one anyone copies or retries, and a control
     /// that only exists once the pointer happens to cross it does not exist.
-    private let isLatest: Bool
 
     @BudState private var rowWidth: CGFloat = 0
     @BudState private var isHovering = false
     @BudState private var didCopy = false
 
-    public init(turn: Turn, model: AppModel, isLatest: Bool = false) {
+    private let isLatest: Bool
+    /// The live find query, or nil when nothing is being searched for.
+    private let highlight: String?
+    /// Whether a search is running and this turn is not one of its results.
+    private let isDimmed: Bool
+
+    public init(
+        turn: Turn,
+        model: AppModel,
+        isLatest: Bool = false,
+        highlight: String? = nil,
+        isDimmed: Bool = false
+    ) {
         self.turn = turn
         self.model = model
         self.isLatest = isLatest
+        self.highlight = highlight
+        self.isDimmed = isDimmed
     }
 
     public var body: some View {
@@ -47,6 +60,12 @@ public struct TranscriptRow: View {
         } action: { width in
             rowWidth = width
         }
+        // Dimmed rather than hidden: a result is easier to place when the turns
+        // around it are still there. Only prose is marked inside a matching turn
+        // — reasoning and tool output are where a match may be, but they render
+        // through their own views, so a hit there is found by reading the turn
+        // rather than by the highlight.
+        .opacity(isDimmed ? 0.28 : 1)
         .onHover { isHovering = $0 }
         // The same actions on right-click. Hover is invisible until you happen to
         // pass over a turn, and the actions people most want on a bad answer are
@@ -182,7 +201,7 @@ public struct TranscriptRow: View {
             )
 
         case .text(let id, let text):
-            MarkdownView(text, showsCaret: isTail(id))
+            MarkdownView(text, showsCaret: isTail(id), highlight: highlight)
 
         case .tool(let id, let call, let providerName, let state, let resultText, let ui):
             ToolActivityRow(

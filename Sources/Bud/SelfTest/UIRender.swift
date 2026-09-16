@@ -128,6 +128,42 @@ public enum UIRender {
             into: &written
         )
 
+        // MARK: Find
+
+        // The find state is driven directly. The bar itself needs a keystroke to
+        // open, but what is worth looking at is the marking and the dimming, and
+        // `TranscriptRow` takes both as parameters — so this is the real render
+        // path, not a reproduction of it.
+        do {
+            let sample = Self.sampleTurns()
+            let query = "service"
+            let found = Set(sample.filter { $0.1.matches(query) }.map(\.1.id))
+            emit(
+                "transcript-find",
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Bud.Space.lg) {
+                        ForEach(Array(sample.enumerated()), id: \.element.1.id) { _, pair in
+                            TranscriptRow(
+                                turn: pair.1,
+                                model: model,
+                                highlight: query,
+                                isDimmed: !found.contains(pair.1.id)
+                            )
+                        }
+                    }
+                    .padding(Bud.Space.md)
+                    .frame(maxWidth: Bud.contentMeasure, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+                }
+                .frame(width: Bud.panelWidth, height: Bud.panelHeight)
+                .background(Color.black.opacity(0.30)),
+                width: Bud.panelWidth,
+                height: Bud.panelHeight,
+                directory: directory,
+                into: &written
+            )
+        }
+
         // MARK: Generative UI
 
         let spec: JSONValue = .object([

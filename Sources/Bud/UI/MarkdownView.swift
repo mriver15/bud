@@ -12,21 +12,25 @@ import SwiftUI
 public struct MarkdownView: View {
     private let blocks: [MarkdownBlock]
     private let showsCaret: Bool
+    /// The live find query, marked wherever it occurs. Nil when nothing is being
+    /// searched for, which is the case the vast majority of the time.
+    private let highlight: String?
 
     /// Plain rendering, no caret.
-    public init(_ text: String) {
-        self.init(blocks: MarkdownParser.parse(text), showsCaret: false)
+    public init(_ text: String, highlight: String? = nil) {
+        self.init(blocks: MarkdownParser.parse(text), showsCaret: false, highlight: highlight)
     }
 
     /// Streaming rendering. The caret blinks on the final block so a message
     /// that is still arriving reads as live text instead of a frozen fragment.
-    public init(_ text: String, showsCaret: Bool) {
-        self.init(blocks: MarkdownParser.parse(text), showsCaret: showsCaret)
+    public init(_ text: String, showsCaret: Bool, highlight: String? = nil) {
+        self.init(blocks: MarkdownParser.parse(text), showsCaret: showsCaret, highlight: highlight)
     }
 
-    private init(blocks: [MarkdownBlock], showsCaret: Bool) {
+    private init(blocks: [MarkdownBlock], showsCaret: Bool, highlight: String?) {
         self.blocks = blocks
         self.showsCaret = showsCaret
+        self.highlight = highlight
     }
 
     public var body: some View {
@@ -58,28 +62,28 @@ public struct MarkdownView: View {
     private func blockView(_ block: MarkdownBlock, caret: Bool) -> some View {
         switch block {
         case .heading(let level, let text):
-            Text(MarkdownInline.attributed(text, font: Self.headingFont(level), weight: .semibold, caret: caret))
+            Text(MarkdownInline.attributed(text, font: Self.headingFont(level), weight: .semibold, caret: caret, highlight: highlight))
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, level <= 2 ? Bud.Space.xs : 0)
 
         case .paragraph(let text):
-            Text(MarkdownInline.attributed(text, font: Bud.Font.body, caret: caret))
+            Text(MarkdownInline.attributed(text, font: Bud.Font.body, caret: caret, highlight: highlight))
                 .fixedSize(horizontal: false, vertical: true)
 
         case .code(let language, let body):
             MarkdownCodeBlock(language: language, code: caret ? body + MarkdownInline.caretGlyph : body)
 
         case .bullets(let items):
-            MarkdownListView(items: items, ordered: false, start: 1, caret: caret)
+            MarkdownListView(items: items, ordered: false, start: 1, caret: caret, highlight: highlight)
 
         case .numbered(let start, let items):
-            MarkdownListView(items: items, ordered: true, start: start, caret: caret)
+            MarkdownListView(items: items, ordered: true, start: start, caret: caret, highlight: highlight)
 
         case .quote(let lines):
             VStack(alignment: .leading, spacing: Bud.Space.xs) {
                 ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
                     let isLast = caret && index == lines.count - 1
-                    Text(MarkdownInline.attributed(line, font: Bud.Font.body, caret: isLast))
+                    Text(MarkdownInline.attributed(line, font: Bud.Font.body, caret: isLast, highlight: highlight))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -122,6 +126,7 @@ private struct MarkdownListView: View {
     let ordered: Bool
     let start: Int
     let caret: Bool
+    let highlight: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: Bud.Space.xs) {
@@ -132,7 +137,7 @@ private struct MarkdownListView: View {
                         .font(Bud.Font.caption)
                         .foregroundStyle(Bud.Palette.accent.opacity(0.85))
                         .frame(minWidth: 14, alignment: .trailing)
-                    Text(MarkdownInline.attributed(item.text, font: Bud.Font.body, caret: isLast))
+                    Text(MarkdownInline.attributed(item.text, font: Bud.Font.body, caret: isLast, highlight: highlight))
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.leading, CGFloat(item.depth) * 14)
@@ -220,7 +225,13 @@ private enum MarkdownInline {
     /// The base type comes from the scale as a `Font`; the size the emphasis
     /// runs below need is re-derived by `Font.weight(_:)`/`italic()` rather than
     /// from a raw point size.
-    static func attributed(_ text: String, font: Font, weight: Font.Weight = .regular, caret: Bool = false) -> AttributedString {
+    static func attributed(
+        _ text: String,
+        font: Font,
+        weight: Font.Weight = .regular,
+        caret: Bool = false,
+        highlight: String? = nil
+    ) -> AttributedString {
         let source = neutralizeDanglingMarkers(text)
         var options = AttributedString.MarkdownParsingOptions()
         options.interpretedSyntax = .inlineOnlyPreservingWhitespace
@@ -242,6 +253,18 @@ private enum MarkdownInline {
                 attributed[run.range].font = font.weight(.semibold)
             } else if intent.contains(.emphasized) {
                 attributed[run.range].font = font.italic()
+            }
+        }
+
+        // Marked after parsing, not before: the source still carries markdown
+        // markers, so an offset found there would land in the wrong place once
+        // they are consumed.
+        if let highlight, !highlight.isEmpty {
+            var searchStart = attributed.startIndex
+            while searchStart < attributed.endIndex,
+                  let found = attributed[searchStart...].range(of: highlight, options: [.caseInsensitive, .diacriticInsensitive]) {
+                attributed[found].backgroundColor = Bud.Palette.accent.opacity(0.38)
+                searchStart = found.upperBound
             }
         }
 
