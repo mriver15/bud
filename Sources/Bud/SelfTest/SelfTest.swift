@@ -2074,6 +2074,42 @@ public enum BudSelfTest {
         let turnHookSet = MainActor.assumeIsolated { AppModel().runtime.onTurnFinished != nil }
         c.check("a finished turn reaches the thing that saves it", turnHookSet)
 
+        // MARK: Dropped files
+
+        // One line per file is the contract the chips rely on: removing a chip
+        // removes the line it stands for, so a path cannot be left behind for a
+        // file the user just took off.
+        //
+        // Measured inside the isolated block and asserted outside it, because the
+        // checker cannot cross an actor boundary.
+        let document = DroppedFile(path: "/tmp/notes.txt", name: "notes.txt", isImage: false)
+        let picture = DroppedFile(path: "/tmp/shot.png", name: "shot.png", isImage: true)
+        let staged = MainActor.assumeIsolated { () -> (Int, String, Int, String, Int) in
+            let model = AppModel()
+            model.composerText = "look at these"
+            model.composerText += "\n" + model.stage(files: [document, picture])
+            let afterStaging = model.attachments.count
+            let withBoth = model.composerText
+            model.removeAttachment(id: document.id)
+            let remaining = model.attachments.count
+            let afterRemoval = model.composerText
+            model.clearAttachments()
+            return (afterStaging, withBoth, remaining, afterRemoval, model.attachments.count)
+        }
+
+        c.equal("a file stages as its path", document.stagingLine, "/tmp/notes.txt")
+        c.check(
+            "an image is named, not staged as a path Bud cannot use",
+            picture.stagingLine.contains("shot.png") && !picture.stagingLine.hasPrefix("/tmp")
+        )
+        c.equal("both dropped files are remembered", staged.0, 2)
+        c.check("the composer carries both", staged.1.contains("/tmp/notes.txt") && staged.1.contains("shot.png"))
+        c.equal("removing one leaves the other", staged.2, 1)
+        c.check("the removed path leaves the composer", !staged.3.contains("/tmp/notes.txt"))
+        c.check("what was typed before is untouched", staged.3.contains("look at these"))
+        c.check("the other file is still staged", staged.3.contains("shot.png"))
+        c.equal("sending clears what was attached", staged.4, 0)
+
         return c.report()
     }
 

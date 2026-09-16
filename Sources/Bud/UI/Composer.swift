@@ -34,6 +34,7 @@ public struct Composer: View {
                     if let problem = model.config.setupProblem {
                         KeyMissingBanner(problem: problem) { model.openSettings(tab: .general) }
                     }
+                    attachments
                     input
                     toolbar
                 }
@@ -87,11 +88,78 @@ public struct Composer: View {
             }
     }
 
+    // MARK: - Attachments
+
+    /// What a drop took, shown so the drop is visibly something that happened.
+    ///
+    /// A thumbnail for an image rather than only a filename, because a preview
+    /// is the whole point of dropping a picture — and the same chip says plainly
+    /// that Bud cannot read it yet, which is better learned here than from an
+    /// answer about a filename.
+    @ViewBuilder
+    private var attachments: some View {
+        if !model.attachments.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Bud.Space.xs) {
+                    ForEach(model.attachments) { file in
+                        attachmentChip(file)
+                    }
+                }
+                .padding(.vertical, 1)
+            }
+            .frame(maxHeight: 46)
+        }
+    }
+
+    private func attachmentChip(_ file: DroppedFile) -> some View {
+        HStack(spacing: Bud.Space.xs) {
+            if file.isImage, let image = NSImage(contentsOfFile: file.path) {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 26, height: 26)
+                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            } else {
+                Image(systemName: file.isImage ? "photo" : "doc")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(file.isImage ? Bud.Palette.warning : .secondary)
+                    .frame(width: 26, height: 26)
+            }
+
+            Text(file.name)
+                .font(Bud.Font.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: 150, alignment: .leading)
+
+            Button { model.removeAttachment(id: file.id) } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16, height: 16)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Remove")
+        }
+        .padding(.horizontal, Bud.Space.xs)
+        .padding(.vertical, 3)
+        .background {
+            RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)
+                .fill(.ultraThinMaterial)
+        }
+        .help(file.isImage
+              ? "\(file.path)\nBud cannot read images yet — the name is noted, not sent."
+              : file.path)
+    }
+
     // MARK: - Toolbar
 
     private var toolbar: some View {
         HStack(spacing: Bud.Space.snug) {
             GlassChip(model.config.model, systemImage: "cpu")
+
+            effortMenu
 
             Button {
                 showsTools = true
@@ -112,6 +180,46 @@ public struct Composer: View {
                 }
             }
         }
+    }
+
+    /// How hard the model should think before answering.
+    ///
+    /// Here rather than only in Settings because it is a per-question decision: a
+    /// lookup does not need the depth a design question does, and having to go
+    /// into settings between turns is enough friction that nobody ever would.
+    private var effortMenu: some View {
+        Menu {
+            Button("Automatic") { setEffort(nil) }
+            Divider()
+            ForEach(Self.effortLevels, id: \.self) { level in
+                Button(Self.effortLabel(level)) { setEffort(level) }
+            }
+        } label: {
+            GlassChip(Self.effortLabel(model.config.reasoningEffort), systemImage: "brain")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("How much thinking the model does before answering")
+    }
+
+    /// The levels every provider understands. `max` and `xhigh` are accepted by
+    /// one of them, so a value already set there is shown but not offered here.
+    private static let effortLevels = ["low", "medium", "high"]
+
+    private static func effortLabel(_ effort: String?) -> String {
+        switch effort?.lowercased() {
+        case .none, "": return "Auto"
+        case "low": return "Quick"
+        case "medium": return "Balanced"
+        case "high", "xhigh", "max": return "Deep"
+        default: return effort ?? "Auto"
+        }
+    }
+
+    private func setEffort(_ effort: String?) {
+        model.config.reasoningEffort = effort
+        model.persistConfig()
     }
 
     private var sendButton: some View {
@@ -312,6 +420,7 @@ public struct Composer: View {
         guard canSend else { return }
         let text = model.composerText
         model.composerText = ""
+        model.clearAttachments()
         dismissedQuery = nil
         highlightedCommand = 0
         Task { await model.send(text) }

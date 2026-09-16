@@ -307,7 +307,10 @@ public struct ChatView: View {
                 if let url = Self.fileURL(from: item) { dropped.append(url) }
             }
             guard !dropped.isEmpty else { return }
-            model.compose(Self.stagingText(for: dropped), appending: true)
+            let files = dropped.map {
+                DroppedFile(path: $0.path, name: $0.lastPathComponent, isImage: Self.isImage($0))
+            }
+            model.compose(model.stage(files: files), appending: true)
         }
         return true
     }
@@ -332,23 +335,6 @@ public struct ChatView: View {
     /// of a PNG would reach the model as a file no tool can turn into anything it
     /// can look at — the user would get an answer about a filename. Saying so is
     /// the one useful thing to do with it.
-    private static func stagingText(for urls: [URL]) -> String {
-        var paths: [String] = []
-        var images: [String] = []
-        for url in urls {
-            if isImage(url) {
-                images.append(url.lastPathComponent)
-            } else {
-                paths.append(url.path)
-            }
-        }
-        if !images.isEmpty {
-            let noun = images.count == 1 ? "image" : "images"
-            paths.append("(\(images.count) \(noun) dropped — Bud cannot read image files yet: \(images.joined(separator: ", ")))")
-        }
-        return paths.joined(separator: "\n")
-    }
-
     /// Reads the content type rather than the extension: a file with no suffix, or
     /// the wrong one, still has to be recognised. This is a metadata-only query,
     /// which is what makes it cheap enough to run on the drop itself.

@@ -221,6 +221,33 @@ extension Turn {
     }
 }
 
+/// A file dropped on the panel.
+public struct DroppedFile: Sendable, Identifiable, Equatable {
+    public var path: String
+    public var name: String
+    public var isImage: Bool
+
+    public var id: String { path }
+
+    public init(path: String, name: String, isImage: Bool) {
+        self.path = path
+        self.name = name
+        self.isImage = isImage
+    }
+
+    /// What this file contributes to the composer.
+    ///
+    /// One line each, so the chip standing for a file and the line it put in the
+    /// composer can be removed together. An image is named rather than staged:
+    /// Bud has no image input, and a path would reach the model as a file no tool
+    /// can turn into anything it can look at.
+    public var stagingLine: String {
+        isImage
+            ? "(image\u{201C}\(name)\u{201D} \u{2014} Bud cannot read image files yet)"
+            : path
+    }
+}
+
 /// One user or assistant turn in the transcript.
 public struct Turn: Sendable, Identifiable {
     public var id: String

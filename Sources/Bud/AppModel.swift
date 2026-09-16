@@ -70,6 +70,8 @@ public final class AppModel {
     public let mcp: MCPManager
     public let marketplace: MarketplaceStore
     public let subagents: SubagentSupervisor
+    /// Reports a long turn that finished while Bud was not in front.
+    private let notifier = CompletionNotifier()
     public let update: UpdateModel
 
     // MARK: UI state
@@ -145,7 +147,10 @@ public final class AppModel {
         // to be captured. The closure reads `onQuit` when it is called, not when
         // it is set, so the app delegate can still be the one to fill it in.
         update.onQuit = { [weak self] in self?.onQuit?() }
-        runtime.onTurnFinished = { [weak self] in self?.scheduleConversationSave() }
+        runtime.onTurnFinished = { [weak self] in
+            self?.scheduleConversationSave()
+            self?.turnFinished()
+        }
     }
 
     // MARK: Derived state
@@ -249,12 +254,67 @@ public final class AppModel {
         }
         composerText = ""
         errorMessage = nil
+        turnStarted()
         runtime.send(message)
         // The runtime runs the turn on its own task so the caller (a button, a
         // slash command, a generated-UI action) is never blocked by it.
     }
 
-    public func stop() { runtime.stop() }
+    public func stop() {
+        notifier.turnCancelled()
+        runtime.stop()
+    }
+
+    // MARK: - Completion
+
+    /// Remembers when a turn began, so a finished one can be reported only if it
+    /// took long enough to have been worth waiting for.
+    private func turnStarted() { notifier.turnStarted() }
+
+    private func turnFinished() {
+        let answer = turns.last(where: { $0.role == .assistant })?.plainText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary = (answer?.isEmpty == false)
+            ? String(answer!.prefix(140))
+            : "Bud finished this turn."
+        notifier.turnFinished(summary: summary)
+    }
+
+    // MARK: - Attachments
+
+    /// Files staged by a drop, in the order they were dropped.
+    ///
+    /// The composer already carried their paths as text; this is the same fact
+    /// kept in a form that can be shown. A drop that produces no visible change
+    /// is indistinguishable from a drop that failed.
+    public private(set) var attachments: [DroppedFile] = []
+
+    /// Stages dropped files and returns the lines to insert into the composer.
+    public func stage(files: [DroppedFile]) -> String {
+        for file in files where !attachments.contains(where: { $0.id == file.id }) {
+            attachments.append(file)
+        }
+        return files.map(\.stagingLine).joined(separator: "\n")
+    }
+
+    /// Removes one attachment, along with the line it put in the composer.
+    ///
+    /// One line per file is what makes this exact: the chip stands for a line,
+    /// and removing the chip removes the line rather than leaving a path behind
+    /// for a file the user just took off.
+    public func removeAttachment(id: String) {
+        guard let file = attachments.first(where: { $0.id == id }) else { return }
+        attachments.removeAll { $0.id == id }
+        composerText = composerText
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { $0.trimmingCharacters(in: .whitespaces) != file.stagingLine }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    public func clearAttachments() {
+        attachments.removeAll()
+    }
 
     // MARK: - Cost
 
@@ -299,6 +359,7 @@ public final class AppModel {
     /// Asks the same question again, discarding the answer being looked at.
     public func retry(_ turn: Turn) {
         guard let index = turns.firstIndex(where: { $0.id == turn.id }) else { return }
+        turnStarted()
         runtime.retry(turnAt: index)
     }
 
