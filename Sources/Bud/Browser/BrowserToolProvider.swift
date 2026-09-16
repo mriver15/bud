@@ -93,6 +93,40 @@ public final class BrowserToolProvider: ToolProvider {
                 ], required: ["ref", "text"])
             ),
             tool(
+                "browser_hover",
+                "Move the pointer over an element by its ref. For menus, tooltips and anything "
+                    + "that only reveals itself on hover.",
+                object([
+                    "ref": ["type": "integer", "description": "From the latest snapshot."],
+                ], required: ["ref"])
+            ),
+            tool(
+                "browser_select",
+                "Choose an option in a dropdown by its ref. Give either the option's value or its "
+                    + "visible text.",
+                object([
+                    "ref": ["type": "integer"],
+                    "value": ["type": "string", "description": "The option's value attribute."],
+                    "label": ["type": "string", "description": "The option's visible text."],
+                ], required: ["ref"])
+            ),
+            tool(
+                "browser_wait",
+                "Wait until some text appears, or an element matching a CSS selector exists. Use "
+                    + "after an action on a page that loads its content late.",
+                object([
+                    "text": ["type": "string", "description": "Text to wait for."],
+                    "selector": ["type": "string", "description": "A CSS selector to wait for."],
+                    "timeout": ["type": "number", "description": "Seconds. Default 10."],
+                ])
+            ),
+            tool(
+                "browser_console",
+                "What the page logged and what it threw. Usually the only evidence of why a page "
+                    + "that looks fine is not working.",
+                object([:])
+            ),
+            tool(
                 "browser_press",
                 "Press a key in the focused element: Enter, Tab, Escape, Backspace, PageDown, PageUp, "
                     + "Home, End, or an arrow key.",
@@ -136,7 +170,7 @@ public final class BrowserToolProvider: ToolProvider {
                 }
                 try await engine.open(raw)
                 let outline = try await engine.snapshot()
-                return .ok("Opened \(engine.state.url)\n\n\(outline)")
+                return await showing("Opened \(engine.state.url)\n\n\(outline)", page: engine.state.title)
 
             case "browser_snapshot":
                 return .ok(try await engine.snapshot())
@@ -151,9 +185,12 @@ public final class BrowserToolProvider: ToolProvider {
                 }
                 try await engine.click(ref: ref)
                 guard bool(arguments, "snapshot_after") ?? true else {
-                    return .ok("Clicked ref \(ref).")
+                    return await showing("Clicked ref \(ref).", page: engine.state.title)
                 }
-                return .ok("Clicked ref \(ref).\n\n\(try await engine.snapshot())")
+                return await showing(
+                    "Clicked ref \(ref).\n\n\(try await engine.snapshot())",
+                    page: engine.state.title
+                )
 
             case "browser_type":
                 guard let ref = int(arguments, "ref") else {
@@ -164,14 +201,59 @@ public final class BrowserToolProvider: ToolProvider {
                     text: string(arguments, "text") ?? "",
                     submit: bool(arguments, "submit") ?? false
                 )
-                return .ok("Typed into ref \(ref).")
+                return await showing("Typed into ref \(ref).", page: engine.state.title)
+
+            case "browser_hover":
+                guard let ref = int(arguments, "ref") else {
+                    return .error("browser_hover needs the ref a snapshot gave the element.")
+                }
+                try await engine.hover(ref: ref)
+                return await showing("Hovered over ref \(ref).", page: engine.state.title)
+
+            case "browser_select":
+                guard let ref = int(arguments, "ref") else {
+                    return .error("browser_select needs the ref of the dropdown.")
+                }
+                try await engine.select(
+                    ref: ref,
+                    value: string(arguments, "value"),
+                    label: string(arguments, "label")
+                )
+                return await showing(
+                    "Chose an option in ref \(ref).\n\n\(try await engine.snapshot())",
+                    page: engine.state.title
+                )
+
+            case "browser_wait":
+                let text = string(arguments, "text")
+                let selector = string(arguments, "selector")
+                guard text != nil || selector != nil else {
+                    return .error("browser_wait needs something to wait for: text or a selector.")
+                }
+                let arrived = try await engine.wait(
+                    text: text,
+                    selector: selector,
+                    timeout: double(arguments, "timeout") ?? 10
+                )
+                let what = text.map { "text “\($0)”" } ?? "selector \(selector ?? "")"
+                guard arrived else {
+                    return .error("Waited for \(what) and it did not appear.")
+                }
+                return await showing("Found \(what).", page: engine.state.title)
+
+            case "browser_console":
+                let messages = try await engine.consoleMessages()
+                guard !messages.isEmpty else {
+                    return .ok("The page has logged nothing.")
+                }
+                return .ok("Page console:\n" + messages.joined(separator: "\n"))
 
             case "browser_press":
                 guard let key = string(arguments, "key") else {
                     return .error("browser_press needs a key.")
                 }
                 try await engine.press(key)
-                return .ok("Pressed \(key).")
+                return await showing("Pressed \(key).", page: engine.state.title)
 
             case "browser_scroll":
                 try await engine.scroll(
@@ -182,14 +264,20 @@ public final class BrowserToolProvider: ToolProvider {
 
             case "browser_back":
                 try await engine.goBack()
-                return .ok("Went back to \(engine.state.url).\n\n\(try await engine.snapshot())")
+                return await showing(
+                    "Went back to \(engine.state.url).\n\n\(try await engine.snapshot())",
+                    page: engine.state.title
+                )
 
             case "browser_screenshot":
                 let data = try await engine.screenshot()
                 guard let path = save(data) else {
                     return .error("The screenshot could not be written.")
                 }
-                return .ok("Saved a \(data.count / 1024)KB PNG of \(engine.state.url) to \(path).")
+                return ToolResult(
+                    text: "Saved a \(data.count / 1024)KB PNG of \(engine.state.url) to \(path).",
+                    ui: Self.imageSpec(path: path, caption: engine.state.title)
+                )
 
             default:
                 return .error("The \(providerName) provider has no tool named '\(tool)'.")
@@ -203,6 +291,34 @@ public final class BrowserToolProvider: ToolProvider {
         }
     }
 
+    /// The same answer, with a picture of the page beside it.
+    ///
+    /// The model does not read the image — it gets the outline as text, because a
+    /// screenshot is not something it can look at. The user does. A tool row that
+    /// says "clicked ref 7" is much easier to trust, and to correct when it is
+    /// wrong, with the page it clicked on screen next to it.
+    private func showing(_ text: String, page: String) async -> ToolResult {
+        guard let data = try? await engine.screenshot(), let path = save(data) else {
+            return .ok(text)
+        }
+        return ToolResult(text: text, ui: Self.imageSpec(path: path, caption: page))
+    }
+
+    /// A one-image surface. Deliberately not a generic UI spec: this is the tool
+    /// showing its own work, not the model asking for a drawing.
+    private static func imageSpec(path: String, caption: String) -> JSONValue {
+        .object([
+            "title": .string(caption.isEmpty ? "Page" : caption),
+            "components": .array([
+                .object([
+                    "type": .string("image"),
+                    "url": .string(URL(fileURLWithPath: path).absoluteString),
+                    "alt": .string(caption.isEmpty ? "Page" : caption),
+                ]),
+            ]),
+        ])
+    }
+
     /// Written where a person can find them, rather than into a temporary
     /// directory the system is free to empty.
     private func save(_ data: Data) -> String? {
@@ -212,9 +328,33 @@ public final class BrowserToolProvider: ToolProvider {
         let url = directory.appendingPathComponent("page-\(stamp).png")
         do {
             try data.write(to: url, options: .atomic)
+            prune(directory)
             return url.path
         } catch {
             return nil
+        }
+    }
+
+    /// Keeps the newest few and drops the rest.
+    ///
+    /// Every browser action leaves a PNG behind, and a browsing session can run
+    /// to dozens. Left alone this becomes a directory nobody looks in and nobody
+    /// clears, growing for the life of the install.
+    private func prune(_ directory: URL, keeping: Int = 60) {
+        let manager = FileManager.default
+        guard let entries = try? manager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey]
+        ) else { return }
+        let dated = entries
+            .filter { $0.pathExtension == "png" }
+            .compactMap { url -> (URL, Date)? in
+                let date = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+                return date.map { (url, $0) }
+            }
+            .sorted { $0.1 > $1.1 }
+        for (url, _) in dated.dropFirst(keeping) {
+            try? manager.removeItem(at: url)
         }
     }
 
@@ -232,5 +372,9 @@ public final class BrowserToolProvider: ToolProvider {
 
     private func bool(_ arguments: JSONValue, _ key: String) -> Bool? {
         arguments[key]?.boolValue
+    }
+
+    private func double(_ arguments: JSONValue, _ key: String) -> Double? {
+        arguments[key]?.doubleValue
     }
 }

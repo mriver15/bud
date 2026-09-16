@@ -825,10 +825,21 @@ private struct ImageComponent: View {
     let alt: String?
 
     private var link: URL? {
-        guard let link = URL(string: url), let scheme = link.scheme?.lowercased(),
-              scheme == "http" || scheme == "https"
-        else { return nil }
-        return link
+        guard let link = URL(string: url), let scheme = link.scheme?.lowercased() else { return nil }
+        switch scheme {
+        case "http", "https":
+            return link
+        case "file":
+            // Only from Bud's own directory. The browser tools write their page
+            // screenshots there, and a `render_ui` spec is model-authored — a spec
+            // allowed to name any path on disk would turn a UI surface into a
+            // way to probe the filesystem for what exists.
+            let allowed = BudConfigLoader.budDirectory.standardizedFileURL.path
+            let target = link.standardizedFileURL.path
+            return target.hasPrefix(allowed + "/") ? link : nil
+        default:
+            return nil
+        }
     }
 
     var body: some View {

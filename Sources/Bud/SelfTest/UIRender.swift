@@ -20,6 +20,15 @@ import SwiftUI
 /// desktop, and therefore the Liquid Glass blur itself. Surfaces are drawn over a
 /// desktop-like backdrop so the glass tint and specular edge are still readable,
 /// and the glass pipeline's existence is proven separately by `--verify-ui`.
+/// A value filled in by an async step and read once the run loop has pumped.
+///
+/// The harness is synchronous and drives async work through `runLoop`, so a
+/// result has to live somewhere the async step and the sync flow both reach.
+@MainActor
+private final class Deferred<T> {
+    var value: T?
+}
+
 @MainActor
 public enum UIRender {
     public static func run(outputDirectory: String) -> Never {
@@ -147,6 +156,55 @@ public enum UIRender {
             directory: directory,
             into: &written
         )
+
+        // MARK: A browser call in the transcript
+
+        // Through the provider itself, so the picture is of the real result the
+        // real tool returns — screenshot file, spec and all — rather than a
+        // reconstruction of one.
+        let browserTurn = Deferred<Turn>()
+        Task { @MainActor in
+            try? await model.browser.open(page.path)
+            let provider = BrowserToolProvider(engine: model.browser)
+            let result = await provider.invoke(
+                tool: "browser_open",
+                arguments: .object(["url": .string(page.path)]),
+                callID: "render-browser"
+            )
+            browserTurn.value = Turn(
+                role: .assistant,
+                segments: [
+                    .tool(
+                        id: "browser-segment",
+                        call: ToolCall(
+                            id: "render-browser",
+                            name: "browser_open",
+                            arguments: "{\"url\":\"browser-page.html\"}"
+                        ),
+                        providerName: "Browser",
+                        state: .succeeded,
+                        resultText: result.text,
+                        ui: result.ui
+                    ),
+                ]
+            )
+        }
+        runLoop(4.0)
+        if let turn = browserTurn.value {
+            emit(
+                "browser-in-chat",
+                TranscriptRow(turn: turn, model: model, isLatest: true)
+                    .padding(Bud.Space.md)
+                    .frame(width: Bud.contentMeasure, alignment: .leading)
+                    .background(Color.black.opacity(0.30)),
+                width: Bud.contentMeasure,
+                height: 640,
+                directory: directory,
+                into: &written
+            )
+        } else {
+            written.append("browser-in-chat: BLANK (the tool returned no result)")
+        }
 
         // MARK: History
 

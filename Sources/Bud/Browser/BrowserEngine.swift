@@ -58,6 +58,17 @@ public final class BrowserEngine: NSObject {
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.preferences.isElementFullscreenEnabled = false
 
+        // Records what the page said to itself. Installed at document start so it
+        // is listening before any of the page's own script runs — the error worth
+        // having is usually the one thrown while the page is still initialising.
+        configuration.userContentController.addUserScript(
+            WKUserScript(
+                source: Self.consoleHook,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: false
+            )
+        )
+
         webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1280, height: 900), configuration: configuration)
         super.init()
         webView.navigationDelegate = self
@@ -303,6 +314,72 @@ public final class BrowserEngine: NSObject {
         try await settleAfterAction()
     }
 
+    public func hover(ref: Int) async throws {
+        try requireRef(ref)
+        let outcome = try await evaluate(Self.hoverScript, arguments: ["ref": ref]) as? String
+        guard outcome == "ok" else { throw BrowserError.staleRef(ref) }
+    }
+
+    /// Chooses an option in a `<select>`, by value or by its visible label.
+    public func select(ref: Int, value: String?, label: String?) async throws {
+        try requireRef(ref)
+        let outcome = try await evaluate(
+            Self.selectScript,
+            arguments: ["ref": ref, "value": value ?? "", "label": label ?? ""]
+        ) as? String
+        switch outcome {
+        case "ok":
+            return
+        case "missing":
+            throw BrowserError.staleRef(ref)
+        case "no-option":
+            throw BrowserError.script("that dropdown has no option matching what was asked for")
+        default:
+            throw BrowserError.script("that element is not a dropdown")
+        }
+    }
+
+    /// Waits for the page to catch up: text to appear, or an element to exist.
+    ///
+    /// Polled rather than event-driven because the page has no obligation to tell
+    /// anyone it changed — a great deal of the web renders by mutating the DOM
+    /// whenever a fetch resolves, and the DOM has no completion event.
+    public func wait(
+        text: String?,
+        selector: String?,
+        timeout: TimeInterval = 10
+    ) async throws -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let found = try await evaluate(
+                Self.waitScript,
+                arguments: ["text": text ?? "", "selector": selector ?? ""]
+            ) as? Bool
+            if found == true { return true }
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        return false
+    }
+
+    /// What the page logged, and what it threw.
+    ///
+    /// Usually the only evidence of why a page that looks fine is not working:
+    /// a failed request, a framework complaining about a missing element, a
+    /// script that threw before it finished wiring anything up.
+    public func consoleMessages(limit: Int = 60) async throws -> [String] {
+        // Accepted in both shapes for the same reason the snapshot is: the bridge
+        // hands back an array as JSON text, which `unwrap` may already have turned
+        // into a real array.
+        let raw = try await evaluate(Self.consoleReadScript)
+        var messages: [String] = []
+        if let text = raw as? String {
+            messages = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String] ?? []
+        } else if let array = raw as? [Any] {
+            messages = array.compactMap { $0 as? String }
+        }
+        return Array(messages.suffix(limit))
+    }
+
     public func scroll(direction: String, amount: Int) async throws {
         _ = try await evaluate(
             Self.scrollScript,
@@ -419,6 +496,79 @@ public final class BrowserEngine: NSObject {
 
     walk(document.body || document.documentElement);
     return JSON.stringify({ lines: lines, refs: refs, title: document.title || '' });
+    """
+
+    private static let hoverScript = """
+    const el = document.querySelector(`[data-bud-ref="${ref}"]`);
+    if (!el) return 'missing';
+    el.scrollIntoView({ block: 'center', inline: 'center' });
+    const box = el.getBoundingClientRect();
+    const at = { bubbles: true, cancelable: true, view: window,
+                 clientX: box.left + box.width / 2, clientY: box.top + box.height / 2 };
+    // The whole mouseover family: menus open on `mouseenter` often enough that
+    // sending only `mouseover` leaves half of them shut.
+    el.dispatchEvent(new PointerEvent('pointerover', at));
+    el.dispatchEvent(new MouseEvent('mouseover', at));
+    el.dispatchEvent(new MouseEvent('mouseenter', at));
+    el.dispatchEvent(new MouseEvent('mousemove', at));
+    return 'ok';
+    """
+
+    private static let selectScript = """
+    const el = document.querySelector(`[data-bud-ref="${ref}"]`);
+    if (!el) return 'missing';
+    if (el.tagName.toLowerCase() !== 'select') return 'not-select';
+    const options = Array.from(el.options || []);
+    const wanted = options.find((o) => value && o.value === value)
+        || options.find((o) => label && (o.textContent || '').trim() === label)
+        || options.find((o) => label && (o.textContent || '').trim().toLowerCase().includes(label.toLowerCase()));
+    if (!wanted) return 'no-option';
+    el.value = wanted.value;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return 'ok';
+    """
+
+    private static let waitScript = """
+    if (selector) return document.querySelector(selector) !== null;
+    if (text) return (document.body ? document.body.innerText : '').includes(text);
+    return true;
+    """
+
+    private static let consoleReadScript = """
+    return JSON.stringify(window.__budConsole || []);
+    """
+
+    private static let consoleHook = """
+    (() => {
+      if (window.__budConsole) return;
+      const entries = [];
+      window.__budConsole = entries;
+      const render = (arg) => {
+        if (typeof arg === 'string') return arg;
+        try { return JSON.stringify(arg); } catch (e) { return String(arg); }
+      };
+      const push = (level, args) => {
+        try {
+          entries.push(level + ': ' + args.map(render).join(' '));
+          if (entries.length > 300) entries.shift();
+        } catch (e) {}
+      };
+      ['log', 'info', 'warn', 'error', 'debug'].forEach((level) => {
+        const original = console[level];
+        console[level] = function (...args) {
+          push(level, args);
+          if (original) original.apply(console, args);
+        };
+      });
+      window.addEventListener('error', (event) => {
+        push('error', [event.message + ' at ' + (event.filename || '?') + ':' + (event.lineno || 0)]);
+      });
+      window.addEventListener('unhandledrejection', (event) => {
+        const reason = event.reason;
+        push('error', ['unhandled rejection: ' + (reason && reason.message ? reason.message : String(reason))]);
+      });
+    })();
     """
 
     private static let clickScript = """

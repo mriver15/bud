@@ -156,6 +156,55 @@ public enum BudBrowserVerification {
             )
             window.orderOut(nil)
 
+            // MARK: Hovering, choosing, waiting
+
+            let beforeHover = try await engine.evaluate(
+                "return document.getElementById('menuBody').style.display"
+            ) as? String
+            c.equal("the hover target starts hidden", beforeHover, "none")
+
+            let hoverShot = try await engine.snapshot()
+            guard let menuRef = Self.ref(in: hoverShot, for: "button \"Open menu\""),
+                  let regionRef = Self.ref(in: hoverShot, for: "combobox \"Region\"")
+            else {
+                c.check("the snapshot yielded the new refs", false)
+                return c.report()
+            }
+
+            try await engine.hover(ref: menuRef)
+            let afterHover = try await engine.evaluate(
+                "return document.getElementById('menuBody').style.display"
+            ) as? String
+            c.equal("hovering runs what the page listens for", afterHover, "block")
+
+            try await engine.select(ref: regionRef, value: "us", label: nil)
+            let chosen = try await engine.evaluate("return document.getElementById('region').value") as? String
+            c.equal("choosing by value works", chosen, "us")
+
+            try await engine.select(ref: regionRef, value: nil, label: "Europe")
+            let byLabel = try await engine.evaluate("return document.getElementById('region').value") as? String
+            c.equal("choosing by visible text works", byLabel, "eu")
+
+            do {
+                try await engine.select(ref: regionRef, value: nil, label: "Nowhere")
+                c.check("choosing an option that is not there is refused", false)
+            } catch {
+                c.check("choosing an option that is not there is refused", true)
+            }
+
+            // The fixture adds this after 700ms, so a wait that returns true has
+            // actually waited rather than found it already there.
+            let arrived = try await engine.wait(text: "Arrived late", selector: nil, timeout: 5)
+            c.check("waiting finds content that arrives late", arrived)
+
+            let never = try await engine.wait(text: "never appears", selector: nil, timeout: 1)
+            c.check("waiting gives up on what never arrives", !never)
+
+            let messages = try await engine.consoleMessages()
+            c.check("the console is captured (\(messages.count) entries)",
+                    messages.contains { $0.contains("fixture ready") })
+            c.check("including warnings", messages.contains { $0.contains("a warning") })
+
             // MARK: As tools
 
             // The layer the model actually touches: argument parsing, the wording
@@ -232,6 +281,13 @@ public enum BudBrowserVerification {
         <button id="later" type="button" disabled>Continue later</button>
       </form>
       <a href="#reset">Forgot password</a>
+      <select id="region" aria-label="Region">
+        <option value="">Choose a region</option>
+        <option value="eu">Europe</option>
+        <option value="us">United States</option>
+      </select>
+      <button id="menu" type="button">Open menu</button>
+      <div id="menuBody" style="display:none">Menu is open</div>
       <div id="out">idle</div>
       <script>
         // Records what the page was told, so a test can tell typing that reached
@@ -244,6 +300,18 @@ public enum BudBrowserVerification {
         document.getElementById('go').addEventListener('click', () => {
           document.getElementById('out').innerText = 'clicked';
         });
+        document.getElementById('menu').addEventListener('mouseenter', () => {
+          document.getElementById('menuBody').style.display = 'block';
+        });
+
+        console.log('fixture ready');
+        console.warn('a warning');
+        setTimeout(() => {
+          const late = document.createElement('div');
+          late.id = 'late';
+          late.textContent = 'Arrived late';
+          document.body.appendChild(late);
+        }, 700);
       </script>
     </body>
     </html>
