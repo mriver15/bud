@@ -128,6 +128,26 @@ public enum UIRender {
             into: &written
         )
 
+        // MARK: Browser
+
+        // A real page in the real view, loaded from a local file so the picture
+        // does not depend on a site being up. What it shows is what the tools
+        // drive — there is only one web view.
+        let page = directory.appendingPathComponent("browser-page.html")
+        try? Self.browserFixture.write(to: page, atomically: true, encoding: .utf8)
+        Task { try? await model.browser.open(page.path) }
+        runLoop(4.0)
+        emit(
+            "browser",
+            BrowserView(model: model)
+                .frame(width: Bud.panelWidth, height: Bud.panelHeight)
+                .background(Color.black.opacity(0.30)),
+            width: Bud.panelWidth,
+            height: Bud.panelHeight,
+            directory: directory,
+            into: &written
+        )
+
         // MARK: History
 
         // Against the real archive rather than fixtures, so the rows in the
@@ -401,6 +421,41 @@ public enum UIRender {
     }
 
     // MARK: - Sample data
+
+    private static let browserFixture = """
+    <!doctype html>
+    <html><head><meta charset="utf-8"><title>Package runs</title>
+    <style>
+      body { font: 14px -apple-system, system-ui, sans-serif; margin: 0; padding: 28px;
+             background: #101216; color: #e8eaee; }
+      h1 { font-size: 20px; margin: 0 0 4px; }
+      p.sub { margin: 0 0 20px; color: #9aa2b1; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid #232833; }
+      th { color: #9aa2b1; font-weight: 500; font-size: 12px; text-transform: uppercase; }
+      .ok { color: #4fd08a; } .warn { color: #e0b341; }
+      button { font: inherit; padding: 7px 14px; border-radius: 7px; border: 1px solid #2d3442;
+               background: #1b202a; color: #e8eaee; }
+      input { font: inherit; padding: 7px 10px; border-radius: 7px; border: 1px solid #2d3442;
+              background: #171b22; color: #e8eaee; width: 220px; }
+    </style></head>
+    <body>
+      <h1>Package runs</h1>
+      <p class="sub">Last 24 hours across 6 runners</p>
+      <div style="display:flex;gap:10px;margin-bottom:22px">
+        <input placeholder="Filter by package">
+        <button>Refresh</button>
+        <button>Export CSV</button>
+      </div>
+      <table>
+        <tr><th>Package</th><th>Runner</th><th>Duration</th><th>Status</th></tr>
+        <tr><td>registry-client</td><td>eu-west-1</td><td>1m 12s</td><td class="ok">passed</td></tr>
+        <tr><td>auth-service</td><td>eu-west-1</td><td>3m 04s</td><td class="ok">passed</td></tr>
+        <tr><td>worker-pool</td><td>us-east-1</td><td>8m 41s</td><td class="warn">retried</td></tr>
+        <tr><td>edge-proxy</td><td>ap-south-1</td><td>2m 18s</td><td class="ok">passed</td></tr>
+      </table>
+    </body></html>
+    """
 
     private static func sampleTurns() -> [(String, Turn)] {
         var reasoning = Turn(role: .assistant)

@@ -47,6 +47,11 @@ if arguments.contains("--measure") {
     exit(ok ? 0 : 1)
 }
 
+// Drives the real browser against local fixtures, with no network.
+if arguments.contains("--verify-browser") {
+    BudBrowserVerification.run()
+}
+
 // Renders each real surface to a PNG for visual review, then exits.
 if let index = arguments.firstIndex(of: "--render-ui") {
     let path = arguments.count > index + 1

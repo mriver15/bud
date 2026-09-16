@@ -300,6 +300,8 @@ struct RootView: View {
         case .agents:
             SubagentPanel(supervisor: model.subagents, model: model)
                 .padding(Bud.Space.lg)
+        case .browser:
+            BrowserView(model: model)
         case .history:
             ConversationHistoryView(model: model)
         }

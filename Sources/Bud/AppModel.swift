@@ -37,7 +37,7 @@ public enum SettingsTab: String, CaseIterable, Sendable, Identifiable {
 /// notification, and a notification posted before the panel has ever been shown
 /// has no subscriber and is dropped on the floor.
 public enum Surface: String, CaseIterable, Sendable, Identifiable {
-    case chat, agents, history
+    case chat, agents, browser, history
 
     public var id: String { rawValue }
 
@@ -45,6 +45,7 @@ public enum Surface: String, CaseIterable, Sendable, Identifiable {
         switch self {
         case .chat: return "Chat"
         case .agents: return "Agents"
+        case .browser: return "Browser"
         case .history: return "History"
         }
     }
@@ -53,6 +54,7 @@ public enum Surface: String, CaseIterable, Sendable, Identifiable {
         switch self {
         case .chat: return "bubble.left.and.text.bubble.right"
         case .agents: return "person.3.sequence"
+        case .browser: return "globe"
         case .history: return "clock.arrow.circlepath"
         }
     }
@@ -72,6 +74,11 @@ public final class AppModel {
     public let subagents: SubagentSupervisor
     /// Reports a long turn that finished while Bud was not in front.
     private let notifier = CompletionNotifier()
+
+    /// The one browser. The tools drive the same view the Browser surface shows,
+    /// so what the model is reading and what is on screen are the same page
+    /// rather than two that happen to agree.
+    public let browser = BrowserEngine()
     public let update: UpdateModel
 
     // MARK: UI state
@@ -198,6 +205,7 @@ public final class AppModel {
             mcp,
             subagents,
             GenUIToolProvider(),
+            BrowserToolProvider(engine: browser),
         ]
         for provider in providers {
             await env.registry.register(provider)
