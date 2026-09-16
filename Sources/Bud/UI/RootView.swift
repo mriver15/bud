@@ -11,10 +11,23 @@ struct RootView: View {
     @Environment(\.openWindow) private var openWindow
 
     private enum Surface: String, CaseIterable {
-        case chat, agents
+        case chat, agents, history
 
-        var label: String { self == .chat ? "Chat" : "Agents" }
-        var symbol: String { self == .chat ? "bubble.left.and.text.bubble.right" : "person.3.sequence" }
+        var label: String {
+            switch self {
+            case .chat: return "Chat"
+            case .agents: return "Agents"
+            case .history: return "History"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .chat: return "bubble.left.and.text.bubble.right"
+            case .agents: return "person.3.sequence"
+            case .history: return "clock.arrow.circlepath"
+            }
+        }
     }
 
     @BudState private var surface: Surface = .chat
@@ -33,6 +46,15 @@ struct RootView: View {
         }
         .frame(minWidth: 380, minHeight: 420)
         .preferredColorScheme(nil)
+        // The surface is switched from outside the header too — the menu bar's
+        // history row, and anything that opens or starts a conversation — so it
+        // cannot belong to the picker alone.
+        .onReceive(NotificationCenter.default.publisher(for: .budShowHistory)) { _ in
+            select(.history)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .budShowChat)) { _ in
+            select(.chat)
+        }
         .task {
             model.onPresentSettings = { [openWindow] _ in
                 openWindow(id: BudApp.settingsWindowID)
@@ -199,7 +221,7 @@ struct RootView: View {
         HStack(spacing: Bud.Space.hairline) {
             ForEach(Surface.allCases, id: \.self) { option in
                 Button {
-                    withAnimation(.snappy(duration: 0.18)) { surface = option }
+                    select(option)
                 } label: {
                     HStack(spacing: Bud.Space.xs) {
                         Image(systemName: option.symbol).font(.system(size: 10, weight: .medium))
@@ -239,6 +261,12 @@ struct RootView: View {
 
     // MARK: Body
 
+    /// One place that changes the surface, so the animation is the same whether
+    /// the switch came from the picker or from outside the panel.
+    private func select(_ next: Surface) {
+        withAnimation(.snappy(duration: 0.18)) { surface = next }
+    }
+
     @ViewBuilder
     private var content: some View {
         switch surface {
@@ -247,6 +275,8 @@ struct RootView: View {
         case .agents:
             SubagentPanel(supervisor: model.subagents, model: model)
                 .padding(Bud.Space.lg)
+        case .history:
+            ConversationHistoryView(model: model)
         }
     }
 }

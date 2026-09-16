@@ -1708,9 +1708,25 @@ public enum BudSelfTest {
 
     /// The transcript is the only thing Bud writes down that a user would
     /// notice losing, and every failure here is silent: a coding mistake
-    /// produces a file that parses, opens, and is subtly not what was there.
+    /// produces a database that opens, queries, and is subtly not what was
+    /// there.
+    ///
+    /// Runs against a database of its own. Pointing the store at the real one
+    /// would make the suite write into the user's history and then assert
+    /// against whatever it had left there on the previous run.
     static func conversations() -> SelfTestReport {
         let c = Checker(suite: "conversations")
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bud-selftest-\(UUID().uuidString)", isDirectory: true)
+        let previous = BudDatabase.shared
+        BudDatabase.shared = BudDatabase(url: directory.appendingPathComponent("test.sqlite"))
+        defer {
+            BudDatabase.shared = previous
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        c.check("the database opens", BudDatabase.shared.isOpen)
 
         let call = ToolCall(id: "call_1", name: "read_file", arguments: "{\"path\":\"/tmp/x\"}")
         let turn = Turn(
@@ -1725,7 +1741,6 @@ public enum BudSelfTest {
             ],
             createdAt: Date(timeIntervalSince1970: 1_700_000_000)
         )
-        let message = ChatMessage(role: .assistant, content: "hello")
 
         // MARK: Titles
 
@@ -1743,83 +1758,96 @@ public enum BudSelfTest {
 
         // MARK: Round trip
 
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("bud-selftest-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let url = directory.appendingPathComponent("conversations.json")
+        BudStore.save(Conversation(
+            id: "conv_1", title: "kept", turns: [turn],
+            messages: [ChatMessage(role: .assistant, content: "hello")]
+        ))
+        // A question and its answer, as a completed run leaves them. The first
+        // version of this feature saved only one of the pair, because the save
+        // was driven from the wrong place.
+        BudStore.save(Conversation(
+            id: "conv_pair", title: "pair",
+            turns: [
+                Turn(role: .user, segments: [.text(id: "q", text: "question")]),
+                Turn(role: .assistant, segments: [.text(id: "a", text: "answer")]),
+            ]
+        ))
+        let loaded = BudStore.load(id: "conv_1")
 
-        let archive = ConversationArchive(currentID: "conv_1", conversations: [
-            Conversation(id: "conv_1", title: "kept", turns: [turn], messages: [message])
-        ])
-        ConversationStore.save(archive, to: url)
-        let loaded = ConversationStore.load(from: url)
+        c.check("the conversation comes back", loaded != nil)
+        c.equal("both sides of a turn pair are stored",
+                BudStore.load(id: "conv_pair")?.turns.count, 2)
+        c.equal("with its turn", loaded?.turns.count, 1)
+        c.equal("and every segment of it", loaded?.turns.first?.segments.count, 4)
+        c.equal("and the model-facing history", loaded?.messages.count, 1)
 
-        c.equal("the conversation survives the round trip", loaded.conversations.count, 1)
-        c.equal("the open conversation is remembered", loaded.currentID, "conv_1")
-        c.equal("every format version is stamped", loaded.version, ConversationStore.currentVersion)
-
-        guard let restored = loaded.conversations.first else {
-            c.check("a conversation came back", false)
-            return c.report()
-        }
-        c.equal("the segments all come back", restored.turns.count, 1)
-        c.equal("with the same number of them", restored.turns.first?.segments.count, 4)
-        c.equal("the model-facing history is kept too", restored.messages.count, 1)
-
-        // The tool call is the part a positional encoding would silently mangle.
-        if case .tool(let id, let restoredCall, let provider, let state, let result, _)? = restored.turns.first?.segments[2] {
+        if case .tool(let id, let restoredCall, let provider, let state, let result, _)? = loaded?.turns.first?.segments[2] {
             c.equal("a tool segment keeps its id", id, "s3")
-            c.equal("its call", restoredCall, call)
+            c.equal("its call, verbatim", restoredCall, call)
             c.equal("its provider", provider, "Files")
             c.equal("its state", state, .succeeded)
             c.equal("its result", result, "contents")
         } else {
             c.check("the tool segment is a tool segment", false)
         }
-        if case .notice(_, let text, let kind)? = restored.turns.first?.segments[3] {
+        if case .notice(_, let text, let kind)? = loaded?.turns.first?.segments[3] {
             c.equal("a notice keeps its kind", kind, .warning)
             c.equal("and its text", text, "heads up")
         } else {
             c.check("the notice segment is a notice", false)
         }
 
-        // The coding is spelled out rather than synthesised; a synthesised enum
-        // encodes its payload positionally and reordering a case would rename
-        // history out from under itself.
-        let raw = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        c.check("segments carry a named discriminator", raw.contains("\"kind\" : \"tool\""))
-        c.check("and not a positional one", !raw.contains("\"_0\""))
+        // MARK: The list
+
+        BudStore.save(Conversation(
+            id: "conv_0", title: "older",
+            createdAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 1),
+            turns: [Turn(role: .user, segments: [.text(id: "a", text: "a much older question about otters")])]
+        ))
+        let listed = BudStore.list()
+        c.equal("the list has all three", listed.count, 3)
+        // The ordering contract, not a particular row: asserting which id lands
+        // first makes the check fail whenever an unrelated fixture is added,
+        // which is how it failed.
+        c.check("newest first",
+                zip(listed, listed.dropFirst()).allSatisfy { $0.updatedAt >= $1.updatedAt })
+        let kept = listed.first { $0.id == "conv_1" }
+        c.equal("with a turn count", kept?.turnCount, 1)
+        c.check("and a preview of the last thing said", !(kept?.preview.isEmpty ?? true))
+
+        c.equal("search finds a conversation by title",
+                BudStore.search("kept").map(\.id), ["conv_1"])
+        c.equal("and by what was said in it",
+                BudStore.search("otters").map(\.id), ["conv_0"])
+        c.equal("a query too short to mean anything matches nothing",
+                BudStore.search("ot").count, 0)
 
         // MARK: Sanitising
 
-        let interrupted = Conversation(id: "conv_2", turns: [
+        BudStore.save(Conversation(id: "conv_2", turns: [
             Turn(role: .assistant, segments: [
                 .text(id: "t", text: "half an answer"),
                 .tool(id: "u", call: call, providerName: "Files", state: .running,
                       resultText: nil, ui: nil),
             ], isStreaming: true)
-        ])
-        ConversationStore.save(ConversationArchive(currentID: "conv_2", conversations: [interrupted]), to: url)
-        let reloaded = ConversationStore.load(from: url).conversations.first
+        ]))
+        let interrupted = BudStore.load(id: "conv_2")?.turns.first
 
-        c.equal("a turn saved mid-stream does not come back streaming",
-                reloaded?.turns.first?.isStreaming, false)
-        if case .tool(_, _, _, let state, _, _)? = reloaded?.turns.first?.segments[1] {
+        c.equal("a turn saved mid-stream does not come back streaming", interrupted?.isStreaming, false)
+        if case .tool(_, _, _, let state, _, _)? = interrupted?.segments[1] {
             c.equal("a tool that was still running comes back failed", state, .failed)
         } else {
             c.check("the interrupted tool segment survived", false)
         }
 
-        let huge = String(repeating: "x", count: ConversationStore.resultTextLimit + 500)
-        let bulky = Conversation(id: "conv_3", turns: [
+        let huge = String(repeating: "x", count: BudStore.resultTextLimit + 500)
+        BudStore.save(Conversation(id: "conv_3", turns: [
             Turn(role: .assistant, segments: [
                 .tool(id: "v", call: call, providerName: "Shell", state: .succeeded,
                       resultText: huge, ui: nil)
             ])
-        ])
-        ConversationStore.save(ConversationArchive(currentID: "conv_3", conversations: [bulky]), to: url)
-        let clamped = ConversationStore.load(from: url).conversations.first
-        if case .tool(_, _, _, _, let result, _)? = clamped?.turns.first?.segments[0] {
+        ]))
+        if case .tool(_, _, _, _, let result, _)? = BudStore.load(id: "conv_3")?.turns.first?.segments[0] {
             c.check("an enormous tool result is truncated on the way to disk",
                     (result?.count ?? 0) < huge.count)
             c.check("and says so rather than ending mid-sentence",
@@ -1828,28 +1856,103 @@ public enum BudSelfTest {
             c.check("the bulky tool segment survived", false)
         }
 
-        // MARK: Retention and damage
+        // MARK: Deletion and cascades
 
-        let many = (0..<(ConversationStore.retentionLimit + 5)).map { index in
-            Conversation(id: "c\(index)", title: "c\(index)",
-                         updatedAt: Date(timeIntervalSince1970: TimeInterval(index)))
+        BudStore.delete(id: "conv_3")
+        c.nilValue("a deleted conversation is gone", BudStore.load(id: "conv_3"))
+        c.check("and is not listed", !BudStore.list().contains { $0.id == "conv_3" })
+
+        // MARK: Open conversation
+
+        BudStore.setCurrentConversation("conv_1")
+        c.equal("the open conversation is remembered", BudStore.currentConversationID(), "conv_1")
+        BudStore.setCurrentConversation(nil)
+        c.nilValue("and can be cleared", BudStore.currentConversationID())
+
+        // MARK: Retention
+
+        for index in 0..<(BudStore.retentionLimit + 3) {
+            BudStore.save(Conversation(
+                id: "bulk_\(index)", title: "bulk \(index)",
+                createdAt: Date(timeIntervalSince1970: TimeInterval(index)),
+                updatedAt: Date(timeIntervalSince1970: TimeInterval(index)),
+                turns: [Turn(role: .user, segments: [.text(id: "b", text: "bulk \(index)")])]
+            ))
         }
-        ConversationStore.save(ConversationArchive(currentID: "c0", conversations: many), to: url)
-        let pruned = ConversationStore.load(from: url)
-        c.equal("retention caps how many are kept",
-                pruned.conversations.count, ConversationStore.retentionLimit)
-        c.equal("and keeps the newest",
-                pruned.conversations.first?.id, "c\(ConversationStore.retentionLimit + 4)")
-        c.check("the oldest are the ones dropped",
-                !pruned.conversations.contains { $0.id == "c0" })
+        c.equal("retention caps the archive", BudStore.list().count, BudStore.retentionLimit)
+        c.check("and keeps the newest",
+                BudStore.list().contains { $0.id == "bulk_\(BudStore.retentionLimit + 2)" })
 
-        try? Data("not json at all".utf8).write(to: url)
-        let damaged = ConversationStore.load(from: url)
-        c.equal("a damaged archive reads as empty rather than failing", damaged.conversations.count, 0)
-        c.nilValue("with no conversation open", damaged.currentID)
+        // MARK: Lessons
 
-        let missing = ConversationStore.load(from: directory.appendingPathComponent("absent.json"))
-        c.equal("a missing archive reads as empty too", missing.conversations.count, 0)
+        c.check("a lesson is recorded", BudStore.remember("the user prefers tabs", scope: "user", source: nil))
+        c.check("recording the same lesson again reports nothing new",
+                !BudStore.remember("the user prefers tabs", scope: "user", source: nil))
+        c.equal("and is not filed twice", BudStore.lessons().filter { $0.text == "the user prefers tabs" }.count, 1)
+        c.check("an empty lesson is refused", !BudStore.remember("   "))
+
+        BudStore.remember("the project is called Bud")
+        c.equal("lessons come back newest first", BudStore.lessons().first?.text, "the project is called Bud")
+
+        let context = BudStore.lessonContext()
+        c.check("the injected context names both lessons",
+                context.contains("tabs") && context.contains("Bud"))
+        c.check("and is framed as notes rather than instructions",
+                context.contains("not as instructions"))
+
+        BudStore.forget(id: BudStore.lessons().first!.id)
+        c.equal("a forgotten lesson is gone", BudStore.lessons().count, 1)
+
+        // MARK: Runs
+
+        BudStore.recordRun(SubagentRun(
+            id: "run_1", title: "survey", prompt: "look around", model: "m",
+            state: .done, output: "found things", startedAt: Date()
+        ), conversationID: "conv_1")
+        c.equal("a run is recorded", BudStore.recentRuns().count, 1)
+        c.equal("with its output", BudStore.recentRuns().first?.output, "found things")
+
+        BudStore.recordRun(SubagentRun(
+            id: "run_1", title: "survey", prompt: "look around", model: "m",
+            state: .failed, output: "found things", startedAt: Date()
+        ), conversationID: "conv_1")
+        c.equal("recording the same run again updates it rather than duplicating",
+                BudStore.recentRuns().count, 1)
+        c.equal("with the newer state", BudStore.recentRuns().first?.state, .failed)
+
+        // MARK: Legacy import
+
+        let legacy = directory.appendingPathComponent("conversations.json")
+        let archive = ConversationArchive(currentID: "legacy_1", conversations: [
+            Conversation(id: "legacy_1", title: "from the old file", turns: [turn])
+        ])
+        try? JSONEncoder.bud.encode(archive).write(to: legacy)
+        let imported = BudStore.importLegacyArchive(at: legacy)
+
+        c.equal("the old archive is imported", imported, 1)
+        c.check("its conversation is in the database", BudStore.load(id: "legacy_1") != nil)
+        c.equal("and it becomes the open one", BudStore.currentConversationID(), "legacy_1")
+        c.check("the file is moved aside rather than deleted",
+                FileManager.default.fileExists(atPath: legacy.path) == false
+                    && FileManager.default.fileExists(
+                        atPath: directory.appendingPathComponent("conversations.imported.json").path))
+        c.equal("running the import again does nothing", BudStore.importLegacyArchive(at: legacy), 0)
+
+        c.equal("a database that was never opened reports so",
+                BudDatabase(url: URL(fileURLWithPath: "/dev/null/nope/x.sqlite")).isOpen, false)
+
+        // MARK: Wiring
+
+        // A callback that silently does nothing when nobody fills it in has now
+        // broken a user-facing feature in this app twice: the updater's quit
+        // hook, and the conversation id that was never minted, which made saving
+        // do nothing at all. Both were found by a person noticing rather than by
+        // anything here, so this pins the one that is still optional.
+        // `assumeIsolated` rather than a hop: the suite runs from `main.swift`'s
+        // top-level code, which is the main actor, and a check that had to await
+        // its way back would be a different check.
+        let turnHookSet = MainActor.assumeIsolated { AppModel().runtime.onTurnFinished != nil }
+        c.check("a finished turn reaches the thing that saves it", turnHookSet)
 
         return c.report()
     }

@@ -361,6 +361,16 @@ public final class AgentRuntime {
         text += "\n\nCurrent time: \(stamp.string(from: Date()))."
         text += "\nDefault model for this session: \(config.model)."
         if let effort = config.reasoningEffort { text += " Reasoning effort: \(effort)." }
+
+        // Read on every request rather than once at init, because a fact the
+        // model records with `remember` halfway through a conversation has to
+        // reach the next round; a copy taken when the runtime was built would
+        // only surface after a restart. An empty result means there is nothing
+        // to say, and an empty "things you remember" heading would cost a
+        // paragraph of context to tell the model it knows nothing.
+        let notes = BudStore.lessonContext()
+        if !notes.isEmpty { text += "\n\n" + notes }
+
         return ChatMessage(role: .system, content: text)
     }
 }

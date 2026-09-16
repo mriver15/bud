@@ -155,8 +155,10 @@ public final class AppModel {
 
         BudConfigLoader.ensureDirectory()
         restoreConversations()
+        subagents.loadRecentRuns()
         let providers: [any ToolProvider] = [
             NativeToolsProvider(),
+            MemoryToolsProvider(),
             mcp,
             subagents,
             GenUIToolProvider(),
@@ -224,10 +226,16 @@ public final class AppModel {
 
     // MARK: Conversations
 
-    /// Saved conversations, most recently touched first.
-    public private(set) var conversations: [Conversation] = []
+    /// Saved conversations, most recently touched first. Summaries rather than
+    /// transcripts: a history list has no business loading turns it will not
+    /// draw.
+    public private(set) var conversations: [ConversationSummary] = []
     /// The conversation the live transcript belongs to.
     public private(set) var currentConversationID: String?
+
+    /// Set while a search is narrowing the list, so the switcher can show what
+    /// it is actually listing.
+    public private(set) var conversationQuery: String = ""
 
     private var saveTask: Task<Void, Never>?
 
@@ -237,32 +245,52 @@ public final class AppModel {
         runtime.clear()
         composerText = ""
         errorMessage = nil
+        BudStore.setCurrentConversation(currentConversationID)
+        conversationQuery = ""
+        refreshConversations()
     }
 
     public func openConversation(id: String) {
         guard id != currentConversationID else { return }
         persistConversations()
         currentConversationID = id
-        guard let saved = conversations.first(where: { $0.id == id }) else { return }
+        BudStore.setCurrentConversation(id)
+        guard let saved = BudStore.load(id: id) else { return }
         runtime.restore(turns: saved.turns, history: saved.messages)
         errorMessage = nil
     }
 
     public func deleteConversation(id: String) {
-        conversations.removeAll { $0.id == id }
+        BudStore.delete(id: id)
         if currentConversationID == id {
-            currentConversationID = nil
+            // Mint a replacement rather than leaving none open. Nothing else
+            // re-creates one, and a nil current conversation means
+            // `captureCurrentConversation` returns early for ever — every turn
+            // after the delete would be silently unsaved. This is the same hole
+            // that made the whole feature do nothing on a first run.
+            currentConversationID = UUID().uuidString
             runtime.clear()
+            BudStore.setCurrentConversation(currentConversationID)
         }
-        persistConversations()
+        refreshConversations()
     }
 
-    /// Folds the live transcript into the archive and writes it.
+    /// Narrows the history list. An empty query restores the full list.
+    public func searchConversations(_ query: String) {
+        conversationQuery = query
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        conversations = trimmed.isEmpty ? BudStore.list() : BudStore.search(trimmed)
+    }
+
+    public func refreshConversations() {
+        let trimmed = conversationQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        conversations = trimmed.isEmpty ? BudStore.list() : BudStore.search(trimmed)
+    }
+
+    /// Folds the live transcript into the database.
     public func persistConversations() {
         captureCurrentConversation()
-        ConversationStore.save(
-            ConversationArchive(currentID: currentConversationID, conversations: conversations)
-        )
+        BudStore.setCurrentConversation(currentConversationID)
     }
 
     /// Writes the archive, coalescing bursts.
@@ -286,41 +314,34 @@ public final class AppModel {
         // the history with rows that open onto a blank panel.
         guard !turns.isEmpty else { return }
 
-        let messages = runtime.modelHistory
-        let now = Date()
-        if let index = conversations.firstIndex(where: { $0.id == id }) {
-            conversations[index].turns = turns
-            conversations[index].messages = messages
-            conversations[index].updatedAt = now
-            conversations[index].title = Conversation.title(from: turns)
-        } else {
-            conversations.insert(
-                Conversation(
-                    id: id,
-                    title: Conversation.title(from: turns),
-                    createdAt: now,
-                    updatedAt: now,
-                    turns: turns,
-                    messages: messages
-                ),
-                at: 0
-            )
-        }
-        conversations.sort { $0.updatedAt > $1.updatedAt }
+        let previous = BudStore.load(id: id)
+        BudStore.save(Conversation(
+            id: id,
+            title: Conversation.title(from: turns),
+            createdAt: previous?.createdAt ?? Date(),
+            updatedAt: Date(),
+            turns: turns,
+            messages: runtime.modelHistory
+        ))
+        refreshConversations()
     }
 
     /// Brings back the conversation that was open when Bud last quit.
     private func restoreConversations() {
-        let archive = ConversationStore.load()
-        conversations = archive.conversations
-        guard let id = archive.currentID,
-              let saved = conversations.first(where: { $0.id == id })
+        // The pre-SQLite archive, folded in once. Renamed afterwards, so this
+        // costs a file-existence check on every launch after the first.
+        BudStore.importLegacyArchive()
+        refreshConversations()
+
+        guard let id = BudStore.currentConversationID(),
+              let saved = BudStore.load(id: id)
         else {
-            // Nothing to resume — a first run, or an archive that was cleared.
+            // Nothing to resume — a first run, or a history that was cleared.
             // There still has to be an open conversation to write into, or the
-            // first thing the user says has nowhere to go and the archive stays
-            // empty for ever, which is exactly what it did.
+            // first thing the user says has nowhere to go and nothing is ever
+            // saved, which is exactly what happened the first time round.
             currentConversationID = UUID().uuidString
+            BudStore.setCurrentConversation(currentConversationID)
             return
         }
         currentConversationID = id

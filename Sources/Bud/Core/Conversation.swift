@@ -56,8 +56,14 @@ public struct Conversation: Sendable, Identifiable, Codable {
     }
 }
 
-/// The whole archive, as written to disk.
+/// The shape of the pre-SQLite JSON archive.
+///
+/// Kept only so the import can read a file written by an older build. Nothing
+/// writes this any more; the database is the store of record.
 public struct ConversationArchive: Sendable, Codable {
+    /// The version the JSON format stopped at, before it was replaced.
+    public static let legacyVersion = 1
+
     public var version: Int
     public var currentID: String?
     /// Most recently touched first, which is the order the history list wants and
@@ -65,7 +71,7 @@ public struct ConversationArchive: Sendable, Codable {
     public var conversations: [Conversation]
 
     public init(
-        version: Int = ConversationStore.currentVersion,
+        version: Int = ConversationArchive.legacyVersion,
         currentID: String? = nil,
         conversations: [Conversation] = []
     ) {

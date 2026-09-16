@@ -14,7 +14,8 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
     public let providerID = "subagents"
     public let providerName = "Subagents"
 
-    /// Newest first: the roster is a live activity feed, not an archive.
+    /// Newest first: the roster is a live activity feed, and past sessions' runs
+    /// are appended behind it by `loadRecentRuns` rather than interleaved.
     public private(set) var runs: [SubagentRun] = []
 
     /// Hard ceiling on model/tool round trips inside one run. A subagent that
@@ -158,6 +159,9 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         }
         runs[index].state = .cancelled
         runs[index].finishedAt = Date()
+        // A run whose task sees the cancellation returns without settling, so
+        // this is the only place a cancelled run reaches the store.
+        persist(id)
         guard let task = handles.removeValue(forKey: id) else { return }
         // A run parked waiting for a pool slot has no stream to interrupt, so wake
         // it explicitly; leaving it there would let it start after being cancelled.
@@ -166,8 +170,36 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         task.cancel()
     }
 
+    /// Drops every finished row from the roster. This is a view, not an erasure:
+    /// the runs themselves stay in the store, so a run cleared here is still
+    /// there on the next launch — which is also what keeps history from being
+    /// thrown away by a click meant for this session's leftovers.
     public func clearFinished() {
         runs.removeAll { $0.state.isTerminal }
+    }
+
+    // MARK: - History
+
+    /// Brings back runs from earlier sessions so the roster opens on what Bud has
+    /// already done rather than on an empty list.
+    ///
+    /// Past runs are appended to `runs` rather than kept in a collection of their
+    /// own: the panel and the session statistics both read `runs`, and a second
+    /// array would be invisible to them without reaching into files this feature
+    /// does not own. They are older than anything this session can dispatch, so
+    /// appending preserves the newest-first order that `spawn` maintains by
+    /// inserting at the front; `spawn` also looks its own runs up by id, and the
+    /// digest is built from the batch it was handed, so neither is disturbed.
+    public func loadRecentRuns(limit: Int = 50) {
+        let known = Set(runs.map(\.id))
+        // Only terminal rows belong in a roster. Nothing is written before a run
+        // settles, so a queued or running row can only be a leftover from a
+        // process that died mid-run; showing it would report work that is not
+        // happening and inflate the running count above.
+        let past = BudStore.recentRuns(limit: limit)
+            .filter { $0.state.isTerminal && !known.contains($0.id) }
+        guard !past.isEmpty else { return }
+        runs.append(contentsOf: past)
     }
 
     // MARK: - Run loop
@@ -350,6 +382,22 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
             run.finishedAt = Date()
             run.error = error
         }
+        // After the mutation, so the stored row carries the output the run ended
+        // with. A run cancelled moments ago is already terminal and already
+        // stored; writing it a second time would only repeat the same row.
+        persist(id)
+    }
+
+    /// Files a settled run away.
+    ///
+    /// Nothing is written while a run streams: the row is only worth having once
+    /// the run is over, and a write per token would be a transaction per token.
+    /// The conversation is read at the moment of settling so the run is filed
+    /// against whatever the user is looking at when it lands.
+    @MainActor
+    private func persist(_ id: String) {
+        guard let run = runs.first(where: { $0.id == id }), run.state.isTerminal else { return }
+        BudStore.recordRun(run, conversationID: BudStore.currentConversationID())
     }
 
     @MainActor

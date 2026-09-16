@@ -65,7 +65,18 @@ struct MenuBarView: View {
             }
             MenuActionRow(symbol: "square.and.pencil", title: "New chat") {
                 model.clearTranscript()
+                // The panel keeps its surface while it is hidden, so a chat that
+                // was started from here has to say which surface it belongs on.
+                NotificationCenter.default.post(name: .budShowChat, object: nil)
                 NotificationCenter.default.post(name: .budTogglePanel, object: nil)
+            }
+            // The archive the Recent list below is only an extract of. Always
+            // present, even with nothing saved: an empty history is a real answer,
+            // and a row that only appeared after the first conversation would be
+            // one nobody knows to look for.
+            MenuActionRow(symbol: "clock.arrow.circlepath", title: "All conversations…") {
+                NotificationCenter.default.post(name: .budShowPanel, object: nil)
+                NotificationCenter.default.post(name: .budShowHistory, object: nil)
             }
             if model.isStreaming {
                 MenuActionRow(symbol: "stop.fill", title: "Stop generating") {
@@ -102,10 +113,11 @@ struct MenuBarView: View {
     /// The last few conversations, so yesterday's chat is one click from
     /// wherever Bud is rather than something to go looking for.
     ///
-    /// Capped because a menu is not a browser: the archive keeps fifty, and
-    /// nobody reads a dropdown of fifty. The current one is marked, because a
-    /// list of titles with no indication of which is open reads as five places
-    /// to go rather than four places and where you already are.
+    /// Capped because a menu is not a browser: nobody reads a dropdown of two
+    /// hundred, and the full archive is one row away for the conversations this
+    /// one leaves out. The current one is marked, because a list of titles with
+    /// no indication of which is open reads as five places to go rather than
+    /// four places and where you already are.
     private static let recentLimit = 5
 
     @ViewBuilder
@@ -126,6 +138,7 @@ struct MenuBarView: View {
                         title: conversation.title
                     ) {
                         model.openConversation(id: conversation.id)
+                        NotificationCenter.default.post(name: .budShowChat, object: nil)
                         NotificationCenter.default.post(name: .budShowPanel, object: nil)
                     }
                 }
@@ -203,4 +216,12 @@ extension Notification.Name {
     /// Park Bud in a screen corner as the bubble. Only the panel's own collapse
     /// control asks for this; nothing does it on the user's behalf.
     static let budCollapsePanel = Notification.Name("bud.collapsePanel")
+    /// Put the panel on its history surface: the full archive, beyond the few
+    /// the menu bar shows. The panel keeps its surface while it is hidden, so
+    /// this is a separate signal from showing the panel at all.
+    static let budShowHistory = Notification.Name("bud.showHistory")
+    /// Put the panel back on the transcript. Posted by everything that opens or
+    /// starts a conversation, so the panel is never left sitting on History
+    /// showing a chat the user has already asked for.
+    static let budShowChat = Notification.Name("bud.showChat")
 }
