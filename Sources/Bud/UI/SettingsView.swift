@@ -606,6 +606,22 @@ private struct GeneralSettingsTab: View {
                     }
 
                     VStack(alignment: .leading, spacing: Bud.Space.xs) {
+                        Text("Reasoning in the transcript")
+                            .font(Bud.Font.caption)
+                            .foregroundStyle(.secondary)
+                        Picker("Reasoning in the transcript", selection: reasoningVisibilityBinding) {
+                            ForEach(ReasoningVisibility.allCases) { mode in
+                                Text(mode.label).tag(mode)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 240, alignment: .leading)
+                        Text(model.config.reasoningVisibility.explanation)
+                            .font(Bud.Font.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+
+                    VStack(alignment: .leading, spacing: Bud.Space.xs) {
                         Toggle("Override temperature", isOn: temperatureEnabledBinding)
                             .toggleStyle(.switch)
                         if let temperature = model.config.temperature {
@@ -759,6 +775,16 @@ private struct GeneralSettingsTab: View {
                 : " (\(percent)% of the budget)."
         }
         return text
+    }
+
+    private var reasoningVisibilityBinding: Binding<ReasoningVisibility> {
+        Binding(
+            get: { model.config.reasoningVisibility },
+            set: { newValue in
+                model.config.reasoningVisibility = newValue
+                model.persistConfig()
+            }
+        )
     }
 
     private var historyBudgetBinding: Binding<Int> {

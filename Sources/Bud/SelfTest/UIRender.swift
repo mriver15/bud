@@ -97,6 +97,31 @@ public enum UIRender {
             )
         }
 
+        // The same reasoning turn in each of the three modes. The default folds it
+        // away once the answer lands — which is the point of the default and also
+        // means the default looks exactly like the old behaviour in a screenshot.
+        // So the proof that it is visible at all has to be taken with it on.
+        if let reasoning = Self.sampleTurns().first(where: { $0.0 == "turn-reasoning" })?.1 {
+            for (suffix, mode) in [
+                ("always", ReasoningVisibility.always),
+                ("hidden", ReasoningVisibility.hidden),
+            ] {
+                model.config.reasoningVisibility = mode
+                emit(
+                    "reasoning-\(suffix)",
+                    TranscriptRow(turn: reasoning, model: model, isLatest: true)
+                        .frame(width: Bud.contentMeasure - 24)
+                        .background(Color.black.opacity(0.30)),
+                    width: Bud.contentMeasure,
+                    height: 420,
+                    directory: directory,
+                    into: &written
+                )
+            }
+            // Left as it was found: every later surface draws with the real setting.
+            model.config.reasoningVisibility = .whileThinking
+        }
+
         // The panel's glass wrapper is replaced by an equivalent tinted fill.
         // `cacheDisplay` cannot composite the backdrop, so the wrapper would
         // contribute nothing but a flat tint anyway; this keeps the capture about

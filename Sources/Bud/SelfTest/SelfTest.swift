@@ -92,6 +92,7 @@ public enum BudSelfTest {
             historyBudget,
             storedResults,
             skillRanking,
+            reasoningVisibility,
             toolBudget,
             searching,
             skillScanning,
@@ -2306,6 +2307,69 @@ public enum BudSelfTest {
             !providers.isEmpty && entry.name.isEmpty
         }
         c.equal("every tool is named", undescribed.count, 0)
+
+        return c.report()
+    }
+
+    // MARK: Reasoning on screen
+
+    /// Whether the model's thinking is shown.
+    ///
+    /// Every provider already streams it and the transcript could always draw it —
+    /// it was behind a disclosure that started closed, so in practice it was
+    /// invisible. What is worth testing is not the drawing, which is the same as it
+    /// ever was, but the resolution: which of the three modes shows it when, and
+    /// what a deliberate open or close does to that.
+    static func reasoningVisibility() -> SelfTestReport {
+        let c = Checker(suite: "reasoning")
+
+        // MARK: While thinking — the default
+
+        let streaming = ReasoningVisibility.whileThinking
+        c.check("it is open while the model is thinking", streaming.isExpanded(isStreaming: true, chosen: nil))
+        c.check("...and folds away when the answer lands", !streaming.isExpanded(isStreaming: false, chosen: nil))
+
+        // MARK: Always
+
+        c.check("always is open while thinking", ReasoningVisibility.always.isExpanded(isStreaming: true, chosen: nil))
+        c.check("...and stays open after", ReasoningVisibility.always.isExpanded(isStreaming: false, chosen: nil))
+
+        // MARK: Hidden
+
+        c.check("hidden is closed while thinking", !ReasoningVisibility.hidden.isExpanded(isStreaming: true, chosen: nil))
+        c.check("...and after", !ReasoningVisibility.hidden.isExpanded(isStreaming: false, chosen: nil))
+
+        // MARK: What the reader chose wins
+
+        // The whole reason a manual choice is carried separately: a turn folding
+        // itself away must not close something somebody deliberately opened, and
+        // the stream carrying on must not reopen something they closed.
+        c.check("an opened panel stays open through the fold",
+                ReasoningVisibility.whileThinking.isExpanded(isStreaming: false, chosen: true))
+        c.check("a closed panel stays closed as it streams",
+                !ReasoningVisibility.whileThinking.isExpanded(isStreaming: true, chosen: false))
+        c.check("a closed panel stays closed even on always",
+                !ReasoningVisibility.always.isExpanded(isStreaming: false, chosen: false))
+        c.check("an opened panel stays open even on hidden",
+                ReasoningVisibility.hidden.isExpanded(isStreaming: true, chosen: true))
+
+        // MARK: The setting itself
+
+        c.equal("the default shows it while thinking",
+                BudConfig().reasoningVisibility, .whileThinking)
+        c.check("every mode has a name and a sentence",
+                ReasoningVisibility.allCases.allSatisfy { !$0.label.isEmpty && !$0.explanation.isEmpty })
+        c.equal("the modes round-trip through their raw value",
+                ReasoningVisibility(rawValue: ReasoningVisibility.always.rawValue), .always)
+
+        // A config file written before this existed must not lose the rest of the
+        // settings — the same shape of failure as the MCP server list emptying
+        // when a field was added to it.
+        let legacy = #"{"historyBudgetChars": 90000, "model": "deepseek-v4-flash"}"#
+        let decoded = try? JSONDecoder().decode(BudConfigLoader.StoredConfig.self, from: Data(legacy.utf8))
+        c.check("a config from before this setting still loads", decoded != nil)
+        c.equal("...with the new field absent rather than fatal", decoded?.reasoningVisibility, nil)
+        c.equal("...and the rest of it intact", decoded?.historyBudgetChars, 90_000)
 
         return c.report()
     }

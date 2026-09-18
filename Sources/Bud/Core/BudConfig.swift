@@ -17,6 +17,50 @@ import Foundation
 /// stored config, then `GLAMA_API_KEY` in the environment, then the same profile
 /// search. Skipping the profile search would strand a key that is already
 /// exported in `~/.zshrc`, which is where keys usually live.
+/// How much of the model's thinking is shown in the transcript.
+public enum ReasoningVisibility: String, Sendable, Codable, CaseIterable, Identifiable {
+    /// Streamed while the turn is running, folded away when it finishes. Watching
+    /// it think is the point; re-reading it is not.
+    case whileThinking = "while-thinking"
+    /// Every turn's reasoning stays open.
+    case always
+    /// Not shown at all.
+    case hidden
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .whileThinking: return "While thinking"
+        case .always: return "Always"
+        case .hidden: return "Hidden"
+        }
+    }
+
+    public var explanation: String {
+        switch self {
+        case .whileThinking: return "Shown as it arrives, folded when the answer does"
+        case .always: return "Every reply's reasoning stays open"
+        case .hidden: return "Not shown"
+        }
+    }
+
+    /// Whether a reasoning segment is open, given the state of the turn and
+    /// whatever the reader chose by hand.
+    ///
+    /// Its own function rather than a view's computed property because this is the
+    /// whole of the behaviour and it should be testable without a window: the
+    /// differences between the three modes are three lines here and nowhere else.
+    public func isExpanded(isStreaming: Bool, chosen: Bool?) -> Bool {
+        if let chosen { return chosen }
+        switch self {
+        case .always: return true
+        case .whileThinking: return isStreaming
+        case .hidden: return false
+        }
+    }
+}
+
 public struct BudConfig: Sendable, Codable, Hashable {
     /// The provider the session runs against. See `ProviderRegistry`.
     public var provider: String
@@ -36,6 +80,19 @@ public struct BudConfig: Sendable, Codable, Hashable {
     /// configured", which the marketplace reports as a call to action.
     public var glamaAPIKey: String
     public var reasoningEffort: String?
+    /// How much of the model's thinking is on screen.
+    ///
+    /// Every provider Bud talks to already streams it — `reasoning_content` on the
+    /// delta, decoded and stored on the turn — and the transcript has always been
+    /// able to draw it. It was behind a disclosure that started closed, so in
+    /// practice nobody saw it: the only way to watch the model think was to guess
+    /// that the "Thought for 3.4s" line was a button.
+    ///
+    /// The default shows it *while* it is happening, which is when it is worth
+    /// reading, and folds it away when the answer arrives so that a long
+    /// conversation is not mostly thinking. `always` keeps every one open;
+    /// `hidden` puts it back the way it was before this existed.
+    public var reasoningVisibility: ReasoningVisibility
     public var temperature: Double?
     public var maxTokens: Int?
     public var systemPrompt: String
@@ -102,6 +159,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         providerRegions: [String: String] = [:],
         glamaAPIKey: String = "",
         reasoningEffort: String? = nil,
+        reasoningVisibility: ReasoningVisibility = .whileThinking,
         temperature: Double? = nil,
         maxTokens: Int? = nil,
         systemPrompt: String = BudConfig.defaultSystemPrompt,
@@ -122,6 +180,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         self.providerRegions = providerRegions
         self.glamaAPIKey = glamaAPIKey
         self.reasoningEffort = reasoningEffort
+        self.reasoningVisibility = reasoningVisibility
         self.temperature = temperature
         self.maxTokens = maxTokens
         self.systemPrompt = systemPrompt
@@ -343,6 +402,7 @@ public enum BudConfigLoader {
 
         if let v = stored.glamaAPIKey, !v.isEmpty { config.glamaAPIKey = v }
         if let v = stored.reasoningEffort { config.reasoningEffort = v }
+        if let v = stored.reasoningVisibility { config.reasoningVisibility = v }
         if let v = stored.temperature { config.temperature = v }
         if let v = stored.maxTokens { config.maxTokens = v }
         if let v = stored.systemPrompt, !v.isEmpty { config.systemPrompt = v }
@@ -541,6 +601,7 @@ public enum BudConfigLoader {
         public var conversationTokenBudget: Int?
         public var glamaAPIKey: String?
         public var reasoningEffort: String?
+        public var reasoningVisibility: ReasoningVisibility?
         public var temperature: Double?
         public var maxTokens: Int?
         public var systemPrompt: String?
@@ -573,6 +634,7 @@ public enum BudConfigLoader {
             self.conversationTokenBudget = config.conversationTokenBudget
             self.glamaAPIKey = config.glamaAPIKey
             self.reasoningEffort = config.reasoningEffort
+            self.reasoningVisibility = config.reasoningVisibility
             self.temperature = config.temperature
             self.maxTokens = config.maxTokens
             self.systemPrompt = config.systemPrompt
@@ -596,6 +658,7 @@ public enum BudConfigLoader {
             conversationTokenBudget: Int? = nil,
             glamaAPIKey: String? = nil,
             reasoningEffort: String? = nil,
+            reasoningVisibility: ReasoningVisibility = .whileThinking,
             temperature: Double? = nil,
             maxTokens: Int? = nil,
             systemPrompt: String? = nil,

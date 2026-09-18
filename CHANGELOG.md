@@ -12,6 +12,47 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 1.3.0
+
+### The model's thinking is on screen
+
+Every provider already streamed it — `reasoning_content` on the delta, decoded,
+appended to the turn — and the transcript could always draw it. It sat behind a
+disclosure that **started closed**, so in practice nobody saw it: the only way to
+watch the model think was to guess that the "Thought for 3.4s" line was a button.
+
+It is open by default now, while it is worth reading.
+
+**Reasoning in the transcript** — Settings → General, under Reasoning effort:
+
+| | |
+|---|---|
+| **While thinking** *(default)* | shown as it arrives, folded away when the answer lands |
+| **Always** | every reply's reasoning stays open |
+| **Hidden** | not shown, which is how it behaved before this existed |
+
+The default is the middle one because that is when thinking is worth reading:
+watching it arrive is the point, and a conversation where every reply keeps six
+thousand characters of it open is a conversation you have to scroll through to
+find the answers.
+
+**A choice you make wins.** Open a panel and it stays open through the fold; close
+one mid-stream and it stays closed. The mode only decides until you do — which is
+the whole reason the manual state is carried separately from it, and it is what
+`ReasoningVisibility.isExpanded(isStreaming:chosen:)` exists to hold: the three
+modes are three lines there and nowhere else.
+
+A collapsed panel now says how much is behind it, so "Thought for 3.4s" is not the
+only clue that there is something to open.
+
+### Also
+
+A config written before this setting existed still loads, with the new field
+absent rather than fatal. That is the same shape of failure that emptied an MCP
+server list when a field was added to it, and it has a test now.
+
+---
+
 ## Bud 1.2.0
 
 ### The catalogue ranks, and hides nothing
