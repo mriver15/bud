@@ -442,7 +442,7 @@ private enum SlashCommand: String, CaseIterable, Identifiable {
         case .settings: return "Open general settings"
         case .mcp: return "Manage MCP servers"
         case .marketplace: return "Browse the MCP registry"
-        case .agents: return "Review subagent runs"
+        case .agents: return "What Bud can delegate to, and what it has"
         }
     }
 

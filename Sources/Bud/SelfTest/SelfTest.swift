@@ -67,8 +67,12 @@ public final class Checker {
 /// The offline suite registry. Every check here is deterministic and touches no
 /// network, so it is safe to run anywhere and is the gate for a release build.
 public enum BudSelfTest {
-    public static func run() -> SelfTestReport {
-        let suites: [() -> SelfTestReport] = [
+    @MainActor
+    public static func run() async -> SelfTestReport {
+        // Async and main-actor bound because the suites are: one builds the agent
+        // roster, which the app owns, and one calls a tool, which is async. Both
+        // are worth having in the gate that guards a release.
+        let suites: [@MainActor () async -> SelfTestReport] = [
             configParsing,
             globMatching,
             htmlExtraction,
@@ -84,6 +88,8 @@ public enum BudSelfTest {
             uiImages,
             skills,
             imageSearch,
+            agents,
+            searching,
             skillScanning,
             glamaMapping,
             npmResolution,
@@ -91,7 +97,7 @@ public enum BudSelfTest {
         ]
         var total = SelfTestReport()
         for suite in suites {
-            let report = suite()
+            let report = await suite()
             total.passed += report.passed
             total.failures.append(contentsOf: report.failures)
         }
@@ -2131,6 +2137,251 @@ public enum BudSelfTest {
     /// matter just as much: a screen that fires on `ignore_index` or on any script
     /// that mentions a URL is one people learn to click past, and then it protects
     /// nobody either.
+    // MARK: What can be delegated to
+
+    /// The roster, and the rules that put things on it.
+    ///
+    /// The point of naming agents is that the name means something: this one cannot
+    /// write, that one can only reach its own server. So most of what is worth
+    /// checking is the *refusals* — a skill that did not ask to be delegatable not
+    /// appearing, a server's agent not being handed another server's tools.
+    @MainActor
+    static func agents() -> SelfTestReport {
+        let c = Checker(suite: "agents")
+        let registry = AgentRegistry()
+
+        // MARK: Built in
+
+        registry.rebuild(skills: [], servers: [])
+        c.equal("three agents ship with Bud", registry.agents.count, 3)
+        c.check("scout is there", registry.named("scout") != nil)
+        c.check("reviewer is there", registry.named("reviewer") != nil)
+        c.check("builder is there", registry.named("builder") != nil)
+        c.equal("they are all built in", Set(registry.agents.map(\.origin)), [.builtin])
+
+        // The whole difference between a scout and the session is that it cannot
+        // change anything, so that has to be true of the tool list and not only of
+        // the prompt that asks it not to.
+        let scout = registry.named("scout")
+        c.check("a scout cannot write", scout?.allows("write_file") == false)
+        c.check("a scout cannot run a shell", scout?.allows("run_shell") == false)
+        c.check("a scout can read", scout?.allows("read_file") == true)
+        c.check("a scout can search", scout?.allows("search_files") == true)
+        c.check("a scout reads as read-only", scout?.isReadOnly == true)
+        // A builder is the one that can, which is what makes the choice mean
+        // something rather than being three names for the same thing.
+        c.check("a builder may use everything", registry.named("builder")?.allows("run_shell") == true)
+        c.check("a builder is not read-only", registry.named("builder")?.isReadOnly == false)
+        c.equal("a builder says so", registry.named("builder")?.toolSummary, "Every tool")
+        c.equal("a scout's four tools are counted", registry.named("scout")?.toolSummary, "4 tools")
+        // A wildcard covers however many tools a server turns out to have, so it is
+        // described rather than counted — "1 tool" for a server exposing 21 was a
+        // count of the pattern, not of the tools.
+        c.equal("a server's pattern is described, not counted",
+                AgentLibrary.from(server: MCPServerConfig(name: "S", transport: .stdio, command: "x")).toolSummary,
+                "Its own tools")
+
+        // MARK: A skill has to ask
+
+        func skill(_ name: String, agent: String?, tools: String?) -> Skill {
+            Skill(
+                name: name,
+                summary: "A skill.",
+                license: nil,
+                compatibility: nil,
+                metadata: [:],
+                allowedTools: tools,
+                delegation: agent,
+                instructions: "Do the thing carefully."
+            )
+        }
+
+        registry.rebuild(skills: [
+            skill("pdf-forms", agent: "Fill in a PDF form.", tools: "read_file write_file"),
+            skill("just-notes", agent: nil, tools: "read_file"),
+        ], servers: [])
+        c.equal("a skill that asks becomes an agent", registry.agents.count, 4)
+        c.check("...and one that does not, does not", registry.named("just-notes") == nil)
+        // `allowed-tools` was parsed and ignored from the day it was added; here it
+        // is the agent's tool list, which is the only thing that makes the field
+        // worth having parsed.
+        c.check("a skill's tools are its agent's tools", registry.named("pdf-forms")?.allows("write_file") == true)
+        c.check("...and nothing else", registry.named("pdf-forms")?.allows("run_shell") == false)
+        c.equal("a skill's instructions are its agent's instructions",
+                registry.named("pdf-forms")?.instructions, "Do the thing carefully.")
+        c.equal("a skill agent knows where it came from",
+                registry.named("pdf-forms")?.origin.label, "Skill · pdf-forms")
+
+        // MARK: Servers
+
+        let server = MCPServerConfig(name: "Get Competitive", transport: .stdio, command: "x")
+        registry.rebuild(skills: [], servers: [server])
+        let serverAgent = registry.named("get_competitive")
+        c.check("a server becomes a delegate", serverAgent != nil)
+        // The namespace is the sanitized name, and it is what the tools are really
+        // called — an agent scoped to the wrong prefix would be scoped to nothing.
+        c.check("...scoped to its own tools", serverAgent?.allows("get_competitive__optimize_evs") == true)
+        c.check("...and not to anyone else's", serverAgent?.allows("other__optimize_evs") == false)
+        c.check("...and not to the session's", serverAgent?.allows("read_file") == false)
+
+        let off = MCPServerConfig(name: "Disabled", transport: .stdio, command: "x", enabled: false)
+        registry.rebuild(skills: [], servers: [off])
+        c.check("a disabled server offers nothing", registry.named("disabled") == nil)
+
+        // MARK: One name, one agent
+
+        // A skill that took a built-in's name would silently replace it, and the
+        // only way to notice would be the agent behaving unlike itself.
+        registry.rebuild(skills: [skill("scout", agent: "Mine.", tools: nil)], servers: [])
+        c.equal("a skill cannot take a built-in's name", registry.named("scout")?.origin, .builtin)
+        c.equal("...and only one scout is listed", registry.agents.count { $0.name == "scout" }, 1)
+
+        // MARK: Reading a name
+
+        c.check("the name is matched loosely", registry.named("  SCOUT ") != nil)
+        c.check("an unknown name is nothing", registry.named("nobody") == nil)
+
+        // MARK: The tool list in the prompt
+
+        registry.rebuild(skills: [skill("pdf-forms", agent: "Fill in a PDF form. Then check it.", tools: nil)], servers: [])
+        let roster = registry.roster()
+        c.check("the roster names every agent", roster.contains("- scout —") && roster.contains("- pdf-forms —"))
+        // Paid for on every request, so only the first sentence goes in.
+        c.check("a summary is cut to one sentence", roster.contains("Fill in a PDF form.") && !roster.contains("Then check it"))
+        c.check("...and stays on one line", !roster.contains("Fill in a PDF form.\n"))
+
+        // MARK: How a tool list is written
+
+        c.equal("spaces split a tool list", Skill.toolList("read_file write_file")?.count, 2)
+        // Half the skills in the wild are comma-separated, and one entry named
+        // "read_file," is worse than either convention.
+        c.equal("commas split one too", Skill.toolList("read_file, write_file")?.count, 2)
+        c.equal("a mix splits", Skill.toolList("read_file, write_file\nrun_shell")?.count, 3)
+        c.equal("no field means every tool", Skill.toolList(nil), nil)
+        c.equal("a star means every tool", Skill.toolList("*"), nil)
+        c.equal("an empty field means none", Skill.toolList("   "), [])
+        c.equal("an agent with no tools says so",
+                AgentDefinition(name: "x", summary: "y", instructions: "z", tools: []).toolSummary,
+                "No tools — reasons only")
+
+        // MARK: Matching a tool name
+
+        let scoped = AgentDefinition(
+            name: "x", summary: "y", instructions: "z", tools: ["read_file", "gh__*"]
+        )
+        c.check("an exact name matches", scoped.allows("read_file"))
+        c.check("a name that merely starts the same does not", !scoped.allows("read_file_extra"))
+        c.check("a prefix matches its own", scoped.allows("gh__list_issues"))
+        c.check("...and nothing outside it", !scoped.allows("github__list_issues"))
+        c.check("no list at all is everything",
+                AgentDefinition(name: "x", summary: "y", instructions: "z", tools: nil).allows("anything"))
+
+        // MARK: Grouping
+
+        registry.rebuild(skills: [skill("pdf-forms", agent: "Do it.", tools: nil)], servers: [server])
+        let groups = registry.grouped.map(\.group)
+        c.equal("the panel groups by where things came from", groups.count, 3)
+        c.equal("...built-ins first", groups.first, "Built in")
+
+        return c.report()
+    }
+
+    // MARK: Searching without a shell
+
+    /// `search_files`, which is what lets an agent that may not change anything
+    /// still look through a codebase.
+    static func searching() async -> SelfTestReport {
+        let c = Checker(suite: "searching")
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bud-search-\(UUID().uuidString)")
+        let nested = root.appendingPathComponent("Sources")
+        let ignored = root.appendingPathComponent(".git")
+        try? FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: ignored, withIntermediateDirectories: true)
+
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try? "let x = 1\nlet needle = 2\nlet y = 3\n".write(
+            to: nested.appendingPathComponent("a.swift"), atomically: true, encoding: .utf8
+        )
+        try? "nothing here\n".write(
+            to: nested.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8
+        )
+        try? "needle in a hidden place\n".write(
+            to: ignored.appendingPathComponent("config"), atomically: true, encoding: .utf8
+        )
+        // A binary file that contains the pattern as bytes: it is not text, and
+        // reading megabytes of it to discover that is how a search hangs.
+        try? Data([0x00, 0x01, 0x6E, 0x65, 0x65, 0x64, 0x6C, 0x65, 0x00]).write(
+            to: nested.appendingPathComponent("binary.dat")
+        )
+
+        let provider = NativeToolsProvider()
+        func search(_ arguments: JSONValue) async -> ToolResult {
+            await provider.invoke(tool: "search_files", arguments: arguments, callID: "t")
+        }
+
+        let found = await search(["path": .string(root.path), "pattern": .string("needle")])
+        let text = found.text ?? ""
+        c.check("it finds a match", text.contains("a.swift:2"))
+        c.check("...with the line number", text.contains(":2: let needle = 2"))
+        c.check("it searches subdirectories", text.contains("Sources/"))
+        // Nobody means ".git" when they search a project.
+        c.check("it skips version control", !text.contains("hidden place"))
+        c.check("it skips a binary file", !text.contains("binary.dat"))
+
+        let narrowed = await search([
+            "path": .string(root.path), "pattern": .string("needle"), "file_glob": .string(".txt"),
+        ])
+        c.check("a glob narrows it", !(narrowed.text ?? "").contains("a.swift"))
+
+        let missing = await search(["path": .string(root.path), "pattern": .string("zzz-nowhere")])
+        c.check("no match says so rather than failing", !missing.isError)
+        c.check("...and says how much it looked at", (missing.text ?? "").contains("file"))
+
+        // The pattern is a regex, and a broken one has to come back as a sentence
+        // rather than as a crash or an empty result.
+        let broken = await search(["path": .string(root.path), "pattern": .string("([unclosed")])
+        c.check("a bad pattern is refused", broken.isError)
+        c.check("...in words", (broken.text ?? "").contains("regular expression"))
+
+        let nowhere = await search(["path": .string(root.path + "-nope"), "pattern": .string("x")])
+        c.check("a path that does not exist is refused", nowhere.isError)
+
+        let noPattern = await search(["path": .string(root.path)])
+        c.check("a missing pattern is refused", noPattern.isError)
+
+        // A minified file matches once and would otherwise put a megabyte of one
+        // line into the transcript.
+        let long = String(repeating: "needle ", count: 200)
+        try? long.write(
+            to: nested.appendingPathComponent("long.txt"), atomically: true, encoding: .utf8
+        )
+        let clipped = await search([
+            "path": .string(root.path), "pattern": .string("needle"), "file_glob": .string(".txt"),
+        ])
+        let line = String((clipped.text ?? "").split(separator: "\n").first { $0.contains("long.txt") } ?? "")
+        let whole = String(repeating: "needle ", count: 200)
+        // Asserted on the content rather than on the whole line, which also
+        // carries a temporary-directory path of unpredictable length.
+        c.check("a very long line is clipped", !line.contains(whole) && line.hasSuffix("…"))
+
+        let capped = await search([
+            "path": .string(root.path), "pattern": .string("needle"), "max_results": .number(1),
+        ])
+        c.check("a result cap is honoured", (capped.text ?? "").split(separator: "\n").count <= 2)
+
+        // Read-only by construction: there is no shell anywhere in the path, which
+        // is why an agent that may not write can still be given this.
+        let oneFile = await search([
+            "path": .string(nested.appendingPathComponent("a.swift").path), "pattern": .string("needle"),
+        ])
+        c.check("a single file can be searched", (oneFile.text ?? "").contains("a.swift:2"))
+
+        return c.report()
+    }
+
     // MARK: Looking up a picture
 
     /// Reading what Wikipedia and Commons send back.

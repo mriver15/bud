@@ -1,56 +1,86 @@
 import SwiftUI
 
-/// The subagent roster: what Bud has delegated, what each workstream is doing
-/// right now, and what it came back with.
+/// The delegation surfaces: what Bud can hand work to, and what it has handed work
+/// to.
 ///
-/// The rows are driven by the supervisor's published `runs`, so the panel is a
-/// live view of the pool rather than a log: reasoning and output stream into a
-/// row while its model is still talking.
+/// It used to be one thing — a feed of runs — which meant the screen was empty
+/// until something had run, and said nothing at all about what *could* be
+/// delegated to. Two panes, because the two questions are asked at different times:
+/// "what is happening" is watched, and "what can I give this to" is looked up.
 public struct SubagentPanel: View {
     private let supervisor: SubagentSupervisor
     private let model: AppModel
     @BudState private var expanded: String?
+    @BudState private var expandedAgent: String?
+    /// Nil until the user picks, so the first view can be the informative one
+    /// rather than the empty one.
+    @BudState private var chosen: Pane?
 
-    public init(supervisor: SubagentSupervisor, model: AppModel) {
+    public enum Pane: String, CaseIterable, Identifiable {
+        case delegates = "Delegates"
+        case activity = "Activity"
+        public var id: String { rawValue }
+    }
+
+    /// `pane` fixes the opening view. The app leaves it nil so the first one can be
+    /// the informative one; the render harness sets it, because a screenshot has to
+    /// show a specific pane.
+    public init(supervisor: SubagentSupervisor, model: AppModel, pane: Pane? = nil) {
         self.supervisor = supervisor
         self.model = model
+        self._chosen = BudState(wrappedValue: pane)
+    }
+
+    /// The roster looks best when there is nothing to watch, and the run feed is
+    /// the urgent one when there is.
+    private var pane: Pane {
+        chosen ?? (supervisor.runs.isEmpty ? .delegates : .activity)
+    }
+
+    private var binding: Binding<Pane> {
+        Binding(get: { pane }, set: { chosen = $0 })
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-                // Only the gap above the rule. The margin around the pane
-                // belongs to the host, so this view reads the same in the panel
-                // and in Settings without either one guessing at the other.
                 .padding(.bottom, Bud.Space.md)
 
             Rectangle()
                 .fill(Color.white.opacity(0.08))
                 .frame(height: 0.6)
 
-            if supervisor.runs.isEmpty {
-                EmptyStateView(
-                    systemImage: "person.3.sequence",
-                    title: "No subagents yet",
-                    message: """
-                    When Bud splits a request into independent workstreams, each one \
-                    appears here with its own progress, reasoning and findings.
-                    """
-                )
-            } else {
-                roster
+            switch pane {
+            case .delegates: delegates
+            case .activity: activity
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // The roster is built from the installed skills and the connected servers,
+        // so it is rebuilt when either changes rather than on a timer.
+        .task(id: rosterKey) { model.agents.refresh() }
+    }
+
+    private var rosterKey: String {
+        let servers = model.mcp.servers.map { "\($0.name):\($0.enabled)" }.sorted().joined(separator: ",")
+        return servers + "|" + model.skills.installedNames.sorted().joined(separator: ",")
     }
 
     // MARK: Header
 
     private var header: some View {
         HStack(alignment: .center, spacing: Bud.Space.sm) {
-            SectionHeader("Subagents", subtitle: poolSummary, systemImage: "person.3.sequence")
+            SectionHeader("Agents", subtitle: subtitle, systemImage: "person.3.sequence")
             Spacer(minLength: Bud.Space.sm)
-            if supervisor.runs.contains(where: { $0.state.isTerminal }) {
+
+            Picker("", selection: binding) {
+                ForEach(Pane.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 190)
+
+            if pane == .activity, supervisor.runs.contains(where: { $0.state.isTerminal }) {
                 Button("Clear finished") {
                     withAnimation(.snappy(duration: 0.18)) { supervisor.clearFinished() }
                 }
@@ -63,25 +93,39 @@ public struct SubagentPanel: View {
 
     /// The cap is read from the live config rather than remembered here: the user
     /// can change it in Settings while the panel is open.
-    private var poolSummary: String {
-        let capacity = max(1, model.config.allowParallelSubagents)
-        guard !supervisor.runs.isEmpty else {
-            return "Up to \(capacity) workstreams at once"
+    private var subtitle: String {
+        switch pane {
+        case .delegates:
+            let count = model.agents.agents.count
+            return count == 1 ? "1 thing to hand work to" : "\(count) things to hand work to"
+        case .activity:
+            let capacity = max(1, model.config.allowParallelSubagents)
+            guard !supervisor.runs.isEmpty else {
+                return "Up to \(capacity) workstreams at once"
+            }
+            let running = supervisor.runs.count { $0.state == .running }
+            let queued = supervisor.runs.count { $0.state == .queued }
+            var parts = ["\(running) of \(capacity) running"]
+            if queued > 0 { parts.append("\(queued) queued") }
+            return parts.joined(separator: " · ")
         }
-        let running = supervisor.runs.count { $0.state == .running }
-        let queued = supervisor.runs.count { $0.state == .queued }
-        var parts = ["\(running) of \(capacity) running"]
-        if queued > 0 { parts.append("\(queued) queued") }
-        return parts.joined(separator: " · ")
     }
 
-    // MARK: Roster
+    // MARK: Delegates
 
-    private var roster: some View {
+    private var delegates: some View {
         ScrollView {
-            LazyVStack(spacing: Bud.Space.sm) {
-                ForEach(supervisor.runs) { run in
-                    row(run)
+            LazyVStack(alignment: .leading, spacing: Bud.Space.md) {
+                ForEach(model.agents.grouped, id: \.group) { group in
+                    VStack(alignment: .leading, spacing: Bud.Space.sm) {
+                        Text(group.group.uppercased())
+                            .font(Bud.Font.micro.weight(.bold))
+                            .tracking(0.6)
+                            .foregroundStyle(.tertiary)
+                        ForEach(group.agents) { agent in
+                            delegate(agent)
+                        }
+                    }
                 }
             }
             .padding(.horizontal, Bud.Space.lg)
@@ -89,7 +133,112 @@ public struct SubagentPanel: View {
         }
     }
 
-    private func row(_ run: SubagentRun) -> some View {
+    private func delegate(_ agent: AgentDefinition) -> some View {
+        let isExpanded = expandedAgent == agent.id
+        return GlassCard(padding: Bud.Space.sm) {
+            VStack(alignment: .leading, spacing: Bud.Space.sm) {
+                Button {
+                    withAnimation(.snappy(duration: 0.18)) {
+                        expandedAgent = isExpanded ? nil : agent.id
+                    }
+                } label: {
+                    HStack(alignment: .top, spacing: Bud.Space.sm) {
+                        Image(systemName: agent.symbol)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Bud.Palette.accent)
+                            .frame(width: 18)
+
+                        VStack(alignment: .leading, spacing: Bud.Space.xs) {
+                            Text(agent.name)
+                                .font(Bud.Font.body)
+                                .lineLimit(1)
+                            Text(agent.summary)
+                                .font(Bud.Font.caption)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Spacer(minLength: 0)
+
+                        VStack(alignment: .trailing, spacing: Bud.Space.xs) {
+                            GlassChip(agent.toolSummary, systemImage: "wrench.and.screwdriver")
+                            if let model = agent.model {
+                                GlassChip(model, systemImage: "cpu")
+                            }
+                        }
+                        .layoutPriority(1)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                if isExpanded {
+                    VStack(alignment: .leading, spacing: Bud.Space.sm) {
+                        HStack(spacing: Bud.Space.xs) {
+                            GlassChip(agent.origin.label, systemImage: agent.origin.symbol)
+                            if agent.isReadOnly {
+                                GlassChip("Read only", systemImage: "eye")
+                            }
+                        }
+                        field("What it is told") {
+                            Text(agent.instructions)
+                                .font(Bud.Font.caption)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: Activity
+
+    private var activity: some View {
+        Group {
+            if supervisor.runs.isEmpty {
+                EmptyStateView(
+                    systemImage: "person.3.sequence",
+                    title: "Nothing delegated yet",
+                    message: """
+                    When Bud splits a request into independent workstreams, each one \
+                    appears here with its own progress, reasoning and findings. The \
+                    Delegates tab lists what it can hand work to.
+                    """
+                )
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: Bud.Space.sm) {
+                        ForEach(orderedRuns, id: \.run.id) { entry in
+                            row(entry.run, isChild: entry.isChild)
+                        }
+                    }
+                    .padding(.horizontal, Bud.Space.lg)
+                    .padding(.vertical, Bud.Space.md)
+                }
+            }
+        }
+    }
+
+    /// Roots in their own order, each followed by whatever it delegated.
+    ///
+    /// A child is inserted at the front when it starts, so it would otherwise
+    /// appear *above* the run that asked for it — a tree drawn upside down, and one
+    /// where an indented row's parent is somewhere below.
+    private var orderedRuns: [(run: SubagentRun, isChild: Bool)] {
+        let known = Set(supervisor.runs.map(\.id))
+        var ordered: [(SubagentRun, Bool)] = []
+        for run in supervisor.runs where run.parentID == nil || !known.contains(run.parentID!) {
+            ordered.append((run, false))
+            for child in supervisor.runs where child.parentID == run.id {
+                ordered.append((child, true))
+            }
+        }
+        return ordered
+    }
+
+    private func row(_ run: SubagentRun, isChild: Bool) -> some View {
         let isExpanded = expanded == run.id
         return GlassCard(padding: Bud.Space.sm) {
             VStack(alignment: .leading, spacing: Bud.Space.sm) {
@@ -110,6 +259,9 @@ public struct SubagentPanel: View {
                 }
             }
         }
+        // Indented rather than filed elsewhere: which run asked for this one is
+        // the first thing worth knowing about it.
+        .padding(.leading, isChild ? Bud.Space.lg : 0)
     }
 
     private func summary(_ run: SubagentRun, isExpanded: Bool) -> some View {
@@ -117,9 +269,19 @@ public struct SubagentPanel: View {
             StateDot(color: color(for: run.state), pulsing: run.state == .running)
 
             VStack(alignment: .leading, spacing: Bud.Space.xs) {
-                Text(run.title)
-                    .font(Bud.Font.body)
-                    .lineLimit(1)
+                HStack(spacing: Bud.Space.xs) {
+                    if let agent = run.agent {
+                        Image(systemName: "person.crop.square.filled.and.at.rectangle")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Bud.Palette.accent)
+                        Text(agent)
+                            .font(Bud.Font.caption.weight(.semibold))
+                            .foregroundStyle(Bud.Palette.accent)
+                    }
+                    Text(run.title)
+                        .font(Bud.Font.body)
+                        .lineLimit(1)
+                }
 
                 HStack(spacing: Bud.Space.xs) {
                     GlassChip(run.model, systemImage: "cpu")
@@ -241,38 +403,38 @@ public struct SubagentPanel: View {
 
 /// Indeterminate progress for a live run: a highlight that sweeps the track
 /// while the model works. `ProgressView` is deliberately not used — a spinner
-/// inside a glass card reads as noise, and this row already has a state dot.
-private struct ShimmerBar: View {
+/// says "waiting", and this says "working".
+struct ShimmerBar: View {
     @BudState private var phase: CGFloat = -0.4
 
     var body: some View {
-        GeometryReader { proxy in
+        GeometryReader { geo in
             Capsule()
-                .fill(Bud.Palette.accent.opacity(0.16))
-                .overlay(alignment: .leading) {
+                .fill(Color.white.opacity(0.08))
+                .overlay(
                     Capsule()
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    Bud.Palette.accent.opacity(0),
-                                    Bud.Palette.accent.opacity(0.85),
-                                    Bud.Palette.accent.opacity(0),
+                                    .clear,
+                                    Bud.Palette.accent.opacity(0.55),
+                                    .clear,
                                 ],
                                 startPoint: .leading,
                                 endPoint: .trailing
                             )
                         )
-                        .frame(width: max(24, proxy.size.width * 0.35))
-                        .offset(x: phase * proxy.size.width)
-                }
+                        .frame(width: geo.size.width * 0.4)
+                        .offset(x: phase * geo.size.width)
+                )
                 .clipShape(Capsule())
+                .onAppear {
+                    withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
+                        phase = 1.2
+                    }
+                }
         }
         .frame(height: 2)
-        .onAppear {
-            withAnimation(.linear(duration: 1.1).repeatForever(autoreverses: false)) {
-                phase = 1.35
-            }
-        }
-        .accessibilityHidden(true)
+        .allowsHitTesting(false)
     }
 }

@@ -38,6 +38,29 @@ public nonisolated struct NativeToolsProvider: ToolProvider {
                 providerName: providerName
             ),
             ToolDescriptor(
+                name: "search_files",
+                description: "Search the contents of files under a folder or a single file, and "
+                    + "return the matching lines with their file and line number. Read-only: "
+                    + "this is how to look through a codebase without a shell, which is why an "
+                    + "agent that may not change anything can still find things. The pattern is "
+                    + "a regular expression.",
+                schema: [
+                    "type": "object",
+                    "properties": [
+                        "path": ["type": "string", "description": "Folder to search, or one file."],
+                        "pattern": ["type": "string", "description": "Regular expression."],
+                        "file_glob": [
+                            "type": "string",
+                            "description": "Only files whose name ends in this, e.g. .swift. Optional.",
+                        ],
+                        "max_results": ["type": "integer", "description": "Default 80."],
+                    ],
+                    "required": ["path", "pattern"],
+                ],
+                providerID: providerID,
+                providerName: providerName
+            ),
+            ToolDescriptor(
                 name: "write_file",
                 description: "Create or overwrite a text file. Creates parent directories. "
                     + "Prefer this over run_shell with redirection.",
@@ -108,6 +131,7 @@ public nonisolated struct NativeToolsProvider: ToolProvider {
             case "read_file": return try readFile(arguments)
             case "write_file": return try writeFile(arguments)
             case "list_files": return try listFiles(arguments)
+            case "search_files": return try searchFiles(arguments)
             case "run_shell": return try await runShell(arguments)
             case "web_fetch": return try await webFetch(arguments)
             default: return .error("Unknown native tool '\(tool)'.")
@@ -117,6 +141,121 @@ public nonisolated struct NativeToolsProvider: ToolProvider {
         } catch {
             return .error("\(tool) failed: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: - Searching
+
+    /// Grep, in Swift, with no shell in the path.
+    ///
+    /// A read-only agent cannot be given `run_shell` — it writes, and there is no
+    /// flag that makes a shell safe — so without this the only agents that could
+    /// search a codebase were the ones that could also delete it. That is backwards:
+    /// looking through files is the thing read-only work mostly consists of.
+    private nonisolated func searchFiles(_ arguments: JSONValue) throws -> ToolResult {
+        let path = try Self.requiredString(arguments, "path")
+        let pattern = try Self.requiredString(arguments, "pattern")
+        let suffix = arguments["file_glob"]?.stringValue
+        let limit = min(max(Int(arguments["max_results"]?.doubleValue ?? 80), 1), 400)
+
+        let expression: NSRegularExpression
+        do {
+            expression = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+        } catch {
+            return .error("That pattern is not a regular expression: \(error.localizedDescription)")
+        }
+
+        let root = URL(fileURLWithPath: expand(path))
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory) else {
+            return .error("Nothing at \(path).")
+        }
+
+        var files: [URL] = []
+        if isDirectory.boolValue {
+            files = Self.walk(root, suffix: suffix, cap: 2_000)
+        } else {
+            files = [root]
+        }
+
+        var matches: [String] = []
+        var scanned = 0
+        var truncated = false
+
+        for file in files {
+            if matches.count >= limit { truncated = true; break }
+            // A file that is not text has nothing to match, and reading a large
+            // binary to discover that is the difference between a search and a hang.
+            guard let data = try? Data(contentsOf: file), data.count < 2_000_000,
+                  !data.prefix(4_000).contains(0)
+            else { continue }
+            scanned += 1
+            guard let text = String(data: data, encoding: .utf8) else { continue }
+
+            let display = Self.tilde(file)
+            for (index, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                if matches.count >= limit { truncated = true; break }
+                let string = String(line)
+                let range = NSRange(string.startIndex..., in: string)
+                guard expression.firstMatch(in: string, range: range) != nil else { continue }
+                // Long lines are capped: a minified file matches once on line three
+                // and would otherwise put a megabyte into the transcript.
+                let clipped = string.count > 220 ? String(string.prefix(220)) + "…" : string
+                matches.append("\(display):\(index + 1): \(clipped.trimmingCharacters(in: .whitespaces))")
+            }
+        }
+
+        guard !matches.isEmpty else {
+            return .ok("No match for \(pattern) in \(scanned) file\(scanned == 1 ? "" : "s").")
+        }
+        var text = matches.joined(separator: "\n")
+        if truncated {
+            text += "\n[stopped at \(limit) matches — narrow the pattern or raise max_results]"
+        }
+        return .ok(text)
+    }
+
+    /// Every file under `root`, skipping the parts of a tree that are never the
+    /// answer: version control, build output, and anything enormous.
+    private nonisolated static func walk(_ root: URL, suffix: String?, cap: Int) -> [URL] {
+        let skipped: Set<String> = [
+            ".git", ".build", "node_modules", ".venv", "venv", "__pycache__",
+            "DerivedData", ".next", "dist", "target", ".cache",
+        ]
+        var found: [URL] = []
+        var stack = [root]
+
+        while let directory = stack.popLast() {
+            guard found.count < cap else { break }
+            let entries = (try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
+            for entry in entries {
+                let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+                if isDirectory {
+                    if !skipped.contains(entry.lastPathComponent) { stack.append(entry) }
+                    continue
+                }
+                guard found.count < cap else { break }
+                if let suffix, !suffix.isEmpty, !entry.lastPathComponent.hasSuffix(suffix) { continue }
+                found.append(entry)
+            }
+        }
+        return found
+    }
+
+    private nonisolated static func tilde(_ url: URL) -> String {
+        let home = NSHomeDirectory()
+        let path = url.path
+        return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
+    }
+
+    private nonisolated static func requiredString(_ arguments: JSONValue, _ key: String) throws -> String {
+        guard let value = arguments[key]?.stringValue else {
+            throw ToolFailure(message: "'\(key)' is required.")
+        }
+        return value
     }
 
     // MARK: - Errors

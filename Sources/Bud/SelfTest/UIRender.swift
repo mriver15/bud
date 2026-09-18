@@ -31,7 +31,13 @@ private final class Deferred<T> {
 
 @MainActor
 public enum UIRender {
-    public static func run(outputDirectory: String) -> Never {
+    /// Names to render. Empty renders everything. The window server and SwiftUI
+    /// layout make each surface cost seconds, so iterating on one of them by
+    /// rendering all thirty is a long wait for a small change.
+    @MainActor private static var only: String = ""
+
+    public static func run(outputDirectory: String, only matching: String = "") -> Never {
+        only = matching
         let directory = URL(fileURLWithPath: outputDirectory, isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
@@ -576,7 +582,97 @@ public enum UIRender {
             )
         }
 
-        // MARK: Subagents
+        // MARK: Delegation
+
+        // Two real delegations through the real path: the agent registry names a
+        // scout and a reviewer, `spawn_subagents` is invoked with those names, and
+        // the panel is drawn from the runs that come back. The prompts are trivial
+        // because what is being looked at is the screen, not the model's diligence
+        // — but the runs, the agents, the models and the tool counts are all real.
+        // Representative rather than installed: the roster's third group is what a
+        // skill declaring `agent:` adds, and a screenshot of the feature should
+        // show it rather than a section that only appears on someone else's
+        // machine. The built-ins and the MCP agent beside it are real.
+        var sampleSkills = SkillStore.installed()
+        sampleSkills.append(
+            Skill(
+                name: "release-notes",
+                summary: "Turn a range of commits into release notes.",
+                license: nil,
+                compatibility: nil,
+                metadata: [:],
+                allowedTools: "run_shell read_file",
+                delegation: "Write the release notes for a range of commits. Hand it the range.",
+                instructions: """
+                    Read the commits in the range you were given with `git log`, group them \
+                    by what they changed for the reader rather than by author or date, and \
+                    write the notes in the project's existing voice. Leave out anything \
+                    that is not a change a user of the project would notice.
+                    """
+            )
+        )
+        model.agents.source = { (sampleSkills, model.mcp.servers) }
+        model.agents.rebuild(skills: sampleSkills, servers: model.mcp.servers)
+
+        // Awaited, and run without tools so each is a single round trip. Left
+        // running, they stream tokens into the panel for the whole of the rest of
+        // the render, which redraws it continuously — correct for the app, and
+        // minutes per screenshot for the harness.
+        let delegated = Deferred<[SubagentRun]>()
+        Task {
+            await model.agents.refresh()
+            _ = await model.subagents.invoke(
+                tool: "spawn_subagents",
+                arguments: .object([
+                    "tasks": .array([
+                        .object([
+                            "agent": .string("scout"),
+                            "title": .string("Check the release notes"),
+                            "prompt": .string(
+                                "In under 40 words: what is a scout for, and what should it "
+                                    + "never do?"
+                            ),
+                            "allow_tools": .bool(false),
+                        ]),
+                        .object([
+                            "agent": .string("reviewer"),
+                            "title": .string("Review the naming"),
+                            "prompt": .string(
+                                "Read Sources/Bud/Core/ToolProvider.swift around ToolNaming and "
+                                    + "report anything about the sanitising rules that looks "
+                                    + "wrong or under-specified. Under 40 words."
+                            ),
+                        ]),
+                    ]),
+                ]),
+                callID: "render-delegation"
+            )
+        }
+        runLoop(25.0)
+
+        emit(
+            "agents-delegates",
+            SubagentPanel(supervisor: model.subagents, model: model, pane: .delegates)
+                .padding(Bud.Space.lg)
+                .frame(width: Bud.contentMeasure, height: 620)
+                .background(Color.black.opacity(0.30)),
+            width: Bud.contentMeasure,
+            height: 620,
+            directory: directory,
+            into: &written
+        )
+
+        emit(
+            "agents-activity",
+            SubagentPanel(supervisor: model.subagents, model: model, pane: .activity)
+                .padding(Bud.Space.lg)
+                .frame(width: Bud.contentMeasure, height: 620)
+                .background(Color.black.opacity(0.30)),
+            width: Bud.contentMeasure,
+            height: 620,
+            directory: directory,
+            into: &written
+        )
 
         emit(
             "subagents",
@@ -638,6 +734,10 @@ public enum UIRender {
         directory: URL,
         into written: inout [String]
     ) {
+        // Skipped before the hosting view is built rather than after: laying the
+        // view out is the expensive part, and this is the only way to make the
+        // filter worth having.
+        guard only.isEmpty || name.contains(only) else { return }
         let root = ZStack {
             // Stand-in for the desktop the panel would be floating over. Without
             // it, glass tints and hairline edges composite against a void.

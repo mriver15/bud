@@ -16,11 +16,16 @@ public enum PerformanceProfileCLI {
         let env = AppEnvironment(config: config)
         let mcp = MCPManager()
 
+        // A registry with the built-ins in it, so the measurement includes the
+        // delegation description at the size it actually reaches the model.
+        let warmupAgents = AgentRegistry()
+        warmupAgents.rebuild(skills: [], servers: [])
+
         let providers: [any ToolProvider] = [
             NativeToolsProvider(),
             MemoryToolsProvider(),
             mcp,
-            SubagentSupervisor(env: env),
+            SubagentSupervisor(env: env, agents: warmupAgents),
             GenUIToolProvider(),
             BrowserToolProvider(engine: BrowserEngine()),
             SkillToolProvider(),

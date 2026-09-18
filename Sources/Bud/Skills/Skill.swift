@@ -21,12 +21,42 @@ public struct Skill: Sendable, Identifiable, Equatable {
     public var metadata: [String: String]
     /// Pre-approved tools, as the spec's space-separated string. Kept as written:
     /// it is experimental in the standard, and Bud decides what to run.
+    ///
+    /// It is no longer only decorative: a skill that declares `agent:` is offered
+    /// as something to delegate to, and this is then the tool list that agent runs
+    /// with. See ``Skill/toolList(_:)``.
     public var allowedTools: String?
+    /// When to hand a whole slice of work to this skill instead of loading it into
+    /// the conversation. Present means the skill is also an agent.
+    ///
+    /// Opt-in, because a skill is instructions that can be loaded where they are
+    /// needed and most are better used that way. A skill written as a procedure
+    /// somebody should follow — with the tools it needs listed beside it — is the
+    /// one that is worth naming as a delegate.
+    public var delegation: String?
     /// The Markdown after the frontmatter — the part loaded on activation.
     public var instructions: String
 
     /// Where it came from, when it was installed rather than written here.
     public var source: String?
+
+    /// `allowed-tools` as a list.
+    ///
+    /// The field is a space-separated string in the standard and a comma-separated
+    /// one in half the skills in the wild, so both are accepted — a tool list that
+    /// silently parses to one entry named "read_file," is worse than either. A bare
+    /// `*` or an absent field means every tool; an empty string means none, which is
+    /// how a skill says it is reasoning only.
+    public static func toolList(_ raw: String?) -> [String]? {
+        guard let raw else { return nil }
+        let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty { return [] }
+        if cleaned == "*" { return nil }
+        return cleaned
+            .split(whereSeparator: { $0 == " " || $0 == "," || $0 == "\n" })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
     /// Files beside `SKILL.md`, relative to the skill folder, so the model can be
     /// told what else it may read.
     public var resources: [String] = []
@@ -97,6 +127,7 @@ public enum SkillParser {
             compatibility: fields.scalars["compatibility"]?.nilWhenEmpty,
             metadata: fields.metadata,
             allowedTools: fields.scalars["allowed-tools"]?.nilWhenEmpty,
+            delegation: fields.scalars["agent"]?.nilWhenEmpty,
             instructions: body.trimmingCharacters(in: .whitespacesAndNewlines)
         )
     }

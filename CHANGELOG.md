@@ -12,6 +12,82 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 0.4.0
+
+### The screen was showing fifty-four of my test runs
+
+The Agents tab listed nothing but `verify`, over and over. Every one of those rows
+came from `--verify-live`, which spawns a subagent to prove subagents work and
+records the run in the real database — because `--self-test` redirects the store
+and `--verify-live` never did. The gate was writing into the thing it was checking.
+
+Three fixes, because one was not enough:
+
+- **No command-line mode can reach your data.** They point the store at a scratch
+  file before anything else runs, so a mode that forgets to think about it is still
+  safe.
+- **Your roster is clean.** The 54 rows were removed — every one matched the test's
+  own prompt, so there was nothing to guess at. Your 16 conversations were not
+  touched.
+- **A run that finds nothing no longer looks like a shorter answer.** Deleting rows
+  is a symptom; the reason they were invisible as junk is that nothing said
+  "written by the gate".
+
+### Work you can hand over, by name
+
+Bud could already delegate, but only into an anonymous workstream: the model
+invented a title and a prompt each time, and the subagent ran with every tool in
+the session and the same instructions as everything else. Nothing could be offered,
+chosen, described or improved, because there was nothing to name.
+
+An agent is that name — instructions, a tool list, and optionally a model — and
+they come from three places, which is the point:
+
+| From | What |
+|---|---|
+| **Built in** | `scout` (read-only investigation), `reviewer` (read-only judgement), `builder` (does the work) |
+| **Your skills** | Any skill with `agent:` in its frontmatter. Its body becomes the instructions; its `allowed-tools` becomes the tool list |
+| **Your MCP servers** | Every connected server, scoped to *its own* tools |
+
+`scout` and `reviewer` cannot write and cannot run a shell. That is enforced by the
+tool list rather than asked for in a prompt, which is why `search_files` now exists:
+without it, the only agents that could search a codebase were the ones that could
+also delete it.
+
+**The field that was never used.** `allowed-tools` has been parsed from the day
+skills were added and ignored ever since. It is now the tool list of the agent a
+skill becomes — which is the only reading of it that means anything.
+
+### Delegation that does not deadlock
+
+A subagent may now delegate onward, one level. The interesting part is the
+accounting: nested runs take **no pool slot**, because a parent holding a slot while
+waiting for a child to be admitted is a deadlock the moment the pool fills with
+parents doing the same thing. Children belong to their parent's slot, the depth
+limit bounds the tree, and four children per call bounds the widest part of it.
+
+The model is told what it can delegate to, generated from the roster on every
+request rather than written into the prompt once — a list that is not regenerated
+is wrong from the first skill you install, and wrong in the direction that costs a
+round trip.
+
+### The screen
+
+Two panes, because the two questions are asked at different times. **Delegates** is
+what it can hand work to, grouped by where each came from. **Activity** is what it
+has handed work to — now carrying the agent each run ran as, with anything a
+subagent delegated indented under the run that asked for it.
+
+### Also
+
+- A tool list containing a wildcard is described rather than counted. A server
+  exposing twenty-one tools was being shown as "1 tool", which was a count of the
+  patterns rather than of the tools.
+- `--render-ui` takes a filter, so re-rendering one surface no longer means
+  laying out all thirty.
+
+---
+
 ## Bud 0.3.2
 
 ### A picture, when nothing else has one

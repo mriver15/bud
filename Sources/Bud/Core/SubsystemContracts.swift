@@ -278,12 +278,32 @@ public struct SubagentSpec: Sendable {
     public var model: String?
     /// When false the subagent runs without tools — pure reasoning/analysis.
     public var allowTools: Bool
+    /// The named agent this runs as. `nil` is an unnamed workstream that behaves
+    /// the way subagents always have: every tool, one prompt, the session model.
+    public var agent: String?
+    /// How deep in the tree this sits. A root run dispatched by the conversation is
+    /// 0; work a subagent delegates is 1. Depth is what bounds nesting — see
+    /// `SubagentSupervisor.maxDepth`.
+    public var depth: Int
+    /// The run that delegated this one, when it was a subagent.
+    public var parentID: String?
 
-    public init(title: String, prompt: String, model: String? = nil, allowTools: Bool = true) {
+    public init(
+        title: String,
+        prompt: String,
+        model: String? = nil,
+        allowTools: Bool = true,
+        agent: String? = nil,
+        depth: Int = 0,
+        parentID: String? = nil
+    ) {
         self.title = title
         self.prompt = prompt
         self.model = model
         self.allowTools = allowTools
+        self.agent = agent
+        self.depth = depth
+        self.parentID = parentID
     }
 }
 
@@ -299,6 +319,16 @@ public struct SubagentRun: Sendable, Identifiable {
     public var startedAt: Date
     public var finishedAt: Date?
     public var error: String?
+    /// The agent it ran as, when it was named. Shown on the row, because "which
+    /// kind of thing did this" is the first thing anyone wants to know about a
+    /// delegation, and a title the model invented does not answer it.
+    public var agent: String?
+    /// The run that delegated it. Children are indented under their parent rather
+    /// than listed beside it — a flat list of two depths reads as one list that
+    /// happens to be jumbled.
+    public var parentID: String?
+    /// 0 for work the conversation asked for; 1 for work a subagent delegated.
+    public var depth: Int
 
     public init(
         id: String = UUID().uuidString,
@@ -311,7 +341,10 @@ public struct SubagentRun: Sendable, Identifiable {
         toolCallCount: Int = 0,
         startedAt: Date = Date(),
         finishedAt: Date? = nil,
-        error: String? = nil
+        error: String? = nil,
+        agent: String? = nil,
+        parentID: String? = nil,
+        depth: Int = 0
     ) {
         self.id = id
         self.title = title
@@ -324,6 +357,9 @@ public struct SubagentRun: Sendable, Identifiable {
         self.startedAt = startedAt
         self.finishedAt = finishedAt
         self.error = error
+        self.agent = agent
+        self.parentID = parentID
+        self.depth = depth
     }
 
     public var duration: TimeInterval? {
