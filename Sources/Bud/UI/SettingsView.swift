@@ -699,6 +699,12 @@ private struct GeneralSettingsTab: View {
                     Stepper(value: subagentConcurrencyBinding, in: 1...32) {
                         limitRow("Subagents in parallel", "\(model.config.allowParallelSubagents)")
                     }
+                    Stepper(value: historyBudgetBinding, in: 20_000...1_000_000, step: 20_000) {
+                        limitRow(
+                            "Conversation carried to the model",
+                            BudFormat.count(model.config.historyBudgetChars)
+                        )
+                    }
                     Stepper(value: tokenBudgetBinding, in: 0...2_000_000, step: 10_000) {
                         limitRow(
                             "Token budget per chat",
@@ -707,7 +713,7 @@ private struct GeneralSettingsTab: View {
                                 : "Off"
                         )
                     }
-                    Text("Tool rounds cap how many times the model may call tools before it must answer. Parallel subagents bound how many slices run at once. The token budget stops Bud starting a new turn once one conversation has spent it — a new chat clears it. Off by default, because a ceiling nobody asked for is the app deciding when to stop working.")
+                    Text(limitsExplainer)
                         .font(Bud.Font.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -729,6 +735,37 @@ private struct GeneralSettingsTab: View {
             get: { model.config.maxToolRounds },
             set: { newValue in
                 model.config.maxToolRounds = newValue
+                model.persistConfig()
+            }
+        )
+    }
+
+    /// The line under the limits. It carries the live figure when the budget is
+    /// doing something, because "120,000 characters" is only meaningful next to
+    /// what the conversation actually holds.
+    private var limitsExplainer: String {
+        var text = """
+            Tool rounds cap how many times the model may call tools before it must answer. \
+            Parallel subagents bound how many slices run at once. The conversation budget \
+            is what the model is sent: past it, the oldest tool results are emptied — the \
+            user keeps seeing them, and the model is told it can call the tool again.
+            """
+        let carried = model.runtime.historyChars
+        if carried > 0 {
+            let percent = Int((Double(carried) / Double(max(1, model.config.historyBudgetChars))) * 100)
+            text += "\n\nThis conversation is carrying \(BudFormat.count(carried)) characters"
+            text += carried > model.config.historyBudgetChars
+                ? " — over budget, so the oldest results have been dropped."
+                : " (\(percent)% of the budget)."
+        }
+        return text
+    }
+
+    private var historyBudgetBinding: Binding<Int> {
+        Binding(
+            get: { model.config.historyBudgetChars },
+            set: { newValue in
+                model.config.historyBudgetChars = newValue
                 model.persistConfig()
             }
         )

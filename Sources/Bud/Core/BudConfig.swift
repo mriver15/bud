@@ -41,6 +41,17 @@ public struct BudConfig: Sendable, Codable, Hashable {
     public var systemPrompt: String
     public var maxToolRounds: Int
     public var allowParallelSubagents: Int
+    /// How much of the conversation the model is sent, in characters.
+    ///
+    /// History grew without limit: a tool result is capped at 24,000 characters
+    /// when it arrives, and nothing capped the total, so a long conversation
+    /// re-sent every result it had ever received on every round. The user keeps
+    /// seeing all of it — this bounds what the *model* carries, by dropping the
+    /// contents of the oldest tool results first.
+    ///
+    /// 120,000 characters is about 30,000 tokens: comfortably more than the whole
+    /// request prefix, and small enough to leave a 64k window room to think.
+    public var historyBudgetChars: Int
 
     // MARK: Updates
 
@@ -96,6 +107,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         systemPrompt: String = BudConfig.defaultSystemPrompt,
         maxToolRounds: Int = 24,
         allowParallelSubagents: Int = 6,
+        historyBudgetChars: Int = 120_000,
         updateRepo: String = BudConfig.defaultUpdateRepo,
         updateFeedURL: String = "",
         updateToken: String = "",
@@ -115,6 +127,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         self.systemPrompt = systemPrompt
         self.maxToolRounds = maxToolRounds
         self.allowParallelSubagents = allowParallelSubagents
+        self.historyBudgetChars = historyBudgetChars
         self.updateRepo = updateRepo
         self.updateFeedURL = updateFeedURL
         self.updateToken = updateToken
@@ -335,6 +348,7 @@ public enum BudConfigLoader {
         if let v = stored.systemPrompt, !v.isEmpty { config.systemPrompt = v }
         if let v = stored.maxToolRounds { config.maxToolRounds = v }
         if let v = stored.allowParallelSubagents { config.allowParallelSubagents = v }
+        if let v = stored.historyBudgetChars { config.historyBudgetChars = v }
         return config
     }
 
@@ -532,6 +546,7 @@ public enum BudConfigLoader {
         public var systemPrompt: String?
         public var maxToolRounds: Int?
         public var allowParallelSubagents: Int?
+        public var historyBudgetChars: Int?
 
         /// The single-provider shape Bud used before it supported more than
         /// DeepSeek. Read once and folded into `providerKeys`, never written.
@@ -563,6 +578,7 @@ public enum BudConfigLoader {
             self.systemPrompt = config.systemPrompt
             self.maxToolRounds = config.maxToolRounds
             self.allowParallelSubagents = config.allowParallelSubagents
+            self.historyBudgetChars = config.historyBudgetChars
         }
 
         public init(

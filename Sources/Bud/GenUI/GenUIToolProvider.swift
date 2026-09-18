@@ -102,38 +102,49 @@ extension GenUIToolProvider {
     content in a text component.
     """
 
-    /// The model's only documentation for the DSL, so it spells out every
-    /// component type and every field — including the fields that are required,
-    /// which is the mistake models make most often.
+    /// The model's only documentation for the DSL, so it spells out every component
+    /// type and every field — including the fields that are required, which is the
+    /// mistake models make most often.
+    ///
+    /// This is the whole vocabulary, and it is the only place it lives. It used to
+    /// be written twice: once here, and again as a sentence on each field of the
+    /// schema, where the same sentence had to name the component it belonged to
+    /// because the schema is flat. Keeping one copy is most of why this tool is
+    /// half the size it was — and the copy that went was the scattered one.
+    ///
+    /// Deliberately terse. Past the field names and their types a reader has what
+    /// it needs, and every word here is sent whether or not anything is rendered.
     private static let componentReference = """
     Component shapes. The fields listed for a type are the complete set it uses; \
     all are optional unless marked required.
     - text: value (string, required), style (title|heading|body|caption|mono|quote, default body)
-    - metrics: items (array, required) of {label, value, delta?, trend?}; value may be a number or an already-formatted string; trend is up|down|flat
-    - row: children (array of components, required), gap? (number) — lays children out horizontally and wraps when the panel is too narrow
-    - columns: children, gap? — same as row, but the children share the available width equally
-    - grid: columns (integer, required), children (required) — fixed number of equal columns
-    - card: children (required), title?, subtitle?, tint? (accent|success|warning|danger|blue|purple|pink|teal|gray or #RRGGBB)
-    - list: items (array, required) of {title, subtitle?, badge?, symbol?}; symbol is an SF Symbol name
-    - table: columns (array of strings, required), rows (array of arrays of strings), align? (one per column: left|right|center)
-    - chart: series (array, required) of {label, value: number}, kind (bar|line|area, default bar), unit?
-    - progress: value (number from 0 to 1, required), label?, caption?
-    - keyvalue: items (array, required) of {key, value} — for properties and specs
-    - code: value (string, required), language?
+    - metrics: items (required) of {label, value, delta?, trend? (up|down|flat)}; value \
+    may be a number or an already-formatted string
+    - row / columns: children (required), gap? — children side by side, wrapping / \
+    sharing the width equally
+    - grid: columns (integer, required), children (required)
+    - card: children (required), title?, subtitle?, tint? (accent|success|warning|danger|blue|purple|pink|teal|gray, or #RRGGBB)
+    - list: items (required) of {title, subtitle?, badge?, symbol? (an SF Symbol name)}
+    - table: columns (strings, required), rows (arrays of strings), align? (left|right|center, one per column)
+    - chart: series (required) of {label, value (number)}, kind (bar|line|area, default bar), unit?
+    - progress: value (number 0 to 1, required), label?, caption?
+    - keyvalue: items (required) of {key, value}
+    - code: value (required), language?
     - callout: value (required), kind (info|success|warning|error, default info), title?
-    - image: url (required, http or https), alt?
+    - image: url (required), alt?, width?, height?, fit? (fit|fill), radius?
     - divider: no fields
-    - button: label (required), action (required: {id, prompt?}), symbol? (SF Symbol), style? (primary|secondary|destructive); tapping sends the action to the host and, when 'prompt' is present, sends it as the user's next message
-    - html: value (required: an inline HTML fragment using inline CSS or SVG; scripts never run and links are inert), height? (number, default 220)
+    - button: label (required), action (required: {id, prompt?}), symbol?, style? (primary|secondary|destructive)
+    - html: value (required, inline HTML/CSS/SVG; scripts never run and links are inert), height? (default 220)
+
+    Tapping a button sends its action to the host, and its `prompt` — when there is \
+    one — is sent as the user's next message.
 
     Reach for a picture when one would carry something words cannot: a team of \
-    creatures, a set of places, a row of products, a map, a logo, a finished piece of \
-    work. Call find_image first — one call for a whole set of them — and put the URLs \
-    it returns straight into image components. A card with a picture in it reads as \
-    finished; the same card without one reads as a form.
-
-    Do not invent urls. A guessed address is a broken tile, and find_image exists so \
-    there is no reason to guess.
+    creatures, a set of places, a row of products, a map, a logo. Call find_image \
+    first — one call for a whole set of them — and put the URLs it returns straight \
+    into image components. A card with a picture in it reads as finished; the same \
+    card without one reads as a form. Do not invent urls: a guessed address is a \
+    broken tile, and find_image exists so there is no reason to guess.
     """
 
     /// Looking a picture up, for a surface that would be clearer with one.
@@ -223,92 +234,82 @@ extension GenUIToolProvider {
     }
 
     private static let renderUISchema: JSONValue = {
+        // Fields carry their name, their type and their enum and nothing else. The
+        // sentence that used to sit on each one said which component it belonged
+        // to, and that is a fact about a *flat* schema — the legend says it once,
+        // to the same reader, for a fifth of the characters.
+        //
+        // Three keep a note, because their names do not say it: how big a picture
+        // is when only one dimension is given, what an action's prompt does, and
+        // that `children` holds components. Everything else is inferable, and a
+        // model that infers wrongly is told exactly that by the renderer.
         let componentItem = objectSchema(
             componentReference,
             properties: [
-                ("type", field("string", "The component type. One of the shapes described in this schema.", values: UISpec.knownComponentTypes)),
-                ("value", field("string", "text, code, callout and html: the content. progress: use the number field instead.")),
-                ("style", field("string", "text: title|heading|body|caption|mono|quote.", values: ["title", "heading", "body", "caption", "mono", "quote"])),
-                ("title", field("string", "card, callout and the root spec: a heading above the content.")),
-                ("subtitle", field("string", "card: a secondary line under the title.")),
-                ("tint", field("string", "card: accent colour name or #RRGGBB hex.")),
-                ("label", field("string", "metric item: the caption under the number. progress: the caption above the bar. button: the button text (required for button).")),
-                ("delta", field("string", "metric item: the change to show next to the label, e.g. \"+12%\".")),
-                ("trend", field("string", "metric item: the direction the delta points.", values: ["up", "down", "flat"])),
-                ("items", alternatives(
-                    "metric, list and keyvalue rows; the shape depends on the component type.",
-                    [
-                        objectSchema("metric", properties: [
-                            ("label", field("string", "The metric's name.")),
-                            ("value", field("string", "The big number, as a number or a pre-formatted string.")),
-                            ("delta", field("string", "The change to show beside the label.")),
-                            ("trend", field("string", "Direction of the change.", values: ["up", "down", "flat"])),
-                        ], required: ["value"]),
-                        objectSchema("list entry", properties: [
-                            ("title", field("string", "Primary text.")),
-                            ("subtitle", field("string", "Secondary text.")),
-                            ("badge", field("string", "Short pill on the right, e.g. a status.")),
-                            ("symbol", field("string", "SF Symbol name for the leading icon.")),
-                        ], required: ["title"]),
-                        objectSchema("key/value pair", properties: [
-                            ("key", field("string", "The property name.")),
-                            ("value", field("string", "The property value.")),
-                        ], required: ["key", "value"]),
-                    ]
-                )),
+                ("type", field("string", values: UISpec.knownComponentTypes)),
+                ("value", field("string")),
+                ("style", field("string", values: ["title", "heading", "body", "caption", "mono", "quote"])),
+                ("title", field("string")),
+                ("subtitle", field("string")),
+                ("tint", field("string")),
+                ("label", field("string")),
+                ("delta", field("string")),
+                ("trend", field("string", values: ["up", "down", "flat"])),
+                ("items", alternatives([
+                    objectSchema(properties: [
+                        ("label", field("string")),
+                        ("value", field("string")),
+                        ("delta", field("string")),
+                        ("trend", field("string", values: ["up", "down", "flat"])),
+                    ], required: ["value"]),
+                    objectSchema(properties: [
+                        ("title", field("string")),
+                        ("subtitle", field("string")),
+                        ("badge", field("string")),
+                        ("symbol", field("string")),
+                    ], required: ["title"]),
+                    objectSchema(properties: [
+                        ("key", field("string")),
+                        ("value", field("string")),
+                    ], required: ["key", "value"]),
+                ])),
                 ("series", arraySchema(
-                    "chart: the data points in left-to-right order.",
-                    items: objectSchema("One point.", properties: [
-                        ("label", field("string", "The x-axis label.")),
-                        ("value", field("number", "The plotted value.")),
+                    items: objectSchema(properties: [
+                        ("label", field("string")),
+                        ("value", field("number")),
                     ], required: ["label", "value"]),
                     minItems: 1
                 )),
-                ("kind", alternatives(
-                    "chart uses bar|line|area; callout uses info|success|warning|error.",
-                    [
-                        field("string", "chart", values: ["bar", "line", "area"]),
-                        field("string", "callout", values: ["info", "success", "warning", "error"]),
-                    ]
-                )),
-                ("unit", field("string", "chart: units for the value labels, e.g. \"%\" or \"ms\".")),
-                ("columns", alternatives(
-                    "grid: the number of columns (integer). table: the header labels (array of strings).",
-                    [
-                        field("integer", "grid: column count."),
-                        arraySchema("table: header labels, left to right.", items: field("string", "A column heading."), minItems: 1),
-                    ]
-                )),
-                ("rows", arraySchema(
-                    "table: the body rows; each row is an array of cell strings in column order.",
-                    items: arraySchema("One row.", items: field("string", "A cell value."))
-                )),
-                ("align", arraySchema(
-                    "table: per-column alignment; index 0 aligns the first column.",
-                    items: field("string", "Column alignment.", values: ["left", "right", "center"])
-                )),
+                ("kind", alternatives([
+                    field("string", values: ["bar", "line", "area"]),
+                    field("string", values: ["info", "success", "warning", "error"]),
+                ])),
+                ("unit", field("string")),
+                ("columns", alternatives([
+                    field("integer"),
+                    arraySchema(items: field("string"), minItems: 1),
+                ])),
+                ("rows", arraySchema(items: arraySchema(items: field("string")))),
+                ("align", arraySchema(items: field("string", values: ["left", "right", "center"]))),
                 ("children", arraySchema(
-                    "row, columns, grid and card: the nested components, rendered in order.",
-                    items: .object(["type": "object", "description": "A component object with a 'type' field."])
+                    items: field("object", "A component object with a 'type' field.")
                 )),
-                ("gap", field("number", "row and columns: spacing in points between children.")),
-                ("language", field("string", "code: the syntax label shown above the block, e.g. \"swift\".")),
-                ("caption", field("string", "progress: a line of context under the bar.")),
-                ("key", field("string", "keyvalue item: the property name.")),
-                ("url", field("string", "image: an http, https, or file: URL (file: must be under ~/.bud).")),
-                ("width", field("number", "image: width in points. Omit to fill the available width.")),
-
-                ("fit", field("string", "image: fit (default) shows the whole image; fill crops it to the box.")),
-                ("radius", field("number", "image: corner rounding in points. 0 for square corners.")),
-                ("alt", field("string", "image: description shown when the image cannot load.")),
-                ("symbol", field("string", "list item and button: an SF Symbol name.")),
-                ("badge", field("string", "list item: a short pill on the right.")),
-                ("height", field("number", "image: height in points — omit to keep the aspect ratio, ~96 for a sprite. html: pixel height of the frame, default 220.")),
+                ("gap", field("number")),
+                ("language", field("string")),
+                ("caption", field("string")),
+                ("key", field("string")),
+                ("url", field("string", "An http, https, or file: URL. file: must be under ~/.bud.")),
+                ("width", field("number", "In points. Omit to fill the available width.")),
+                ("fit", field("string", values: ["fit", "fill"])),
+                ("radius", field("number")),
+                ("alt", field("string")),
+                ("symbol", field("string")),
+                ("badge", field("string")),
+                ("height", field("number", "Image: in points, and omitting it keeps the aspect ratio. html: default 220.")),
                 ("action", objectSchema(
-                    "button: what happens when it is tapped.",
                     properties: [
-                        ("id", field("string", "Identifier the host receives, e.g. \"open-settings\".")),
-                        ("prompt", field("string", "A user message to send as a follow-up, e.g. \"Show the same breakdown for last quarter.\"")),
+                        ("id", field("string")),
+                        ("prompt", field("string", "Sent as the user's next message.")),
                     ],
                     required: ["id"]
                 )),
@@ -317,14 +318,9 @@ extension GenUIToolProvider {
         )
 
         return objectSchema(
-            "The interface to render. Components are drawn top to bottom inside one panel card.",
             properties: [
                 ("title", field("string", "Optional heading for the whole surface.")),
-                ("components", arraySchema(
-                    "The components to render, in order.",
-                    items: componentItem,
-                    minItems: 1
-                )),
+                ("components", arraySchema(items: componentItem, minItems: 1)),
             ],
             required: ["components"]
         )
@@ -333,35 +329,33 @@ extension GenUIToolProvider {
 
 // MARK: - Schema builders
 
-private func field(_ type: String, _ description: String, values: [String] = []) -> JSONValue {
-    var object: [String: JSONValue] = [
-        "type": .string(type),
-        "description": .string(description),
-    ]
+private func field(_ type: String, _ description: String = "", values: [String] = []) -> JSONValue {
+    var object: [String: JSONValue] = ["type": .string(type)]
+    if !description.isEmpty { object["description"] = .string(description) }
     if !values.isEmpty { object["enum"] = .array(values.map { .string($0) }) }
     return .object(object)
 }
 
 private func objectSchema(
-    _ description: String,
+    _ description: String = "",
     properties: [(String, JSONValue)],
     required: [String] = []
 ) -> JSONValue {
     var object: [String: JSONValue] = [
         "type": "object",
-        "description": .string(description),
         "properties": .object(Dictionary(uniqueKeysWithValues: properties)),
     ]
+    if !description.isEmpty { object["description"] = .string(description) }
     if !required.isEmpty { object["required"] = .array(required.map { .string($0) }) }
     return .object(object)
 }
 
-private func arraySchema(_ description: String, items: JSONValue, minItems: Int? = nil) -> JSONValue {
+private func arraySchema(_ description: String = "", items: JSONValue, minItems: Int? = nil) -> JSONValue {
     var object: [String: JSONValue] = [
         "type": "array",
-        "description": .string(description),
         "items": items,
     ]
+    if !description.isEmpty { object["description"] = .string(description) }
     if let minItems { object["minItems"] = .number(Double(minItems)) }
     return .object(object)
 }
@@ -370,11 +364,10 @@ private func arraySchema(_ description: String, items: JSONValue, minItems: Int?
 /// integer on `grid` and a string array on `table`, `kind` is a different enum
 /// on `chart` and `callout`. One `oneOf` documents both without flattening them
 /// into a permissive `["integer", "array"]`.
-private func alternatives(_ description: String, _ options: [JSONValue]) -> JSONValue {
-    .object([
-        "description": .string(description),
-        "oneOf": .array(options),
-    ])
+private func alternatives(_ options: [JSONValue], _ description: String = "") -> JSONValue {
+    var object: [String: JSONValue] = ["oneOf": .array(options)]
+    if !description.isEmpty { object["description"] = .string(description) }
+    return .object(object)
 }
 
 private extension JSONValue {

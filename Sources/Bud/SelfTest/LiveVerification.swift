@@ -509,6 +509,44 @@ public enum BudLiveVerification {
             !loaded.deleteFrom(turnAt: 0)
         )
 
+        // MARK: Rendering from the stripped schema
+
+        // The schema is the model's whole vocabulary for the DSL, and it just lost
+        // the sentence that used to sit on every field saying which component the
+        // field belonged to. Whether it is still enough is not answerable from the
+        // source: it is answerable by asking for a surface and looking at whether
+        // one came back.
+        let uiEnv = AppEnvironment(config: config)
+        await uiEnv.registry.register(GenUIToolProvider())
+        let uiRuntime = AgentRuntime(env: uiEnv)
+        uiRuntime.send(
+            "Render a table of the three largest planets with their diameters. "
+                + "Do not write any prose — just the surface."
+        )
+        let uiSettled = await waitUntil(timeout: 180) { !uiRuntime.isStreaming }
+        c.check("render: the turn settled", uiSettled)
+
+        let producedSurface = uiRuntime.turns.contains { turn in
+            turn.segments.contains { segment in
+                if case .tool(_, _, _, let state, _, let ui) = segment {
+                    return state == .succeeded && ui != nil
+                }
+                return false
+            }
+        }
+        c.check("render: a surface came back from the stripped schema", producedSurface)
+
+        let surfaceComponents = uiRuntime.turns.reduce(0) { running, turn in
+            running + turn.segments.reduce(0) { inner, segment in
+                if case .tool(_, _, _, _, _, let ui) = segment, let ui {
+                    return inner + (ui["components"]?.arrayValue?.count ?? 0)
+                }
+                return inner
+            }
+        }
+        c.check("render: ...with components in it (\(surfaceComponents))", surfaceComponents >= 1)
+        uiRuntime.stop()
+
         // MARK: Subagent
 
         let supervisor = SubagentSupervisor(env: runtimeEnv, agents: AgentRegistry())
