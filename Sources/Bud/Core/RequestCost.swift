@@ -105,7 +105,7 @@ public enum RequestMeasureCLI {
         let config = BudConfigLoader.load()
         let env = AppEnvironment(config: config)
         let mcp = MCPManager()
-        let subagents = SubagentSupervisor(env: env)
+        let subagents = SubagentSupervisor(env: env, agents: AgentRegistry())
 
         let providers: [any ToolProvider] = [
             NativeToolsProvider(),

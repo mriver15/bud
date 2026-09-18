@@ -470,7 +470,7 @@ public enum BudLiveVerification {
 
         // MARK: Subagent
 
-        let supervisor = SubagentSupervisor(env: runtimeEnv)
+        let supervisor = SubagentSupervisor(env: runtimeEnv, agents: AgentRegistry())
         let runs = await supervisor.spawn([
             SubagentSpec(
                 title: "verify",

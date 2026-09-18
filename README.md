@@ -48,9 +48,26 @@ repository rather than given a fabricated command.
 > link. If you need a surface where no visible credit fits, Glama offers a
 > commercial licence that waives this.
 
-**Subagents.** Ask Bud to split work and it runs each slice concurrently in a
-fresh context with its own tool loop, then reports back. The Agents tab shows
-every run live — state, duration, tool calls, streamed reasoning.
+**Delegation, to something with a name.** Ask Bud to split work and it runs each
+slice concurrently in a fresh context with its own tool loop, then reports back.
+The Agents tab shows both halves of that: **Delegates** — everything it can hand
+work to — and **Activity** — every run live, with state, duration, tool calls and
+streamed reasoning.
+
+A delegate is a name, a set of instructions, and a tool list, and they come from
+three places:
+
+| Where from | What it is |
+|---|---|
+| **Built in** | `scout` (read-only investigation), `reviewer` (read-only judgement), `builder` (does the work) |
+| **Your skills** | Any skill with `agent:` in its frontmatter. Its body becomes the instructions and its `allowed-tools` becomes the tool list — which is what that field was always for |
+| **Your MCP servers** | Every connected server, as a delegate scoped to *its own tools*. For a server that answers with three hundred rows of JSON, this is the point: something reads all of it and comes back with the six lines that mattered |
+
+The roster is generated into `spawn_subagents`' description, so the model chooses
+from what actually exists rather than from a list written down once and left to
+rot. A subagent may delegate onward — one level, with children counted against
+their parent's slot rather than the pool's, so nesting cannot starve the pool it
+is running in.
 
 **Generated interfaces.** For comparisons, dashboards and status reports, the
 model emits a declarative UI spec instead of a wall of text: cards, metrics,
@@ -281,7 +298,7 @@ Sources/Bud/
 │   ├── ChatBackend.swift     the streaming contract every dialect implements
 │   ├── AgentRuntime.swift    the agent loop: stream, call tools, repeat
 │   ├── ToolProvider.swift    tool contract + namespacing registry
-│   └── NativeTools.swift     file, shell and web tools
+│   └── NativeTools.swift     file, search, shell and web tools
 ├── Providers/
 │   ├── ProviderRegistry.swift          known providers, dialects, env vars
 │   ├── ProviderCredentials.swift       resolved credentials + the factory
@@ -290,7 +307,7 @@ Sources/Bud/
 │   └── GoogleGenerativeAIBackend.swift Gemini
 ├── MCP/                      JSON-RPC, stdio + HTTP transports, manager
 ├── Marketplace/              registry client, store, browser UI
-├── Subagents/                concurrent supervisor + roster UI
+├── Subagents/                agents, the pool, and the delegation UI
 ├── GenUI/                    UI spec language, renderer, render_ui + find_image
 ├── UI/                       glass design system, chat, settings, panel
 └── SelfTest/                 offline assertion suite (`--self-test`)

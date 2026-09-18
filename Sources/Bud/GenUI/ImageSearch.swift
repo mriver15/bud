@@ -48,7 +48,13 @@ public enum ImageSearch {
     /// Wikimedia asks for a real User-Agent and refuses requests without one — the
     /// first version of this returned nothing at all from Commons for that reason
     /// alone.
-    private static let userAgent = "Bud/0.3.2 (https://github.com/mriver15/bud)"
+    /// Read from the bundle rather than written down: a user agent pinned to a
+    /// released version is wrong from the next release onwards, and Wikimedia asks
+    /// for one that identifies the client.
+    private static let userAgent: String = {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        return "Bud/\(version ?? "dev") (https://github.com/mriver15/bud)"
+    }()
 
     /// One call for a whole set. Six creatures is six lookups, and six round trips
     /// to draw one card is how a feature goes unused.

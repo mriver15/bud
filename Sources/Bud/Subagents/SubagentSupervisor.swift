@@ -22,6 +22,25 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
     /// loops tools forever would hold a pool slot and never report findings.
     nonisolated static let maxRounds = 12
 
+    /// How deep delegation may go: a root run may delegate, and what it delegates
+    /// to may not.
+    ///
+    /// One level, deliberately. The pool cap bounds workstreams *the user asked
+    /// for*, so nesting has to be bounded somewhere else or it multiplies straight
+    /// past it — six roots each fanning out to four children is twenty-four model
+    /// conversations, and the second level would be another ninety-six.
+    ///
+    /// Nested runs do not take a pool slot, which is also why they cannot be the
+    /// thing that gets capped: a root holding a slot while it waits for a child to
+    /// be admitted is a deadlock the moment the pool is full of roots doing the
+    /// same. Children belong to the parent's slot, and the depth limit is what
+    /// stops that from being unbounded.
+    nonisolated static let maxDepth = 1
+
+    /// How many children one run may delegate in a single call. The depth limit
+    /// bounds the tree; this bounds the widest part of it.
+    nonisolated static let maxChildren = 4
+
     nonisolated public static let spawnToolName = ToolNaming.sanitize("spawn_subagents")
 
     nonisolated private static let spawnSchema: JSONValue = .object([
@@ -36,6 +55,13 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
                         "prompt": .object(["type": "string"]),
                         "model": .object(["type": "string"]),
                         "allow_tools": .object(["type": "boolean"]),
+                        "agent": .object([
+                            "type": "string",
+                            "description": .string(
+                                "The agent to run this task as, by name. Omit for an unnamed "
+                                    + "workstream with every tool available."
+                            ),
+                        ]),
                     ]),
                     "required": .array(["title", "prompt"]),
                 ]),
@@ -45,30 +71,31 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
     ])
 
     private let env: AppEnvironment
+    /// What this can hand work to. Held rather than passed to `spawn`, because the
+    /// tool description is generated from it and the description is read by every
+    /// model call the session makes.
+    private let agents: AgentRegistry
     private let gate: RunGate
     /// Live handles, so one run can be cancelled without disturbing siblings.
     @ObservationIgnored private var handles: [String: Task<Void, Never>] = [:]
 
-    public init(env: AppEnvironment) {
+    public init(env: AppEnvironment, agents: AgentRegistry) {
         self.env = env
+        self.agents = agents
         self.gate = RunGate(capacity: max(1, env.config.allowParallelSubagents))
     }
 
     // MARK: - Tools
 
     public func toolDescriptors() async -> [ToolDescriptor] {
-        [
+        // Read at request time rather than remembered. A description written when
+        // the session started would keep naming an agent that has since been
+        // uninstalled, and the model would keep choosing it.
+        agents.refresh()
+        return [
             ToolDescriptor(
                 name: Self.spawnToolName,
-                description: """
-                Run independent workstreams concurrently, each in a fresh context that \
-                cannot see this conversation. Use it when a request splits into genuinely \
-                separate slices that can be researched, drafted or computed at the same \
-                time; never to do one thing several times over. Every task must be \
-                self-contained — state what you already know, what the task must establish, \
-                and what it must return. The final message of each task is its deliverable \
-                and comes back to you verbatim, so ask for findings, not pleasantries.
-                """,
+                description: Self.spawnDescription(roster: agents.roster()),
                 schema: Self.spawnSchema,
                 providerID: providerID,
                 providerName: providerName
@@ -80,8 +107,40 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         guard tool == Self.spawnToolName else {
             return .error("Unknown subagent tool '\(tool)'.")
         }
+        switch Self.parse(arguments, depth: 0, parentID: nil) {
+        case .failure(let problem):
+            return .error(problem.message)
+        case .success(let specs):
+            if let refusal = refusal(for: specs) { return .error(refusal) }
+            return .ok(Self.digest(await spawn(specs)))
+        }
+    }
+
+    /// An agent named that is not there.
+    ///
+    /// Caught here rather than left to run unnamed, because the two failures are
+    /// not the same size: a task that quietly loses its agent runs with the wrong
+    /// instructions and the wrong tools and still comes back sounding confident.
+    /// Answering with the names that do exist costs one round trip and fixes it.
+    private func refusal(for specs: [SubagentSpec]) -> String? {
+        let named = specs.compactMap(\.agent)
+        guard let unknown = named.first(where: { agents.named($0) == nil }) else { return nil }
+        let available = agents.agents.map(\.name)
+        guard !available.isEmpty else {
+            return "There is no agent named '\(unknown)'. None are available in this session."
+        }
+        return "There is no agent named '\(unknown)'. Available: \(available.joined(separator: ", "))."
+    }
+
+    /// Reads the task list. Shared with the nested path so a task means the same
+    /// thing whether the conversation asked for it or a subagent did.
+    nonisolated static func parse(
+        _ arguments: JSONValue,
+        depth: Int,
+        parentID: String?
+    ) -> Result<[SubagentSpec], SpecProblem> {
         guard let rawTasks = arguments["tasks"]?.arrayValue, !rawTasks.isEmpty else {
-            return .error("spawn_subagents requires a non-empty 'tasks' array.")
+            return .failure(SpecProblem(message: "\(spawnToolName) requires a non-empty 'tasks' array."))
         }
 
         var specs: [SubagentSpec] = []
@@ -89,31 +148,69 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         for (offset, item) in rawTasks.enumerated() {
             let label = "Task \(offset + 1)"
             guard let object = item.objectValue else {
-                return .error("\(label) is not an object.")
+                return .failure(SpecProblem(message: "\(label) is not an object."))
             }
             let title = (object["title"]?.stringValue ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let prompt = (object["prompt"]?.stringValue ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !title.isEmpty, !prompt.isEmpty else {
-                return .error("\(label) needs a non-empty 'title' and 'prompt'.")
+                return .failure(
+                    SpecProblem(message: "\(label) needs a non-empty 'title' and 'prompt'.")
+                )
             }
             // Models mix the two spellings freely; the schema says snake_case but
             // camelCase costs nothing to honour.
             let rawModel = (object["model"]?.stringValue ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let allowTools = (object["allow_tools"] ?? object["allowTools"])?.boolValue ?? true
+            // Also camelCase, because it is the spelling the rest of the tool
+            // surface uses and the model reaches for it on the first try.
+            let rawAgent = (object["agent"]?.stringValue ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             specs.append(
                 SubagentSpec(
                     title: title,
                     prompt: prompt,
                     model: rawModel.isEmpty ? nil : rawModel,
-                    allowTools: allowTools
+                    allowTools: allowTools,
+                    agent: rawAgent.isEmpty ? nil : rawAgent,
+                    depth: depth,
+                    parentID: parentID
                 )
             )
         }
+        return .success(specs)
+    }
 
-        return .ok(Self.digest(await spawn(specs)))
+    /// A run delegating part of its own work.
+    ///
+    /// Reached from inside a subagent, not through the registry: the registry routes
+    /// by name and has no idea who is calling, so a tool reached that way could not
+    /// know how deep it already was. The run that owns the loop knows, so it passes
+    /// the depth in directly.
+    public func spawnNested(_ arguments: JSONValue, parent: String, depth: Int) async -> ToolResult {
+        guard depth < Self.maxDepth else {
+            return .error(
+                "This run is \(depth) level\(depth == 1 ? "" : "s") deep and delegation stops at "
+                    + "\(Self.maxDepth). Do the work here, or report what needs delegating."
+            )
+        }
+        switch Self.parse(arguments, depth: depth + 1, parentID: parent) {
+        case .failure(let problem):
+            return .error(problem.message)
+        case .success(let specs):
+            if let refusal = refusal(for: specs) { return .error(refusal) }
+            // The parent's own work is already consuming model time; a delegation
+            // that fans wider than the pool is a batch that finishes later than
+            // doing it serially would have.
+            let capped = Array(specs.prefix(Self.maxChildren))
+            let note = specs.count > capped.count
+                ? "\n\n(\(specs.count - capped.count) of \(specs.count) tasks were not started: "
+                    + "at most \(Self.maxChildren) can be delegated at a time.)"
+                : ""
+            return .ok(Self.digest(await spawn(capped)) + note)
+        }
     }
 
     // MARK: - Supervision
@@ -131,19 +228,36 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         pending.reserveCapacity(specs.count)
 
         for spec in specs {
-            let run = SubagentRun(
+            // Resolved here, on the main actor, so the detached loop is handed a
+            // value rather than a registry it would have to reach back for. An
+            // agent the model named and got wrong is refused before this point, so
+            // a spec that names one always resolves.
+            let agent = spec.agent.flatMap { agents.named($0) }
+            // An agent may name a model; the task may override it; the session is
+            // the floor. In that order, because each is more specific than the last.
+            let model = spec.model ?? agent?.model ?? env.config.model
+            var run = SubagentRun(
                 title: spec.title,
                 prompt: spec.prompt,
-                model: spec.model ?? env.config.model,
+                model: model,
                 state: .queued,
-                startedAt: Date()
+                startedAt: Date(),
+                agent: agent?.name,
+                parentID: spec.parentID,
+                depth: spec.depth
             )
-            ids.append(run.id)
+            // A named agent that no longer resolves is still worth showing as the
+            // thing that was asked for, rather than as an unnamed run.
+            if run.agent == nil { run.agent = spec.agent }
+            let runID = run.id
+            ids.append(runID)
             runs.insert(run, at: 0)
             // Detached: the run must not execute on the main actor, and detaching
-            // is what keeps one cancelled run from taking the batch with it.
+            // is what keeps one cancelled run from taking the batch with it. The id
+            // is copied out first so the closure captures a constant rather than the
+            // whole mutable run.
             let task = Task.detached { [env, gate] in
-                await Self.execute(spec, id: run.id, env: env, gate: gate, publish: self)
+                await Self.execute(spec, agent: agent, id: runID, env: env, gate: gate, publish: self)
             }
             handles[run.id] = task
             pending.append(task)
@@ -206,38 +320,55 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
 
     private nonisolated static func execute(
         _ spec: SubagentSpec,
+        agent: AgentDefinition?,
         id: String,
         env: AppEnvironment,
         gate: RunGate,
         publish: SubagentSupervisor
     ) async {
-        guard await gate.enter(id) else {
+        // Only work the conversation asked for takes a pool slot. A nested run is
+        // part of its parent's slice, and a parent that holds a slot while waiting
+        // for a child to be admitted deadlocks the moment the pool is full of
+        // parents doing the same thing. The depth limit is what bounds the nesting
+        // that this would otherwise leave unbounded.
+        let nested = spec.depth > 0
+        let admitted = nested ? true : await gate.enter(id)
+        guard admitted else {
             await publish.settle(id, state: .cancelled, error: nil)
             return
         }
-        await runLoop(spec, id: id, env: env, publish: publish)
-        await gate.leave(id)
+        await runLoop(spec, agent: agent, id: id, env: env, publish: publish)
+        if !nested { await gate.leave(id) }
     }
 
     private nonisolated static func runLoop(
         _ spec: SubagentSpec,
+        agent: AgentDefinition?,
         id: String,
         env: AppEnvironment,
         publish: SubagentSupervisor
     ) async {
-        let model = spec.model ?? env.config.model
+        let model = spec.model ?? agent?.model ?? env.config.model
         await publish.markRunning(id, model: model)
 
         let backend = env.makeBackend()
         var messages: [ChatMessage] = [
-            ChatMessage(role: .system, content: systemPrompt(spec)),
+            ChatMessage(role: .system, content: systemPrompt(spec, agent: agent)),
             ChatMessage(role: .user, content: spec.prompt),
         ]
-        // `spawn_subagents` is withheld on purpose: nested fan-out would multiply
-        // the pool past its cap and every slot could end up waiting on children.
-        let tools = spec.allowTools
-            ? await env.registry.descriptors().filter { $0.name != spawnToolName }
-            : []
+        // The agent's own tool list, intersected with what this session actually
+        // has. A named tool that does not exist simply is not there, which is the
+        // right reading of a list written against a different session's servers.
+        var tools: [ToolDescriptor] = []
+        if spec.allowTools {
+            tools = await env.registry.descriptors()
+            if let agent { tools = tools.filter { agent.allows($0.name) } }
+        }
+        // Delegation is offered while there is depth left for it. Withheld past
+        // that, so the model is not handed a tool whose only answer is a refusal.
+        if spec.depth >= maxDepth {
+            tools.removeAll { $0.name == spawnToolName }
+        }
 
         var answer = ""
         var round = 0
@@ -306,11 +437,21 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
             messages.append(ChatMessage(role: .assistant, content: content, toolCalls: calls))
             for call in calls {
                 if Task.isCancelled { return }
-                let result = await env.registry.invoke(
-                    name: call.name,
-                    arguments: call.parsedArguments,
-                    callID: call.id
-                )
+                // Routed here rather than through the registry for the one tool
+                // that has to know how deep it already is. The registry matches on
+                // name and cannot tell which run is asking.
+                let result: ToolResult
+                if call.name == spawnToolName, spec.depth < maxDepth {
+                    result = await publish.spawnNested(
+                        call.parsedArguments, parent: id, depth: spec.depth
+                    )
+                } else {
+                    result = await env.registry.invoke(
+                        name: call.name,
+                        arguments: call.parsedArguments,
+                        callID: call.id
+                    )
+                }
                 messages.append(
                     ChatMessage(
                         role: .tool,
@@ -326,21 +467,72 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         await publish.settle(id, state: .done, error: nil)
     }
 
-    private nonisolated static func systemPrompt(_ spec: SubagentSpec) -> String {
-        """
-        You are a subagent: one of several workstreams running at the same time. \
-        The others cannot see you and you cannot see them, so nothing you leave out \
-        of your final message exists as far as the rest of the system is concerned.
+    /// What the model is told about delegating, including who it can delegate to.
+    ///
+    /// The roster is generated rather than written down here: a list of agents
+    /// hardcoded into a prompt is wrong the moment a skill is installed, and wrong
+    /// in the direction that costs a round trip — the model would keep naming an
+    /// agent that is no longer there.
+    nonisolated static func spawnDescription(roster: String) -> String {
+        var text = """
+            Run independent workstreams concurrently, each in a fresh context that \
+            cannot see this conversation. Use it when a request splits into genuinely \
+            separate slices that can be researched, drafted or computed at the same \
+            time; never to do one thing several times over. Every task must be \
+            self-contained — state what you already know, what the task must establish, \
+            and what it must return. The final message of each task is its deliverable \
+            and comes back to you verbatim, so ask for findings, not pleasantries.
+            """
+        guard !roster.isEmpty else { return text }
+        text += """
 
-        Your assignment: \(spec.title)
 
-        Your final message is not read by a human. It is returned verbatim to the \
-        agent that dispatched you and folded into the report the user sees. Report \
-        findings, not pleasantries: what you established, the concrete evidence \
-        (paths, line numbers, values, URLs), anything you could not determine, and \
-        what you would do next. No greeting, no restating the assignment, no asking \
-        whether to continue.
-        """
+            Hand a task to one of these by naming it in 'agent':
+            \(roster)
+
+            Name one whenever it fits. An agent arrives with its own instructions and \
+            its own tools — a scout cannot change anything, a server agent can only \
+            reach its own server — so naming it is how a task gets the right shape \
+            without the task description having to ask for it. Leave 'agent' out and \
+            the task runs unnamed: every tool, the session model, and nothing but the \
+            prompt you wrote. Split the work before you write the prompts: say what each \
+            agent gets and what it must come back with, and make sure no two of them are \
+            doing the same thing.
+            """
+        return text
+    }
+
+    private nonisolated static func systemPrompt(_ spec: SubagentSpec, agent: AgentDefinition?) -> String {
+        var text = ""
+        // The agent's own instructions come first: they are the identity, and the
+        // contract below is what every workstream has in common on top of it.
+        if let agent {
+            text += agent.instructions.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n—\n\n"
+        }
+        text += """
+            You are a subagent\(agent.map { " running as the \"\($0.name)\" agent" } ?? ""): one of \
+            several workstreams running at the same time. The others cannot see you and you \
+            cannot see them, so nothing you leave out of your final message exists as far as the \
+            rest of the system is concerned.
+
+            Your assignment: \(spec.title)
+
+            Your final message is not read by a human. It is returned verbatim to the agent that \
+            dispatched you and folded into the report the user sees. Report findings, not \
+            pleasantries: what you established, the concrete evidence (paths, line numbers, \
+            values, URLs), anything you could not determine, and what you would do next. No \
+            greeting, no restating the assignment, no asking whether to continue.
+            """
+        if spec.depth < maxDepth {
+            text += """
+
+
+                You may hand part of this to another agent with \(spawnToolName) if it genuinely \
+                splits. You will not see its work, so each task you write has to stand on its \
+                own, and its final message is all you get back.
+                """
+        }
+        return text
     }
 
     // MARK: - Live publication
@@ -412,7 +604,9 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         runs.map { run in
             let elapsed = run.duration ?? Date().timeIntervalSince(run.startedAt)
             let calls = run.toolCallCount == 1 ? "1 tool call" : "\(run.toolCallCount) tool calls"
-            var block = "• \(run.title) — \(run.state.label), \(String(format: "%.1fs", elapsed)), \(calls)"
+            var block = "• \(run.title)"
+            if let agent = run.agent { block += " (as \(agent))" }
+            block += " — \(run.state.label), \(String(format: "%.1fs", elapsed)), \(calls)"
             if let error = run.error, !error.isEmpty {
                 block += "\nerror: \(error)"
             }
@@ -428,6 +622,11 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         let end = text.index(text.startIndex, offsetBy: limit)
         return String(text[..<end]) + "\n…[truncated \(text.count - limit) characters]"
     }
+}
+
+/// A task list that could not be read, with the sentence to send back to the model.
+struct SpecProblem: Error, Sendable {
+    var message: String
 }
 
 // MARK: - Tool call fragments

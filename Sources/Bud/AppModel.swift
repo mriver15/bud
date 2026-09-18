@@ -12,7 +12,7 @@ public enum SettingsTab: String, CaseIterable, Sendable, Identifiable {
         case .mcp: return "Connections"
         case .marketplace: return "Marketplace"
         case .skills: return "Skills"
-        case .subagents: return "Subagents"
+        case .subagents: return "Agents"
         case .tools: return "Tools"
         case .about: return "About"
         }
@@ -74,6 +74,9 @@ public final class AppModel {
     public let mcp: MCPManager
     public let marketplace: MarketplaceStore
     public let subagents: SubagentSupervisor
+    /// What can be delegated to: the built-ins, plus whatever the installed skills
+    /// and connected servers add. Rebuilt whenever either changes.
+    public let agents = AgentRegistry()
     /// Reports a long turn that finished while Bud was not in front.
     private let notifier = CompletionNotifier()
 
@@ -153,7 +156,7 @@ public final class AppModel {
         self.runtime = AgentRuntime(env: env)
         self.mcp = MCPManager()
         self.marketplace = MarketplaceStore()
-        self.subagents = SubagentSupervisor(env: env)
+        self.subagents = SubagentSupervisor(env: env, agents: agents)
         self.update = UpdateModel()
         // Wired here because this is the first moment `self` is complete enough
         // to be captured. The closure reads `onQuit` when it is called, not when
@@ -204,6 +207,12 @@ public final class AppModel {
         BudConfigLoader.ensureDirectory()
         restoreConversations()
         subagents.loadRecentRuns()
+        // What can be delegated to is the built-ins plus whatever is installed and
+        // connected, so it is assembled from those rather than declared.
+        agents.source = { [weak self] in
+            (SkillStore.installed(), self?.mcp.servers ?? [])
+        }
+        agents.refresh()
         let providers: [any ToolProvider] = [
             NativeToolsProvider(),
             MemoryToolsProvider(),
@@ -586,6 +595,10 @@ public final class AppModel {
     // MARK: Tools
 
     public func refreshTools() async {
+        // The roster is rebuilt with the tool list because they change for the same
+        // reasons: a server connected, a skill installed. Reading them together
+        // keeps the panel from showing a delegate that no longer exists.
+        agents.refresh()
         availableTools = await env.registry.descriptors()
     }
 
