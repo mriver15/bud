@@ -81,6 +81,7 @@ public enum BudSelfTest {
             selfUpdate,
             mcpConfigMapping,
             fileReading,
+            uiImages,
             skills,
             skillScanning,
             glamaMapping,
@@ -2006,6 +2007,116 @@ public enum BudSelfTest {
         // A folder that is not a skill is nil rather than a skill with no name.
         c.check("a folder with no SKILL.md is not a skill",
                 SkillStore.read(directory: directory.deletingLastPathComponent()) == nil)
+
+        return c.report()
+    }
+
+    // MARK: Images in generated UI
+
+    /// The `image` component, and where an image with no URL comes from.
+    ///
+    /// An image with no stated size stretches to whatever contains it, which is
+    /// what a screenshot wants and the wrong thing entirely for a sprite. The
+    /// bounds matter as much as the fields: a generated spec is free to say
+    /// 40000, and a view that tries to lay that out is a hung window.
+    static func uiImages() -> SelfTestReport {
+        let c = Checker(suite: "images")
+
+        func image(_ json: String) -> UIComponent? {
+            guard let value = JSONValue(parsing: json),
+                  case .image(let url, let alt, let box, let action) = UIComponent(json: value)
+            else { return nil }
+            _ = url; _ = alt; _ = box; _ = action
+            return UIComponent(json: value)
+        }
+        func box(_ json: String) -> UIImageBox? {
+            guard let component = image(json), case .image(_, _, let box, _) = component else { return nil }
+            return box
+        }
+        func action(_ json: String) -> UIAction? {
+            guard let component = image(json), case .image(_, _, _, let action) = component else { return nil }
+            return action
+        }
+
+        c.equal("a bare image parses",
+                box(#"{"type":"image","url":"https://example.com/a.png"}"#)?.fit, .fit)
+        c.check("with no size, so it fills what contains it",
+                box(#"{"type":"image","url":"https://example.com/a.png"}"#)?.height == nil)
+
+        let sized = box(#"{"type":"image","url":"x","width":96,"height":96,"fit":"fill","radius":0}"#)
+        c.equal("width is read", sized?.width, 96)
+        c.equal("height is read", sized?.height, 96)
+        c.equal("fit is read", sized?.fit, .fill)
+        c.equal("radius is read", sized?.cornerRadius, 0)
+
+        c.equal("an unknown fit falls back to fit",
+                box(#"{"type":"image","url":"x","fit":"squash"}"#)?.fit, .fit)
+
+        // Clamped, because the alternative is a window that tries to lay out a
+        // forty-thousand-point image.
+        c.equal("an absurd width is clamped",
+                box(#"{"type":"image","url":"x","width":40000}"#)?.width, 2000)
+        c.equal("a negative height is clamped",
+                box(#"{"type":"image","url":"x","height":-5}"#)?.height, 8)
+        c.equal("an absurd radius is clamped",
+                box(#"{"type":"image","url":"x","radius":900}"#)?.cornerRadius, 80)
+
+        c.check("an image with no action is not tappable",
+                action(#"{"type":"image","url":"x"}"#) == nil)
+        c.equal("an image with an action carries its id",
+                action(#"{"type":"image","url":"x","action":{"id":"open","prompt":"show me"}}"#)?.id, "open")
+        c.equal("and its prompt",
+                action(#"{"type":"image","url":"x","action":{"id":"open","prompt":"show me"}}"#)?.prompt, "show me")
+        c.check("an action with no id is not one",
+                action(#"{"type":"image","url":"x","action":{"prompt":"show me"}}"#) == nil)
+
+        // MARK: Where an image with no URL comes from
+
+        func png(_ size: Int) -> String {
+            let image = NSImage(size: NSSize(width: CGFloat(size), height: CGFloat(size)))
+            image.lockFocus()
+            NSColor.systemTeal.setFill()
+            NSRect(x: 0, y: 0, width: size, height: size).fill()
+            image.unlockFocus()
+            guard let tiff = image.tiffRepresentation,
+                  let data = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])
+            else { return "" }
+            return data.base64EncodedString()
+        }
+
+        let stored = ImageAssets.store(base64: png(24), mimeType: "image/png")
+        c.check("a returned image is written where it can be shown", stored != nil)
+        if let stored {
+            c.check("and the file is there", FileManager.default.fileExists(atPath: stored.path))
+            c.equal("with the extension its bytes say",
+                    stored.pathExtension, "png")
+            c.check("under Bud's own directory, which is the only place the renderer will read from",
+                    stored.path.hasPrefix(BudConfigLoader.budDirectory.path))
+            try? FileManager.default.removeItem(at: stored)
+        }
+
+        // The bytes decide, not the label. A server calling something a PNG does
+        // not make it one, and what is written to disk is decided here.
+        c.check("something that is not an image is refused",
+                ImageAssets.store(base64: Data("not an image at all".utf8).base64EncodedString(),
+                                  mimeType: "image/png") == nil)
+        c.check("an empty payload is refused",
+                ImageAssets.store(base64: "", mimeType: "image/png") == nil)
+        c.check("and a mislabelled extension does not decide it",
+                ImageAssets.store(base64: png(24), mimeType: "application/octet-stream") != nil)
+
+        // MARK: An MCP result carrying pictures
+
+        let content = JSONValue(parsing: """
+        [{"type":"text","text":"Your team"},
+         {"type":"image","mimeType":"image/png","data":"\(png(24))"}]
+        """)
+        let blocks = (content?.arrayValue ?? []).map(MCPContent.init(json:))
+        c.equal("an MCP image block is recognised", blocks.count, 2)
+        c.check("and its size is what the model is told",
+                blocks[1].rendered.contains("image/png"))
+        c.check("while the bytes are no longer thrown away",
+                ImageAssets.store(base64: png(24), mimeType: "image/png") != nil)
 
         return c.report()
     }

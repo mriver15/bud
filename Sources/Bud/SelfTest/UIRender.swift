@@ -326,6 +326,84 @@ public enum UIRender {
             into: &written
         )
 
+        // MARK: A rendered team
+
+        // Sprites written the way a tool's images are: real PNGs in Bud's own
+        // directory, referenced by file URL, which is the only path the renderer
+        // will read from. What this is testing is the layout — six of something
+        // is where sizing stops being a detail.
+        func sprite(_ hue: Double) -> String {
+            let size = 120
+            let image = NSImage(size: NSSize(width: size, height: size))
+            image.lockFocus()
+            NSColor(hue: hue, saturation: 0.55, brightness: 0.85, alpha: 1).setFill()
+            NSRect(x: 0, y: 0, width: size, height: size).fill()
+            NSColor.white.withAlphaComponent(0.85).setFill()
+            NSRect(x: size / 4, y: size / 4, width: size / 2, height: size / 2).fill()
+            image.unlockFocus()
+            guard let tiff = image.tiffRepresentation,
+                  let data = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])
+            else { return "" }
+            return ImageAssets.store(base64: data.base64EncodedString(), mimeType: "image/png")?
+                .absoluteString ?? ""
+        }
+
+        let team: [(String, String, String, Double)] = [
+            ("Blaziken", "Fire / Fighting", "Adamant · Speed Boost", 0.02),
+            ("Garchomp", "Dragon / Ground", "Jolly · Rough Skin", 0.14),
+            ("Rotom-Wash", "Electric / Water", "Bold · Levitate", 0.55),
+            ("Corviknight", "Steel / Flying", "Impish · Mirror Armor", 0.62),
+            ("Amoonguss", "Grass / Poison", "Relaxed · Regenerator", 0.30),
+            ("Kingambit", "Dark / Steel", "Adamant · Supreme Overlord", 0.75),
+        ]
+        let tiles: [JSONValue] = team.map { name, types, ability, hue in
+            .object([
+                "type": .string("card"),
+                "title": .string(name),
+                "subtitle": .string(types),
+                "children": .array([
+                    .object([
+                        "type": .string("image"),
+                        "url": .string(sprite(hue)),
+                        "alt": .string(name),
+                        "width": .number(96),
+                        "height": .number(96),
+                        "radius": .number(10),
+                        "action": .object([
+                            "id": .string("explain-\(name)"),
+                            "prompt": .string("Explain what \(name) does on this team."),
+                        ]),
+                    ]),
+                    .object([
+                        "type": .string("text"),
+                        "value": .string(ability),
+                        "style": .string("caption"),
+                    ]),
+                ]),
+            ])
+        }
+        let teamSpec: JSONValue = .object([
+            "title": .string("Team"),
+            "components": .array([
+                .object([
+                    "type": .string("grid"),
+                    "columns": .number(3),
+                    "children": .array(tiles),
+                ]),
+            ]),
+        ])
+        emit(
+            "team",
+            GenerativeUIView(spec: teamSpec, onAction: { _ in }, onPrompt: { _ in })
+                .padding(Bud.Space.md)
+                .frame(width: Bud.contentMeasure)
+                .background(Color.black.opacity(0.30)),
+            width: Bud.contentMeasure,
+            height: 560,
+            directory: directory,
+            into: &written
+        )
+
         // MARK: Skills
 
         emit(

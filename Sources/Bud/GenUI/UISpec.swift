@@ -71,7 +71,7 @@ public enum UIComponent: Sendable, Hashable {
     case keyValue(items: [UIKeyValuePair])
     case code(language: String?, value: String)
     case callout(kind: UICalloutKind, title: String?, value: String)
-    case image(url: String, alt: String?)
+    case image(url: String, alt: String?, box: UIImageBox, action: UIAction?)
     case divider
     case button(label: String, symbol: String?, style: UIButtonStyle, action: UIAction)
     case html(value: String, height: Double)
@@ -205,6 +205,57 @@ public enum UIButtonStyle: String, Sendable, Hashable {
 /// A button's action. `raw` is the untouched action object from the model; it is
 /// what the host receives as the payload, so a future field reaches the handler
 /// without a parser change.
+/// How an image is fitted into the space it is given.
+public enum UIImageFit: String, Sendable, Hashable {
+    /// The whole image, inside the box. What an image wants by default.
+    case fit
+    /// Fills the box and crops the overflow, which is what makes a row of
+    /// thumbnails line up instead of each being a different size.
+    case fill
+
+    public init(raw: String?) {
+        self = UIImageFit(rawValue: (raw ?? "").lowercased()) ?? .fit
+    }
+}
+
+/// The space an image is given.
+///
+/// A URL on its own is not enough to lay anything out: an image with no size
+/// stretches to whatever it is placed in, so a 96-pixel sprite in a transcript
+/// arrives at the width of the panel. Width and height are in points and either
+/// may be left out, in which case the image keeps its aspect ratio inside what is
+/// left.
+public struct UIImageBox: Sendable, Hashable {
+    public var width: Double?
+    public var height: Double?
+    public var fit: UIImageFit
+    public var cornerRadius: Double?
+
+    public init(
+        width: Double? = nil,
+        height: Double? = nil,
+        fit: UIImageFit = .fit,
+        cornerRadius: Double? = nil
+    ) {
+        self.width = width
+        self.height = height
+        self.fit = fit
+        self.cornerRadius = cornerRadius
+    }
+
+    public init(json: [String: JSONValue]) {
+        // Clamped rather than trusted: a generated spec is free to say 40000, and
+        // a view that tries to lay that out is a hung window rather than a wrong
+        // picture.
+        self.init(
+            width: json["width"]?.doubleValue.map { min(max($0, 8), 2000) },
+            height: json["height"]?.doubleValue.map { min(max($0, 8), 2000) },
+            fit: UIImageFit(raw: json["fit"]?.stringValue),
+            cornerRadius: json["radius"]?.doubleValue.map { min(max($0, 0), 80) }
+        )
+    }
+}
+
 public struct UIAction: Sendable, Hashable {
     public var id: String
     public var prompt: String?
@@ -323,7 +374,15 @@ extension UIComponent {
                 self = .unsupported(type: "image (missing url)")
                 return
             }
-            self = .image(url: url, alt: object["alt"]?.stringValue.flatMap(nonEmpty))
+            self = .image(
+                url: url,
+                alt: object["alt"]?.stringValue.flatMap(nonEmpty),
+                box: UIImageBox(json: object),
+                action: object["action"].flatMap { raw -> UIAction? in
+                    guard let id = raw["id"]?.stringValue.flatMap(nonEmpty) else { return nil }
+                    return UIAction(id: id, prompt: raw["prompt"]?.stringValue.flatMap(nonEmpty), raw: raw)
+                }
+            )
 
         case "divider":
             self = .divider
