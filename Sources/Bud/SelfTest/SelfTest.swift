@@ -2244,6 +2244,25 @@ public enum BudSelfTest {
             (worstProse?.prose ?? 0) <= proseCap
         )
 
+        // The skill catalogue rides in the system prompt and was invisible to this
+        // report for two releases. Twenty skills is roughly ten thousand characters
+        // — more than a third of the tool block — and a measurement that omits it
+        // reads as though what it lists is the whole cost.
+        let catalogue = "- pdf: anything to do with PDF files, including filling forms"
+        let withSkills = RequestMeasurer.measure(
+            config: BudConfig(),
+            tools: [],
+            notes: "",
+            liveContext: "",
+            skills: catalogue
+        )
+        c.equal("the measurement counts the skill catalogue", withSkills.skillChars, catalogue.count)
+        c.check("...and adds it to the total", withSkills.totalChars >= catalogue.count)
+        let without = RequestMeasurer.measure(
+            config: BudConfig(), tools: [], notes: "", liveContext: "", skills: ""
+        )
+        c.equal("nothing installed costs nothing", without.skillChars, 0)
+
         // Every tool has to be choosable. A tool whose description is empty is one
         // the model cannot tell from its neighbour, and it is charged regardless.
         let undescribed = measured.filter { entry in
