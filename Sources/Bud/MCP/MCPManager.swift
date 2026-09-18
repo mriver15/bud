@@ -367,7 +367,11 @@ public final class MCPManager: MCPManaging, ToolProvider {
                 : tool.description,
             schema: tool.inputSchema,
             providerID: providerID,
-            providerName: config.name
+            providerName: config.name,
+            // Still served, and still callable — the registry routes by name, and
+            // the agent that holds it reaches it through the same table. This only
+            // says the *main* agent should not be carrying its schema.
+            agentOnly: config.delegated
         )
     }
 

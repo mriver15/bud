@@ -91,13 +91,20 @@ public struct ToolDescriptor: Sendable, Hashable, Identifiable {
     public var schema: JSONValue
     public var providerID: String
     public var providerName: String
+    /// Reachable only by delegating to the agent that holds it.
+    ///
+    /// Carried on the descriptor rather than looked up where it is needed: the
+    /// decision is made per server, and a descriptor is the one thing that travels
+    /// from there to every place that builds a tool list.
+    public var agentOnly: Bool
 
     public init(
         name: String,
         description: String,
         schema: JSONValue,
         providerID: String,
-        providerName: String
+        providerName: String,
+        agentOnly: Bool = false
     ) {
         self.id = name
         self.name = name
@@ -105,6 +112,7 @@ public struct ToolDescriptor: Sendable, Hashable, Identifiable {
         self.schema = schema
         self.providerID = providerID
         self.providerName = providerName
+        self.agentOnly = agentOnly
     }
 
     /// The OpenAI function-definition shape. Anthropic and Google need different

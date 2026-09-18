@@ -49,6 +49,17 @@ public struct MCPServerConfig: Sendable, Codable, Hashable, Identifiable {
     /// because the point of it is to keep a handful out of a large surface, and
     /// unticking twenty of twenty-five is not a way to choose five.
     public var enabledTools: [String]?
+    /// Whether this server's tools are reached only through its agent.
+    ///
+    /// The point is the schema block. A server with twenty-one tools puts twelve
+    /// thousand tokens in front of the model on every request for a surface it uses
+    /// one or two tools of; handing those tools to an agent that then reports back
+    /// leaves the main agent carrying a name instead of the whole surface.
+    ///
+    /// It costs a round trip, so it is not free and it is not the default: a
+    /// question answered by one instant lookup is *slower* this way. It pays for
+    /// itself when the server is bulky and its answers are.
+    public var delegated: Bool
     /// Registry slug when installed from the marketplace; used to show provenance
     /// and to detect "already installed".
     public var registryName: String?
@@ -66,6 +77,7 @@ public struct MCPServerConfig: Sendable, Codable, Hashable, Identifiable {
         enabled: Bool = true,
         autoStart: Bool = true,
         enabledTools: [String]? = nil,
+        delegated: Bool = false,
         registryName: String? = nil,
         notes: String? = nil
     ) {
@@ -80,8 +92,36 @@ public struct MCPServerConfig: Sendable, Codable, Hashable, Identifiable {
         self.enabled = enabled
         self.autoStart = autoStart
         self.enabledTools = enabledTools
+        self.delegated = delegated
         self.registryName = registryName
         self.notes = notes
+    }
+
+    /// Decoded leniently: a key the file does not have takes its default.
+    ///
+    /// The synthesized decoder requires every non-optional key to be present, so
+    /// adding one field here emptied the server list of every file written before
+    /// it existed — silently, with the servers still sitting in the file and the
+    /// only symptom being that they had stopped connecting. A configuration that
+    /// gains a field should gain a default.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        // Required, and the one field the type cannot invent: a server with no name
+        // has no namespace, so its tools have no names either.
+        name = try container.decode(String.self, forKey: .name)
+        transport = try container.decodeIfPresent(MCPTransportKind.self, forKey: .transport) ?? .stdio
+        command = try container.decodeIfPresent(String.self, forKey: .command)
+        args = try container.decodeIfPresent([String].self, forKey: .args) ?? []
+        env = try container.decodeIfPresent([String: String].self, forKey: .env) ?? [:]
+        url = try container.decodeIfPresent(String.self, forKey: .url)
+        headers = try container.decodeIfPresent([String: String].self, forKey: .headers) ?? [:]
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        autoStart = try container.decodeIfPresent(Bool.self, forKey: .autoStart) ?? true
+        enabledTools = try container.decodeIfPresent([String].self, forKey: .enabledTools)
+        delegated = try container.decodeIfPresent(Bool.self, forKey: .delegated) ?? false
+        registryName = try container.decodeIfPresent(String.self, forKey: .registryName)
+        notes = try container.decodeIfPresent(String.self, forKey: .notes)
     }
 
     /// Whether this server's `tool` is allowed to reach the model.

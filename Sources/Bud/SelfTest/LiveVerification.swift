@@ -313,6 +313,47 @@ public enum BudLiveVerification {
         let restored = await registryTools.descriptors().map(\.name).sorted()
         c.equal("selection: clearing offers every tool again", restored, ["echo__add", "echo__echo"])
 
+        // MARK: Handing a server's tools to its agent
+
+        // The feature in four assertions. The third is the one that matters: a
+        // filter that took the tools off the main agent *and* off the agent that
+        // was supposed to hold them would turn a working server into an
+        // unreachable one, which is the failure this design is arranged to avoid.
+        var handed = mcp.servers.first { $0.id == echoID }!
+        handed.delegated = true
+        await mcp.updateServer(handed)
+
+        let mainAgent = await registryTools.descriptors().filter { !$0.agentOnly }.map(\.name)
+        c.check("delegation: the tools leave the main agent's list", !mainAgent.contains("echo__echo"))
+        c.check("delegation: ...and everything else is still there", mainAgent.contains("echo__add") == false)
+
+        let stillServed = await registryTools.descriptors().map(\.name)
+        c.check("delegation: they are still served, so an agent can reach them",
+                stillServed.contains("echo__echo"))
+
+        let viaAgent = await registryTools.invoke(
+            name: "echo__echo",
+            arguments: .object(["message": .string("through the agent")]),
+            callID: "verify-7"
+        )
+        c.check("delegation: the tool still answers", viaAgent.text.contains("through the agent"))
+        c.check("delegation: ...and is not an error", !viaAgent.isError)
+
+        // The agent that holds them, built the way the app builds it.
+        let delegatedAgents = AgentRegistry()
+        delegatedAgents.rebuild(skills: [], servers: mcp.servers)
+        let holder = delegatedAgents.named("echo")
+        c.check("delegation: the server becomes the agent that holds its tools", holder != nil)
+        c.check("delegation: ...which may use them", holder?.allows("echo__echo") == true)
+        c.check("delegation: ...and nothing outside its own server", holder?.allows("read_file") == false)
+        c.check("delegation: ...and the model is told so",
+                (holder?.summary ?? "").contains("NOT in your tool list"))
+
+        handed.delegated = false
+        await mcp.updateServer(handed)
+        let handedBack = await registryTools.descriptors().filter { !$0.agentOnly }.map(\.name)
+        c.check("delegation: turning it off puts them back", handedBack.contains("echo__echo"))
+
         // MARK: Generative UI tool
 
         let genui = GenUIToolProvider()

@@ -122,7 +122,11 @@ public enum RequestMeasureCLI {
         await mcp.connectAllAutoStart()
         await mcp.refreshTools()
 
-        let tools = await env.registry.descriptors()
+        // Filtered exactly as a request is, and for the same reason this file
+        // exists: a measurement of the registry rather than of what the model is
+        // sent would report 21 tools the main agent never sees, and quietly
+        // understate what handing them to an agent is worth.
+        let tools = await env.registry.descriptors().filter { !$0.agentOnly }
         let cost = RequestMeasurer.measure(
             config: config,
             tools: tools,
@@ -185,7 +189,16 @@ public enum RequestMeasureCLI {
             for server in cost.servers {
                 out += "  \(server.name.padding(toLength: 24, withPad: " ", startingAt: 0))"
                 out += "\(BudFormat.count(server.chars).padding(toLength: 9, withPad: " ", startingAt: 0))"
-                out += "  \(server.count) tool\(server.count == 1 ? "" : "s")\n"
+                out += "  \(server.count) tool\(server.count == 1 ? "" : "s")"
+                // What the switch is worth, per server, rather than in general: the
+                // decision is per server and the numbers are not alike.
+                let config = mcp.servers.first { $0.name == server.name }
+                if config?.delegated == true {
+                    out += "  · handed to its agent"
+                } else if config != nil {
+                    out += "  · could hand to its agent and save \(BudFormat.count(server.chars))"
+                }
+                out += "\n"
             }
         }
 

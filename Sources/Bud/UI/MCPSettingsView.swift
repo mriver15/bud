@@ -359,6 +359,7 @@ struct DiagnosticsPanel: View {
                             .foregroundStyle(.secondary)
                     }
                     toolList
+                    delegationRow
                 }
             }
 
@@ -428,6 +429,55 @@ struct DiagnosticsPanel: View {
         let amount = "\(BudFormat.count(cost)) characters per request"
         guard sent.count < discovered.count else { return "\(sent.count) tools · \(amount)" }
         return "\(sent.count) of \(discovered.count) sent · \(amount)"
+    }
+
+    /// The switch that moves a server's schema off every request.
+    ///
+    /// Placed under the list rather than in a settings pane of its own, because it
+    /// is only worth deciding next to the figure it changes: the line above it says
+    /// what these tools cost per request, and this is what stops paying it.
+    private var delegationRow: some View {
+        let agent = ToolNaming.sanitize(config.name.lowercased())
+        let sent = discovered.filter { config.sends(tool: $0.name) }
+        let cost = sent.reduce(0) { $0 + (requestSizes[$1.name] ?? 0) }
+
+        return VStack(alignment: .leading, spacing: Bud.Space.xs) {
+            Toggle(isOn: delegatedBinding) {
+                Text("Hand these tools to the \(agent) agent")
+                    .font(Bud.Font.callout)
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+
+            Text(
+                config.delegated
+                    ? """
+                      The main agent carries none of these \(sent.count) tools. It reaches them \
+                      by delegating to the agent, which keeps the full list — so every question \
+                      for this server costs one delegation.
+                      """
+                    : """
+                      Keeps \(BudFormat.count(cost)) characters off every request. In exchange, \
+                      reaching this server costs a delegation rather than a direct call — worth \
+                      it when its answers are bulky, a loss for a single instant lookup.
+                      """
+            )
+            .font(Bud.Font.caption)
+            .foregroundStyle(.tertiary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, Bud.Space.xs)
+    }
+
+    private var delegatedBinding: Binding<Bool> {
+        Binding(
+            get: { config.delegated },
+            set: { newValue in
+                var updated = config
+                updated.delegated = newValue
+                Task { await mcp.updateServer(updated) }
+            }
+        )
     }
 
     private var logSubtitle: String {
