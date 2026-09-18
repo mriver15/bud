@@ -87,6 +87,13 @@ out — and `--self-test` fails if the built-in block grows past its budget. Pas
 120,000 characters of conversation the oldest tool results are emptied from what the
 model is sent: the user keeps seeing them, and the model is told it can call again.
 
+**Nothing a tool returns is lost.** A result too large to send is written to
+`~/.bud/store/` and the model is handed a handle rather than a truncated head with
+a note saying how much is missing. `read_stored` searches it or reads a line range,
+and handles are validated as handles — `store_` and eight hex characters — because
+one arrives from a model and becomes a path. The transcript still shows the whole
+result; only the model is bounded.
+
 **Pictures, without a picture source.** A surface that needs an image asks
 `find_image` for one — one thing or a whole set in a single call. Wikipedia
 answers for anything with an article, which is what a team sheet, a gallery of

@@ -61,6 +61,33 @@ public nonisolated struct NativeToolsProvider: ToolProvider {
                 providerName: providerName
             ),
             ToolDescriptor(
+                name: "read_stored",
+                description: "Read a tool result that was too large to send. When a result "
+                    + "exceeds what fits in a request, Bud keeps the whole thing and hands you "
+                    + "a handle in the message that replaced it — this is how you get at the "
+                    + "rest. Search it with a pattern, or read a line range, or call it with "
+                    + "only the handle to see how big it is and where it starts.",
+                schema: [
+                    "type": "object",
+                    "properties": [
+                        "handle": [
+                            "type": "string",
+                            "description": "The store_ handle from the message you were given.",
+                        ],
+                        "pattern": [
+                            "type": "string",
+                            "description": "Return the lines matching this regular expression.",
+                        ],
+                        "start_line": ["type": "integer", "description": "1-based first line."],
+                        "end_line": ["type": "integer", "description": "1-based last line, inclusive."],
+                        "max_results": ["type": "integer", "description": "Default 80."],
+                    ],
+                    "required": ["handle"],
+                ],
+                providerID: providerID,
+                providerName: providerName
+            ),
+            ToolDescriptor(
                 name: "write_file",
                 description: "Create or overwrite a text file. Creates parent directories. "
                     + "Prefer this over run_shell with redirection.",
@@ -132,6 +159,7 @@ public nonisolated struct NativeToolsProvider: ToolProvider {
             case "write_file": return try writeFile(arguments)
             case "list_files": return try listFiles(arguments)
             case "search_files": return try searchFiles(arguments)
+            case "read_stored": return try readStored(arguments)
             case "run_shell": return try await runShell(arguments)
             case "web_fetch": return try await webFetch(arguments)
             default: return .error("Unknown native tool '\(tool)'.")
@@ -141,6 +169,52 @@ public nonisolated struct NativeToolsProvider: ToolProvider {
         } catch {
             return .error("\(tool) failed: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: - Reading what a result was too large to carry
+
+    private nonisolated func readStored(_ arguments: JSONValue) throws -> ToolResult {
+        let raw = try Self.requiredString(arguments, "handle")
+        let handle = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // The refusal names the shape, because a model that mistyped a handle can
+        // fix that, and one that invented one should stop trying.
+        guard StoredResults.isHandle(handle) else {
+            return .error(
+                "'\(raw)' is not a handle. Handles look like store_1a2b3c4d and are given to "
+                    + "you in place of a result that was too large to send."
+            )
+        }
+        guard StoredResults.read(handle: handle) != nil else {
+            // Kept for the newest forty, so an old conversation's handle really can
+            // be gone. Saying which of the two it is beats a bare failure.
+            return .error(
+                "Nothing stored under \(handle). Stored results are kept for the newest "
+                    + "\(StoredResults.keep), and this one is no longer among them."
+            )
+        }
+
+        let total = StoredResults.lineCount(handle: handle)
+
+        if let pattern = arguments["pattern"]?.stringValue, !pattern.isEmpty {
+            let limit = min(max(Int(arguments["max_results"]?.doubleValue ?? 80), 1), 400)
+            let found = StoredResults.search(handle: handle, pattern: pattern, limit: limit)
+            guard !found.isEmpty else {
+                return .ok("No line in \(handle) matches \(pattern). It has \(BudFormat.count(total)) lines.")
+            }
+            return .ok(found.joined(separator: "\n"))
+        }
+
+        let start = max(1, Int(arguments["start_line"]?.doubleValue ?? 1))
+        let end = Int(arguments["end_line"]?.doubleValue ?? Double(start + 199))
+        let slice = StoredResults.lines(handle: handle, from: start, to: end)
+        guard !slice.isEmpty else {
+            return .error("\(handle) has \(BudFormat.count(total)) lines; \(BudFormat.count(start)) is past the end.")
+        }
+        var text = slice.joined(separator: "\n")
+        if end < total {
+            text += "\n…[\(BudFormat.count(total - end)) more lines. Ask for the next range, or search with a pattern.]"
+        }
+        return .ok(text)
     }
 
     // MARK: - Searching

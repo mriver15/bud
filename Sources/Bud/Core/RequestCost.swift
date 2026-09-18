@@ -219,6 +219,26 @@ public enum RequestMeasureCLI {
         out += "  " + String(repeating: "─", count: 46) + "\n"
         out += line("prefix", cost.totalChars, "≈ \(BudFormat.count(cost.estimatedTokens)) tokens per request")
 
+        // Delegated servers are absent from the breakdown above — their tools are
+        // deliberately not in the main list — so they are named here instead, with
+        // the agent that holds them. A delegated server whose agent did not
+        // register is one nothing can reach, and this is the only place that says
+        // so: the app's symptom would be a model reporting that a tool it expects
+        // has gone missing.
+        let delegated = mcp.servers.filter(\.delegated)
+        if !delegated.isEmpty {
+            let roster = AgentRegistry()
+            roster.rebuild(skills: [], servers: mcp.servers)
+            out += "\nHanded to an agent\n"
+            for server in delegated {
+                let holder = roster.named(ToolNaming.sanitize(server.name.lowercased()))
+                out += "  \(server.name.padding(toLength: 24, withPad: " ", startingAt: 0))"
+                out += holder == nil
+                    ? "NO AGENT HOLDS THIS — its tools are unreachable\n"
+                    : "→ the \(holder!.name) agent, on \(holder!.tools?.first ?? "nothing")\n"
+            }
+        }
+
         if !cost.servers.isEmpty {
             out += "\nMCP servers\n"
             for server in cost.servers {

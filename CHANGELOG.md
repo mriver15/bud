@@ -12,6 +12,73 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 1.1.0
+
+### The switch was the saving, and it is on
+
+Asked whether flipping the delegation switch was the easier way to save: it is, and
+it is not a close call.
+
+| | before | after |
+|---|---|---|
+| prefix | 69,131 | **19,323** |
+| tokens per request | 17,282 | **4,830** |
+
+The `getcompetitive` server is now handed to its agent. Reaching it costs a
+delegation rather than a direct call, so a one-off lookup is slower; everything
+else is 12,400 tokens cheaper.
+
+### The store is not a saving. It is the opposite of losing something.
+
+A tool result over 24,000 characters used to be **truncated** — the head was kept
+and the rest was gone. Fetch a Wikipedia article and the model got 24,000 of its
+183,739 characters, with no way to reach the other 87%. The user could see it in
+the transcript, which is not the same as the model being able to answer from it.
+
+Results that would have been truncated are now written to `~/.bud/store/` and the
+model is handed a handle instead of a dead end:
+
+```
+…[159,739 more characters, stored as store_a3f9b1c2. Use read_stored with this
+handle to search it or read a line range.]
+```
+
+`read_stored` searches it with a pattern, or reads a line range. The head is still
+24,000 characters — this changes what happens to the *rest*, not what is sent, so
+the token cost is unchanged. Shortening the head is now possible, which it was not
+before, and is a separate decision with a separate trade.
+
+**A handle is validated on the way back in** — `store_` and eight hex characters,
+exactly. A handle arrives from a model and becomes a path, and that check is the
+only thing between `store_../../.ssh/id_rsa` and a file read. The store is capped
+at forty entries and 20 MB each, pruned by age.
+
+The user keeps seeing the whole result in the transcript; only the model is handed
+a handle. Two views of one result, and they are now pinned apart by a test.
+
+### No vector database, and why
+
+Two measurements decided it:
+
+- **This app's provider has no embeddings endpoint.** `POST /v1/embeddings` returns
+  404, so an index would need a local embedding model — a heavy dependency for a
+  feature that has to work on first launch.
+- **The content is mostly structured.** An MCP tool returns JSON, where matching a
+  pattern exactly beats matching it approximately.
+
+So: a file and a search. If an embedding source ever appears, the store is the
+thing it would index.
+
+### Also
+
+`--measure` names the agent a delegated server was handed to, and says so loudly if
+none holds it — a delegated server whose agent failed to register is one nothing
+can reach, and that would otherwise show up only as a model reporting that its
+tools had gone missing. Command-line runs redirect the store, the way they already
+redirect the database.
+
+---
+
 ## Bud 1.0.0
 
 Three changes with one idea behind them: **every capability is a tax on every
