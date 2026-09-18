@@ -90,6 +90,7 @@ public enum BudSelfTest {
             imageSearch,
             agents,
             historyBudget,
+            storedResults,
             toolBudget,
             searching,
             skillScanning,
@@ -2253,6 +2254,136 @@ public enum BudSelfTest {
         return c.report()
     }
 
+    // MARK: Results too large to send
+
+    /// The store, and the tool that reads it back.
+    ///
+    /// The property that matters is the one the old behaviour failed: what leaves
+    /// the message is still reachable. A truncation test would pass on a store that
+    /// wrote the tail to a file nobody could read, so every check here reads it
+    /// back through the same path the model uses.
+    static func storedResults() async -> SelfTestReport {
+        let c = Checker(suite: "stored")
+
+        // MARK: What counts as a handle
+
+        // A handle arrives from a model and becomes a path. This is the whole of
+        // the defence, so it is checked against the shapes that would escape.
+        c.check("a handle is accepted", StoredResults.isHandle("store_1a2b3c4d"))
+        c.check("...whatever its case", StoredResults.isHandle("STORE_1A2B3C4D"))
+        c.check("...and with space around it", StoredResults.isHandle("  store_1a2b3c4d\n"))
+        for hostile in [
+            "store_../../.ssh/id_rsa", "store_1a2b3c4", "store_1a2b3c4d5", "store_zzzzzzzz",
+            "../../etc/passwd", "store_", "store_1a2b3c4d/../../x", "read_file", "",
+        ] {
+            c.check("'\(hostile)' is not a handle", !StoredResults.isHandle(hostile))
+        }
+
+        // MARK: Writing and reading
+
+        let small = String(repeating: "line\n", count: 10)
+        c.equal("a small result is left exactly as it was",
+                StoredResults.modelFacing(small, limit: 1_000), small)
+
+        let big = (1...4_000).map { "row \($0) value=\($0 * 7)" }.joined(separator: "\n")
+        let faced = StoredResults.modelFacing(big, limit: 500)
+        c.check("the head is what fits", faced.hasPrefix(String(big.prefix(500))))
+        c.check("the model is told how much is behind it", faced.contains("more characters"))
+        c.check("...and is handed a handle", faced.contains("store_"))
+        c.check("...and told what reads it", faced.contains("read_stored"))
+
+        guard let handle = faced
+            .split(separator: " ")
+            .first(where: { $0.hasPrefix("store_") })?
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".,]"))
+        else {
+            c.check("a handle came back", false)
+            return c.report()
+        }
+        c.check("the handle is well formed", StoredResults.isHandle(handle))
+        // The point of the whole exercise: nothing was lost.
+        c.equal("everything is behind the handle", StoredResults.read(handle: handle), big)
+        c.equal("the line count is right", StoredResults.lineCount(handle: handle), 4_000)
+
+        // MARK: Reading it back the way the model does
+
+        // Two views of one result, and they must not be confused: the transcript
+        // is built from `text`, the model's history from `modelFacingText()`. A
+        // person reading the transcript keeps the whole thing, and only the model
+        // is handed a handle.
+        let both = ToolResult.ok(big)
+        c.equal("the person reading the transcript still gets all of it", both.text, big)
+        c.check("...while the model gets the bounded version", both.modelFacingText(limit: 500).count < 1_000)
+
+        let provider = NativeToolsProvider()
+        func call(_ arguments: JSONValue) async -> ToolResult {
+            await provider.invoke(tool: "read_stored", arguments: arguments, callID: "t")
+        }
+
+        let found = await call([
+            "handle": .string(handle), "pattern": .string("row 2500\\b"),
+        ])
+        c.check("a search finds a line", (found.text ?? "").contains("2500: row 2500"))
+        c.check("...and is not an error", !found.isError)
+
+        let absent = await call([
+            "handle": .string(handle), "pattern": .string("nothing-matches-this"),
+        ])
+        c.check("a search that finds nothing says so", !absent.isError)
+        c.check("...and says how big the thing it searched is",
+                (absent.text ?? "").contains("4,000 lines"))
+
+        let range = await call([
+            "handle": .string(handle), "start_line": .number(10), "end_line": .number(12),
+        ])
+        let ranged = range.text ?? ""
+        c.check("a range starts where it was asked to", ranged.contains("10: row 10"))
+        c.check("...and ends there", ranged.contains("12: row 12"))
+        c.check("...and says what is left", ranged.contains("more lines"))
+
+        let opening = await call(["handle": .string(handle)])
+        c.check("with no arguments it opens at the beginning", (opening.text ?? "").contains("1: row 1"))
+        c.check("...and says there is more", (opening.text ?? "").contains("more lines"))
+
+        let past = await call([
+            "handle": .string(handle), "start_line": .number(99_999),
+        ])
+        c.check("a line past the end is refused", past.isError)
+        c.check("...with the real length", (past.text ?? "").contains("4,000 lines"))
+
+        // MARK: Refusals
+
+        let invented = await call(["handle": .string("store_deadbeef")])
+        c.check("a handle with nothing behind it is refused", invented.isError)
+        c.check("...and says why it might be gone", (invented.text ?? "").contains("newest"))
+
+        let notAHandle = await call(["handle": .string("store_../../etc/passwd")])
+        c.check("a path dressed as a handle is refused", notAHandle.isError)
+        c.check("...by describing the shape", (notAHandle.text ?? "").contains("store_1a2b3c4d"))
+
+        let missing = await call(["pattern": .string("x")])
+        c.check("no handle at all is refused", missing.isError)
+
+        // MARK: The store does not grow forever
+
+        // Last, because it prunes. Forty is the cap; writing past it must take the
+        // oldest with it, or a long session leaves a directory behind that only
+        // ever gets bigger.
+        for index in 0..<(StoredResults.keep + 8) {
+            _ = StoredResults.store("entry \(index)")
+        }
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: StoredResults.directory, includingPropertiesForKeys: nil
+        )) ?? []
+        c.check("the store stays bounded (\(files.count) files)",
+                files.count <= StoredResults.keep)
+        // And what it keeps is still readable.
+        let survivor = files.first?.deletingPathExtension().lastPathComponent ?? ""
+        c.check("what it keeps is still readable", StoredResults.read(handle: survivor) != nil)
+
+        return c.report()
+    }
+
     // MARK: What the conversation costs
 
     /// Trimming the model's copy of the history.
@@ -3472,8 +3603,13 @@ public enum BudSelfTest {
 
         let huge = String(repeating: "x", count: 30_000)
         let bounded = ToolResult.ok(huge).modelFacingText(limit: 100)
-        c.check("long output is bounded", bounded.count < 200)
-        c.check("truncation is announced", bounded.contains("truncated"))
+        c.check("long output is bounded", bounded.count < 400)
+        // What used to be "truncated" is now "stored": the tail leaves the message
+        // and goes somewhere it can still be read. That is the whole change, and
+        // this is the check that would notice it going back.
+        c.check("the tail is kept rather than dropped", bounded.contains("stored as store_"))
+        c.check("...and the model is told how to reach it", bounded.contains("read_stored"))
+        c.check("...and how much of it there is", bounded.contains("29,900 more characters"))
 
         let small = ToolResult.ok("short").modelFacingText(limit: 100)
         c.equal("short output untouched", small, "short")

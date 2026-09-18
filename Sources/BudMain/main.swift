@@ -18,6 +18,7 @@ func useScratchStore() {
         .appendingPathComponent("bud-cli-\(UUID().uuidString)")
     try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     BudDatabase.shared = BudDatabase(url: directory.appendingPathComponent("bud.sqlite"))
+    StoredResults.overrideDirectory = directory.appendingPathComponent("store", isDirectory: true)
 }
 
 let runsHeadless = arguments.contains("--self-test")

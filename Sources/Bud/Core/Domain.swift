@@ -153,13 +153,19 @@ public struct ToolResult: Sendable {
         ToolResult(text: text, ui: spec)
     }
 
-    /// What the model sees. Truncated because tool output can be enormous and
-    /// every byte is re-sent on each subsequent turn.
+    /// What the model sees.
+    ///
+    /// Bounded, because tool output can be enormous and every byte is re-sent on
+    /// each subsequent turn. It used to be *truncated* — the rest was dropped and
+    /// unreachable — and it is now kept and handed back as a handle, so a result
+    /// too large to send is still a result that can be searched. See
+    /// ``StoredResults``.
+    ///
+    /// One place, deliberately: both the conversation and a subagent reach the
+    /// model through here, and a caller that built its own message would silently
+    /// go back to losing the tail.
     public func modelFacingText(limit: Int = 24_000) -> String {
-        if text.count <= limit { return text }
-        let cutoff = text.index(text.startIndex, offsetBy: limit)
-        let dropped = text.count - limit
-        return String(text[..<cutoff]) + "\n\n…[truncated \(dropped) characters]"
+        StoredResults.modelFacing(text, limit: limit)
     }
 }
 

@@ -509,6 +509,72 @@ public enum BudLiveVerification {
             !loaded.deleteFrom(turnAt: 0)
         )
 
+        // MARK: A result too large to send
+
+        // Against a real page, because the sizes here are the whole question and a
+        // fixture would be sized to agree with the code. What is asserted is not
+        // just that the message is bounded — it always was — but that what left it
+        // can still be read back.
+        let fetcher = NativeToolsProvider()
+        let page = await fetcher.invoke(
+            tool: "web_fetch",
+            arguments: .object(["url": .string("https://en.wikipedia.org/wiki/Pokémon")]),
+            callID: "verify-store-1"
+        )
+        let whole = page.text ?? ""
+        c.check(
+            "store: a real page is larger than a request (\(BudFormat.count(whole.count)) characters)",
+            whole.count > 24_000
+        )
+
+        let faced = page.modelFacingText()
+        c.check("store: the message is bounded (\(BudFormat.count(faced.count)))", faced.count < 25_000)
+        c.check("store: ...and says what is behind it", faced.contains("more characters"))
+        c.check("store: ...and names the tool that reads it", faced.contains("read_stored"))
+
+        let handle = faced
+            .split(separator: " ")
+            .first(where: { $0.hasPrefix("store_") })?
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".,]")) ?? ""
+        c.check("store: ...and carries a usable handle", StoredResults.isHandle(handle))
+        // The point: 87% of that page used to be gone, and is now where it can be
+        // found rather than merely kept.
+        c.equal(
+            "store: the whole page is behind the handle",
+            StoredResults.read(handle: handle)?.count,
+            whole.count
+        )
+
+        // And the model can find things in it — the reason to keep the tail at all.
+        let searched = await fetcher.invoke(
+            tool: "read_stored",
+            arguments: .object([
+                "handle": .string(handle),
+                "pattern": .string("Pikachu"),
+            ]),
+            callID: "verify-store-2"
+        )
+        c.check("store: the kept text can be searched", !searched.isError)
+        c.check("store: ...and returns lines from it",
+                (searched.text ?? "").lowercased().contains("pikachu"))
+
+        // Anchored to the real length rather than to a number this file guessed:
+        // the tail of a page is what the head left out, and how long that is
+        // depends on the page.
+        let totalLines = StoredResults.lineCount(handle: handle)
+        c.check("store: the page kept more than one line (\(BudFormat.count(totalLines)))", totalLines > 10)
+        let beyondHead = await fetcher.invoke(
+            tool: "read_stored",
+            arguments: .object([
+                "handle": .string(handle),
+                "start_line": .number(Double(max(1, totalLines - 4))),
+                "end_line": .number(Double(max(1, totalLines - 2))),
+            ]),
+            callID: "verify-store-3"
+        )
+        c.check("store: the far end of it is readable", !beyondHead.isError)
+        c.check("store: ...and is not empty", !(beyondHead.text ?? "").isEmpty)
+
         // MARK: Rendering from the stripped schema
 
         // The schema is the model's whole vocabulary for the DSL, and it just lost
