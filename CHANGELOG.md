@@ -12,6 +12,154 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 1.0.0
+
+Three changes with one idea behind them: **every capability is a tax on every
+request, paid whether or not it is used.** The question is never "is this useful"
+but "is it useful often enough to be resident".
+
+### `render_ui` was carrying its documentation twice
+
+The DSL reference lived in two places: once as a legend of the component shapes,
+and again as a sentence on each field of the schema — where, because that schema is
+flat, every sentence had to begin by naming the component it belonged to. *"card:
+accent colour name or #RRGGBB hex"* said what the legend had already said, in the
+one form that cannot be loaded lazily.
+
+It is written once now. The legend is the vocabulary and stays; the scattered copy
+is gone.
+
+| | before | after |
+|---|---|---|
+| `render_ui` | 8,673 | **5,158** |
+| prefix, direct | 71,661 | **68,146** |
+| prefix, handed to an agent | 21,976 | **18,461** |
+
+Nothing structural was removed — every component, field name, type and enum value
+is still there, which is what the provider validates against. What went was 3,515
+characters of prose saying it twice.
+
+Proven by asking a model to render a table from the new schema and checking that a
+surface came back. That is the only honest way to answer whether a schema is still
+sufficient.
+
+### The conversation had no ceiling
+
+A tool result is capped at 24,000 characters when it arrives. Nothing capped the
+total, so every round re-sent every result the conversation had ever produced — and
+the conversations that need length most are the ones that called the most tools.
+
+There is a budget now, 120,000 characters by default, and it empties the contents
+of the oldest tool results. **Only contents**: a call and its result have to stay
+paired or the provider rejects the whole request, so a dropped result becomes a line
+saying what it was and how big. Never the newest — that is the one the model has not
+read yet.
+
+You keep seeing everything. `turns` holds the full text, the transcript still shows
+it, and the model is told it can call the tool again.
+
+### The budget is enforced
+
+Every win in this project came from measuring, and `--measure` was itself wrong for
+a release. Nothing failed when the block grew, which is how one MCP server reached
+49,685 characters — 70% of a request — without anyone noticing.
+
+`--self-test` now measures the built-in block and fails on:
+
+- any tool over **6,500 characters** — one tool large enough to matter alone
+- the block over **30,000** — the figure a request actually pays
+- any schema carrying more than **3,000 characters of prose** — documentation that
+  cannot be loaded lazily, which is what `render_ui` had
+
+The failure names the tool and the amount. The caps are constants the assertions
+read, so the sentence and the test cannot come apart.
+
+**A ratchet, not a target.** When it fails, the question is not how to raise it.
+
+### Also
+
+`--measure` now splits every tool into prose, schema, and the skeleton left when
+the schema's own strings come out — the measurement that made all of this visible.
+
+---
+
+## Bud 0.5.1
+
+### `--measure` says which half of a tool is removable
+
+A tool costs prose plus a schema, and the two cannot be treated alike: the schema
+is what the provider validates arguments against, so a model that has not seen it
+writes arguments that fail. The prose *inside* a schema is documentation, and
+documentation can be moved somewhere it is loaded only when it is needed.
+
+One number per tool hid that completely. `render_ui` is 408 characters of prose
+and 8,183 of schema — so moving the *description* somewhere lazy, the obvious
+first guess, would have saved 408 characters and looked like a failure.
+
+```
+render_ui    8,673    prose 408 · schema 8,183 (skeleton 2,675)
+of 70,442 characters of tools, 48,467 are prose
+```
+
+**69% of the tool block is documentation rather than structure.**
+
+---
+
+## Bud 0.5.0
+
+### Handing a server's tools to its agent
+
+A server with twenty-one tools puts twelve thousand tokens in front of the model
+on every request, for a surface it uses one or two tools of. The tools were never
+the problem — the schemas are, and they are charged whether or not any of them is
+used.
+
+**MCP → a server → Tools & log → "Hand these tools to the _server_ agent".**
+
+| | tools | characters | per request |
+|---|---|---|---|
+| direct | 46 | 70,442 | **17,915 tokens** |
+| handed to the agent | 25 | 20,757 | **5,494 tokens** |
+
+Measured on a real server, on this machine, with `--measure`. The main agent stops
+carrying the schemas and reaches the tools by delegating to the agent that holds
+them, which keeps its own full list.
+
+**It is not free, so it is not the default.** A question answered by one instant
+lookup is now answered a round trip later. It pays for itself when a server is
+bulky and its answers are; tick the box per server, next to the figure it changes.
+
+The switch is arranged so the failure mode cannot happen: tools are hidden from
+the main agent *after* the descriptor pass that rebuilds the agent roster, so a
+tool that leaves the model's list always has an agent that can still call it. The
+live suite asserts exactly that — the tool leaves one list, stays served, and still
+answers.
+
+### A bug I put in and took out
+
+Adding one field to `MCPServerConfig` **emptied the server list of every config
+written before it existed** — silently, with the servers still sitting in the file
+and the only symptom that they had stopped connecting. Swift's synthesized decoder
+requires every non-optional key, so a missing `delegated` failed the whole array.
+
+Caught by `--measure` reporting `0/0 configured servers` where it had reported
+`1/1` a minute earlier. `MCPServerConfig` now decodes leniently: a key the file does
+not have takes its default. That is a whole class of failure, not one instance of
+it, and there is a test for a config written before the field existed.
+
+### And a measurement that was lying
+
+`--measure` counted the registry rather than what a request carries, so it reported
+all 21 tools as present after they had been handed over — understating the feature
+it was being used to evaluate. It filters exactly as a request does now.
+
+### Also
+
+`--measure` says what each server would save: "could hand to its agent and save
+49,685".
+
+---
+
 ## Bud 0.4.0
 
 ### The screen was showing fifty-four of my test runs

@@ -80,6 +80,13 @@ model emits a declarative UI spec instead of a wall of text: cards, metrics,
 tables, charts, progress, callouts, code, images and buttons. Buttons can carry
 a follow-up prompt, so a generated surface can drive the conversation.
 
+**What a request costs is measured, and bounded.** Every tool is charged on every
+request whether or not it is called, so `--measure` reports what the prefix carries
+— split into prose, schema, and the skeleton left when a schema's own strings come
+out — and `--self-test` fails if the built-in block grows past its budget. Past
+120,000 characters of conversation the oldest tool results are emptied from what the
+model is sent: the user keeps seeing them, and the model is told it can call again.
+
 **Pictures, without a picture source.** A surface that needs an image asks
 `find_image` for one — one thing or a whole set in a single call. Wikipedia
 answers for anything with an article, which is what a team sheet, a gallery of

@@ -18,6 +18,14 @@ public final class AgentRuntime {
 
     private let env: AppEnvironment
     private var history: [ChatMessage] = []
+    /// Characters emptied from tool results on the last round, so the UI can say
+    /// when the budget is doing something rather than leaving it a silent trim.
+    public private(set) var droppedFromHistory = 0
+
+    /// What the model is currently being sent, before the budget trims it. Shown
+    /// against the budget in Settings, because a limit nobody can see the distance
+    /// to is a limit nobody can set.
+    public var historyChars: Int { history.reduce(0) { $0 + $1.content.count } }
     private var runTask: Task<Void, Never>?
 
     /// Called when a run settles, however it settled.
@@ -299,7 +307,7 @@ public final class AgentRuntime {
         let tools = await env.registry.descriptors().filter { !$0.agentOnly }
         let request = ChatRequest(
             model: config.model,
-            messages: [systemMessage()] + history,
+            messages: [systemMessage()] + boundedHistory(),
             tools: tools,
             temperature: config.temperature,
             maxTokens: config.maxTokens,
@@ -443,6 +451,67 @@ public final class AgentRuntime {
     }
 
     // MARK: - Prompt construction
+
+    // MARK: - What the conversation costs
+
+    /// The conversation as the model receives it, trimmed to the budget.
+    ///
+    /// History grew without limit. A result is capped at 24,000 characters when it
+    /// arrives and nothing capped the total, so every round re-sent every result
+    /// the conversation had ever produced — and the conversation that most needs a
+    /// long one is the one that called the most tools.
+    ///
+    /// Only tool *results* are emptied, and only their contents. The call and its
+    /// result have to stay paired or the provider rejects the whole request, so a
+    /// dropped result becomes a line saying it was dropped rather than a missing
+    /// message. Oldest first, and never the newest: the newest result is the one
+    /// the model has not read yet.
+    ///
+    /// This bounds what the *model* carries, not what happened. `turns` keeps the
+    /// full text, the transcript keeps showing it, and the model is told it can
+    /// call the tool again — which is true, and is the only recovery it needs.
+    private func boundedHistory() -> [ChatMessage] {
+        let bounded = Self.bounded(history, budget: env.config.historyBudgetChars)
+        droppedFromHistory = bounded.dropped
+        return bounded.messages
+    }
+
+    /// The trimming itself, apart from the runtime so it can be exercised without
+    /// one: what gets emptied and what does not is the whole of the behaviour.
+    nonisolated static func bounded(
+        _ messages: [ChatMessage],
+        budget: Int
+    ) -> (messages: [ChatMessage], dropped: Int) {
+        guard budget > 0, !messages.isEmpty else { return (messages, 0) }
+
+        var total = messages.reduce(0) { $0 + $1.content.count }
+        guard total > budget else { return (messages, 0) }
+
+        var bounded = messages
+        var dropped = 0
+        for index in bounded.indices {
+            guard total > budget, index < bounded.count - 1 else { break }
+            guard bounded[index].role == .tool else { continue }
+            let content = bounded[index].content
+            // Not worth emptying something the marker would be nearly as long as.
+            guard content.count > dropThreshold else { continue }
+            let marker = droppedMarker(characters: content.count)
+            guard marker.count < content.count else { continue }
+            total -= content.count - marker.count
+            dropped += content.count
+            bounded[index].content = marker
+        }
+        return (bounded, dropped)
+    }
+
+    /// Below this a result is cheaper to send than to explain away.
+    nonisolated private static let dropThreshold = 400
+
+    nonisolated private static func droppedMarker(characters: Int) -> String {
+        "[dropped from the conversation to stay inside the context budget: "
+            + "\(BudFormat.count(characters)) characters. The user can still see this "
+            + "result, and calling the tool again will produce it fresh.]"
+    }
 
     private func systemMessage() -> ChatMessage {
         let config = env.config

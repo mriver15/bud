@@ -535,12 +535,17 @@ public enum UIRender {
         // MARK: Settings tabs
 
         for tab in SettingsTab.allCases {
+            // Taller than the window on purpose. These panes scroll, and a capture
+            // that stops at the fold is a picture of the settings nobody looked at
+            // — the limits, the last card on General, were below it for two
+            // releases. The frame is a review artifact, not a claim about the
+            // window's size, which is still 620.
             emit(
                 "settings-\(tab.rawValue)",
                 SettingsView(model: model, initialTab: tab)
-                    .frame(width: 900, height: 620),
+                    .frame(width: 900, height: 1_500),
                 width: 900,
-                height: 620,
+                height: 1_500,
                 directory: directory,
                 into: &written
             )

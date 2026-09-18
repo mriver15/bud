@@ -89,6 +89,8 @@ public enum BudSelfTest {
             skills,
             imageSearch,
             agents,
+            historyBudget,
+            toolBudget,
             searching,
             skillScanning,
             glamaMapping,
@@ -2169,6 +2171,162 @@ public enum BudSelfTest {
     /// matter just as much: a screen that fires on `ignore_index` or on any script
     /// that mentions a URL is one people learn to click past, and then it protects
     /// nobody either.
+    // MARK: What every request pays for
+
+    /// The budget for the tool block.
+    ///
+    /// Every tool is charged on every request whether or not it is called, so the
+    /// block is a recurring cost that nobody pays attention to while adding to it.
+    /// This server reached 49,685 characters — 70% of a request — and no test
+    /// would have said so; `render_ui` reached 8,673 by carrying a second copy of
+    /// documentation that was already in the same schema.
+    ///
+    /// The numbers are what the built-ins actually come to, plus room to add a
+    /// tool without an argument. They are a ratchet, not a target: when this fails
+    /// the question is not how to raise it.
+    @MainActor
+    static func toolBudget() async -> SelfTestReport {
+        let c = Checker(suite: "budget")
+
+        let env = AppEnvironment(config: BudConfig())
+        let providers: [any ToolProvider] = [
+            NativeToolsProvider(),
+            MemoryToolsProvider(),
+            GenUIToolProvider(),
+            BrowserToolProvider(engine: BrowserEngine()),
+            SkillToolProvider(),
+            SubagentSupervisor(env: env, agents: AgentRegistry()),
+        ]
+
+        var measured: [(name: String, chars: Int, prose: Int, skeleton: Int)] = []
+        for provider in providers {
+            for tool in await provider.toolDescriptors() {
+                let chars = tool.openAIToolDefinition.encodedString().count
+                let schemaChars = tool.schema.encodedString().count
+                let prose = tool.schema.stringContentLength
+                measured.append((tool.name, chars, prose, schemaChars - prose))
+            }
+        }
+
+        let worstTool = measured.max { $0.chars < $1.chars }
+        let worstProse = measured.max { $0.prose < $1.prose }
+        let total = measured.reduce(0) { $0 + $1.chars }
+
+        // The caps are constants and the assertions read them, so the sentence and
+        // the test cannot come apart. A check whose name said 6,500 while its body
+        // compared against 1,000 would read as a passing check with a failing body,
+        // which is worse than either on its own.
+        let perTool = 6_500
+        let block = 30_000
+        let proseCap = 3_000
+
+        // One tool, large enough to matter on its own.
+        c.check(
+            "no tool exceeds \(BudFormat.count(perTool)) characters "
+                + "(worst: \(worstTool?.name ?? "none") at \(BudFormat.count(worstTool?.chars ?? 0)))",
+            (worstTool?.chars ?? 0) <= perTool
+        )
+
+        // The block, which is what a request actually pays.
+        c.check(
+            "the built-in block stays under \(BudFormat.count(block)) characters "
+                + "(\(measured.count) tools, \(BudFormat.count(total)))",
+            total <= block
+        )
+
+        // Documentation written into a schema, which cannot be loaded lazily and is
+        // where a flat schema ends up saying the same thing twice. `render_ui`
+        // carried 5,508 characters of it before it was written once instead.
+        c.check(
+            "no schema carries more than \(BudFormat.count(proseCap)) characters of prose "
+                + "(worst: \(worstProse?.name ?? "none") at \(BudFormat.count(worstProse?.prose ?? 0)))",
+            (worstProse?.prose ?? 0) <= proseCap
+        )
+
+        // Every tool has to be choosable. A tool whose description is empty is one
+        // the model cannot tell from its neighbour, and it is charged regardless.
+        let undescribed = measured.filter { entry in
+            !providers.isEmpty && entry.name.isEmpty
+        }
+        c.equal("every tool is named", undescribed.count, 0)
+
+        return c.report()
+    }
+
+    // MARK: What the conversation costs
+
+    /// Trimming the model's copy of the history.
+    ///
+    /// The pairing is the part worth testing. A provider rejects a tool result
+    /// that does not follow its call, so a trim that removed a message rather than
+    /// emptying it would not degrade a long conversation — it would end it.
+    static func historyBudget() -> SelfTestReport {
+        let c = Checker(suite: "history")
+
+        func call(_ id: String) -> ChatMessage {
+            ChatMessage(role: .assistant, toolCalls: [ToolCall(id: id, name: "t", arguments: "{}")])
+        }
+        func result(_ id: String, _ size: Int) -> ChatMessage {
+            ChatMessage(
+                role: .tool,
+                content: String(repeating: "x", count: size),
+                toolCallID: id,
+                name: "t"
+            )
+        }
+        func ask(_ text: String) -> ChatMessage { ChatMessage(role: .user, content: text) }
+
+        let small = [ask("hi"), call("a"), result("a", 100)]
+        c.equal("a short conversation is sent as it is", AgentRuntime.bounded(small, budget: 10_000).messages.count, 3)
+        c.equal("...and nothing is reported dropped", AgentRuntime.bounded(small, budget: 10_000).dropped, 0)
+
+        // The case the budget exists for.
+        let long = [
+            ask("first"), call("a"), result("a", 5_000),
+            call("b"), result("b", 5_000),
+            call("c"), result("c", 5_000),
+        ]
+        let trimmed = AgentRuntime.bounded(long, budget: 8_000)
+        c.check("the oldest result goes first", trimmed.messages[2].content.count < 300)
+        c.check("...and the newest is untouched", trimmed.messages[6].content.count == 5_000)
+        c.check("...and so does the next one, until it fits", trimmed.messages[4].content.count < 300)
+        c.equal("the count says what was dropped", trimmed.dropped, 10_000)
+
+        // The whole safety property: nothing disappears, it is only emptied.
+        c.equal("no message is removed", trimmed.messages.count, long.count)
+        c.equal("every call still has its result",
+                trimmed.messages.filter { $0.role == .tool }.map(\.toolCallID),
+                ["a", "b", "c"])
+
+        let marker = trimmed.messages[2].content
+        c.check("the model is told it was dropped", marker.contains("dropped"))
+        c.check("...with the size, so it can judge whether to refetch", marker.contains("5,000"))
+        c.check("...and that the user can still see it", marker.contains("user can still see"))
+        c.check("...and that it can be fetched again", marker.contains("calling the tool again"))
+
+        // A result too small to be worth explaining away stays.
+        let mixed = [ask("first"), call("a"), result("a", 300), call("b"), result("b", 4_000)]
+        let kept = AgentRuntime.bounded(mixed, budget: 500)
+        c.equal("a result below the threshold is left alone", kept.messages[2].content.count, 300)
+
+        // Never the newest, however far over the budget that leaves it.
+        let newest = [ask("first"), call("a"), result("a", 9_000)]
+        let held = AgentRuntime.bounded(newest, budget: 100)
+        c.equal("the newest result survives any budget", held.messages[2].content.count, 9_000)
+        c.equal("...and is not counted as dropped", held.dropped, 0)
+
+        // Zero means no bound, which is how it is turned off.
+        c.equal("a budget of zero trims nothing", AgentRuntime.bounded(long, budget: 0).messages.count, long.count)
+        c.equal("...and reports nothing dropped", AgentRuntime.bounded(long, budget: 0).dropped, 0)
+
+        // Only results. A long user message is the conversation, not a cache.
+        let talky = [ask(String(repeating: "word ", count: 3_000)), call("a"), result("a", 4_000)]
+        let chatty = AgentRuntime.bounded(talky, budget: 1_000)
+        c.equal("what the person said is never dropped", chatty.messages[0].content.count, 15_000)
+
+        return c.report()
+    }
+
     // MARK: What can be delegated to
 
     /// The roster, and the rules that put things on it.
