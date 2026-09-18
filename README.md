@@ -87,6 +87,12 @@ out — and `--self-test` fails if the built-in block grows past its budget. Pas
 120,000 characters of conversation the oldest tool results are emptied from what the
 model is sent: the user keeps seeing them, and the model is told it can call again.
 
+**You can watch it think.** Every provider streams its reasoning, and the
+transcript shows it while it arrives and folds it away when the answer lands.
+Settings → General offers *While thinking*, *Always*, or *Hidden*; opening or
+closing a panel by hand overrides whichever is set, so a turn folding itself away
+never closes something you deliberately opened.
+
 **Skills load themselves, and the list ranks.** Skill bodies arrive only when one
 is used — they average twelve thousand characters. The catalogue that says what is
 installed is ranked against the current message: what looks relevant gets its whole

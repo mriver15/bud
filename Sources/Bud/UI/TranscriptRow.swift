@@ -194,11 +194,17 @@ public struct TranscriptRow: View {
     private func segmentView(_ segment: Segment) -> some View {
         switch segment {
         case .reasoning(let id, let text):
-            ReasoningDisclosure(
-                text: text,
-                isStreaming: isTail(id),
-                duration: Date().timeIntervalSince(turn.createdAt)
-            )
+            // Not drawn at all when it is turned off. A collapsed disclosure is
+            // still a line in the transcript saying the model thought, which is a
+            // different thing from asking it not to say so.
+            if model.config.reasoningVisibility != .hidden {
+                ReasoningDisclosure(
+                    text: text,
+                    isStreaming: isTail(id),
+                    duration: Date().timeIntervalSince(turn.createdAt),
+                    visibility: model.config.reasoningVisibility
+                )
+            }
 
         case .text(let id, let text):
             MarkdownView(text, showsCaret: isTail(id), highlight: highlight)
@@ -263,13 +269,21 @@ private struct ReasoningDisclosure: View {
     let text: String
     let isStreaming: Bool
     let duration: TimeInterval
+    let visibility: ReasoningVisibility
 
-    @BudState private var isExpanded = false
+    /// Set the moment the reader opens or closes it, and wins from then on. Before
+    /// that the mode decides, which is what lets a turn fold itself away when the
+    /// answer lands without fighting anyone who opened it deliberately.
+    @BudState private var chosen: Bool?
+
+    private var isExpanded: Bool {
+        visibility.isExpanded(isStreaming: isStreaming, chosen: chosen)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button {
-                withAnimation(.snappy(duration: 0.18)) { isExpanded.toggle() }
+                withAnimation(.snappy(duration: 0.18)) { chosen = !isExpanded }
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "chevron.right")
@@ -279,6 +293,10 @@ private struct ReasoningDisclosure: View {
                         ShimmerLabel("Thinking…")
                     } else {
                         Text("Thought for \(BudFormat.duration(duration))")
+                    }
+                    if !isExpanded, !text.isEmpty {
+                        Text("· \(text.count > 2_000 ? "long" : "\(text.count) characters")")
+                            .foregroundStyle(.tertiary)
                     }
                     Spacer(minLength: 0)
                 }
