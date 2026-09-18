@@ -288,7 +288,15 @@ public final class AgentRuntime {
 
     private func streamRound(into turn: inout Turn, turnIndex: Int) async -> RoundOutcome {
         let config = env.config
-        let tools = await env.registry.descriptors()
+        // Everything except what an agent holds.
+        //
+        // Filtered after the await rather than before, and that ordering is the
+        // whole safety argument for this feature: building the list is what asks
+        // the subagent provider for its descriptors, which is where the agent
+        // roster is rebuilt. A tool hidden here therefore always has an agent that
+        // can still reach it — where filtering first would have a window in which
+        // a delegated server's tools were unreachable by anything at all.
+        let tools = await env.registry.descriptors().filter { !$0.agentOnly }
         let request = ChatRequest(
             model: config.model,
             messages: [systemMessage()] + history,

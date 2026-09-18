@@ -69,6 +69,12 @@ rot. A subagent may delegate onward — one level, with children counted against
 their parent's slot rather than the pool's, so nesting cannot starve the pool it
 is running in.
 
+**A server can hand its tools to its agent** (MCP → a server → Tools & log). The
+main agent then carries the server's *name* instead of its schemas. On a real
+21-tool server that is 17,915 tokens per request down to 5,494 — a 69% cut — at the
+cost of a delegation per question. Off by default, per server, because a single
+instant lookup is slower that way and a bulky one is not.
+
 **Generated interfaces.** For comparisons, dashboards and status reports, the
 model emits a declarative UI spec instead of a wall of text: cards, metrics,
 tables, charts, progress, callouts, code, images and buttons. Buttons can carry

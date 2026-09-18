@@ -481,6 +481,38 @@ public enum BudSelfTest {
             RegistryInstallOption(id: "npm:x", label: "npx -y x", transport: .stdio, command: "npx", args: ["-y", "x"])
         )
 
+        // MARK: A config written before the config grew
+
+        // The synthesized decoder requires every non-optional key, so adding a
+        // field to `MCPServerConfig` emptied the server list of every file written
+        // before it — silently, with the servers still in the file and the only
+        // symptom that they had stopped connecting. Caught by `--measure` reporting
+        // 0/0 servers where it had reported 1/1 a minute earlier.
+        func decodeServers(_ json: String) -> [MCPServerConfig] {
+            (try? JSONDecoder().decode([MCPServerConfig].self, from: Data(json.utf8))) ?? []
+        }
+
+        let beforeDelegation = decodeServers("""
+        [{"id": "a", "name": "getcompetitive", "transport": "stdio",
+          "command": "npx", "args": ["-y", "getcompetitive"], "enabled": true,
+          "autoStart": true, "registryName": "glama:mriver15/getcompetitive"}]
+        """)
+        c.equal("a file written before a field was added still loads", beforeDelegation.count, 1)
+        c.equal("...with the new field at its default", beforeDelegation.first?.delegated, false)
+        c.equal("...and the rest of it intact", beforeDelegation.first?.name, "getcompetitive")
+
+        // Every defaulted field, not just the newest — this is a whole class of
+        // failure rather than one instance of it.
+        let sparse = decodeServers(#"[{"name": "bare"}]"#)
+        c.equal("a minimal entry still loads", sparse.count, 1)
+        c.equal("a missing transport takes its default", sparse.first?.transport, .stdio)
+        c.equal("missing args take their default", sparse.first?.args, [])
+        c.equal("a missing enabled is enabled", sparse.first?.enabled, true)
+        c.equal("a missing id is invented rather than fatal", (sparse.first?.id.isEmpty ?? true), false)
+
+        let delegated = decodeServers(#"[{"name": "x", "delegated": true}]"#)
+        c.equal("the switch round-trips", delegated.first?.delegated, true)
+
         // MARK: Tool selection
 
         let everything = MCPServerConfig(name: "s", command: "x")
@@ -2223,6 +2255,22 @@ public enum BudSelfTest {
         c.check("...scoped to its own tools", serverAgent?.allows("get_competitive__optimize_evs") == true)
         c.check("...and not to anyone else's", serverAgent?.allows("other__optimize_evs") == false)
         c.check("...and not to the session's", serverAgent?.allows("read_file") == false)
+
+        // What the model is told when the tools are not in its own list. Left to
+        // discover it, the model spends a round finding a tool that is not there and
+        // may conclude the server is not connected.
+        let handedOver = MCPServerConfig(
+            name: "Bulk", transport: .stdio, command: "x", delegated: true
+        )
+        registry.rebuild(skills: [], servers: [handedOver])
+        let handed = registry.named("bulk")?.summary ?? ""
+        c.check("a handed-over server says its tools are elsewhere",
+                handed.contains("NOT in your tool list"))
+        c.check("...and says what to do instead", handed.contains("delegating"))
+        // An ordinary server is not nagged about a restriction it does not have.
+        registry.rebuild(skills: [], servers: [server])
+        c.check("an ordinary server says no such thing",
+                !(registry.named("get_competitive")?.summary ?? "").contains("NOT in your tool list"))
 
         let off = MCPServerConfig(name: "Disabled", transport: .stdio, command: "x", enabled: false)
         registry.rebuild(skills: [], servers: [off])

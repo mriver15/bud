@@ -238,10 +238,18 @@ public enum AgentLibrary {
     public static func from(server: MCPServerConfig) -> AgentDefinition {
         AgentDefinition(
             name: ToolNaming.sanitize(server.name.lowercased()),
-            summary: """
-                Answers from the \(server.name) server, using only its own tools. Use it \
-                when the server returns more than you want to read.
-                """,
+            // Said outright when the tools are not in the main agent's list: the
+            // model otherwise spends a round discovering that a tool it expected is
+            // not there, and may conclude the server is not connected.
+            summary: server.delegated
+                ? """
+                    Answers from the \(server.name) server. Its tools are NOT in your tool \
+                    list — delegating to this agent is the only way to reach them.
+                    """
+                : """
+                    Answers from the \(server.name) server, using only its own tools. Use it \
+                    when the server returns more than you want to read.
+                    """,
             instructions: """
                 You are working with the \(server.name) MCP server, and its tools are the \
                 only ones you have.
