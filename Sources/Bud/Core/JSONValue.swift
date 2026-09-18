@@ -14,6 +14,23 @@ public enum JSONValue: Sendable, Hashable {
     case object([String: JSONValue])
 }
 
+extension JSONValue {
+    /// Characters of string content in this value, as opposed to the keys, types
+    /// and punctuation holding it together.
+    ///
+    /// Asked of a tool schema, this answers whether the schema is carrying
+    /// documentation — which can be moved somewhere it is loaded on demand — or
+    /// shape, which cannot.
+    public var stringContentLength: Int {
+        switch self {
+        case .string(let value): return value.count
+        case .array(let items): return items.reduce(0) { $0 + $1.stringContentLength }
+        case .object(let pairs): return pairs.values.reduce(0) { $0 + $1.stringContentLength }
+        case .null, .bool, .number: return 0
+        }
+    }
+}
+
 // MARK: - Accessors
 
 extension JSONValue {
