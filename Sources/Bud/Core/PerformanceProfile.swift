@@ -50,14 +50,14 @@ public enum PerformanceProfileCLI {
 
         print("\nPer request — what runs before every model call\n")
         let skillMs = time("skill list for the prompt (\(installed.count) skill\(installed.count == 1 ? "" : "s"))") {
-            _ = SkillContext.prompt()
+            _ = SkillContext.catalogue(query: "").text
         }
         let noteMs = time("remembered notes") { _ = BudStore.lessonContext() }
         let registryMs = await timeAsync("tool descriptors (\(toolCount) tools)") {
             _ = await env.registry.descriptors()
         }
 
-        let building = SkillContext.prompt().count + BudStore.lessonContext().count + config.systemPrompt.count
+        let building = SkillContext.catalogue(query: "").text.count + BudStore.lessonContext().count + config.systemPrompt.count
         let total = skillMs + noteMs + registryMs
         print("\n  " + String(repeating: "─", count: 52))
         print("  \("per request".padding(toLength: 34, withPad: " ", startingAt: 0))\(String(format: "%7.2f ms", total))")

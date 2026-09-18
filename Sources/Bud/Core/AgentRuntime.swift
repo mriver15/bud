@@ -21,6 +21,17 @@ public final class AgentRuntime {
     /// Characters emptied from tool results on the last round, so the UI can say
     /// when the budget is doing something rather than leaving it a silent trim.
     public private(set) var droppedFromHistory = 0
+    /// The catalogue currently rendered into the system prompt, and which skills
+    /// it promotes. Kept so the front of the prompt only changes when the answer
+    /// does.
+    private var renderedSkills = ""
+    private var promotedSkills: [String] = []
+
+    /// What was last asked. The catalogue is ranked against the current request,
+    /// and the newest user message is the whole of what "current" means here.
+    private func latestUserMessage() -> String {
+        history.last { $0.role == .user }?.content ?? ""
+    }
 
     /// What the model is currently being sent, before the budget trims it. Shown
     /// against the budget in Settings, because a limit nobody can see the distance
@@ -533,8 +544,17 @@ public final class AgentRuntime {
 
         // Read on every request for the same reason the notes are: a skill
         // installed halfway through a conversation has to be usable in it.
-        let skills = SkillContext.prompt()
-        if !skills.isEmpty { text += "\n\n" + skills }
+        //
+        // Ranked against what was just asked, and re-rendered only when that
+        // changes which skills are promoted. The catalogue sits at the front of the
+        // prompt, which is the part a provider caches, so rewriting it on every
+        // message to say the same thing would cost more than the lines it saves.
+        let catalogue = SkillContext.catalogue(query: latestUserMessage())
+        if catalogue.promoted != promotedSkills {
+            promotedSkills = catalogue.promoted
+            renderedSkills = catalogue.text
+        }
+        if !renderedSkills.isEmpty { text += "\n\n" + renderedSkills }
 
         return ChatMessage(role: .system, content: text)
     }

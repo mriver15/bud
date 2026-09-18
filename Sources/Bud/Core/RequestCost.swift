@@ -175,7 +175,7 @@ public enum RequestMeasureCLI {
             tools: tools,
             notes: BudStore.lessonContext(),
             liveContext: liveContextSample(config: config),
-            skills: SkillContext.prompt()
+            skills: SkillContext.catalogue(query: "").text
         )
 
         if let index = arguments.firstIndex(of: "--dump-tool"),
