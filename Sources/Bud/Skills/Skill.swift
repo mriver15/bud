@@ -40,6 +40,15 @@ public struct Skill: Sendable, Identifiable, Equatable {
     /// Where it came from, when it was installed rather than written here.
     public var source: String?
 
+    /// The words its author says people use for it, from `metadata.triggers`.
+    ///
+    /// The gap this closes is measured. Asked to fill a W-9, a matcher finds
+    /// nothing in the `pdf` skill, whose description talks about PDF files — a
+    /// W-9 is one, and only a reader who knows that makes the connection. The
+    /// author knows. Comma-separated, and absent from almost every skill in the
+    /// wild, which costs nothing.
+    public var triggers: String { metadata["triggers"] ?? "" }
+
     /// `allowed-tools` as a list.
     ///
     /// The field is a space-separated string in the standard and a comma-separated

@@ -652,6 +652,56 @@ public enum BudLiveVerification {
                     (try? SkillParser.validate(name: entry.name)) != nil
                 })
 
+                // The ranking, against the real inventory. Thirteen of these
+                // fourteen ranked first when it was measured by hand; the one that
+                // did not — "W-9" against a skill that says "PDF" — is why the
+                // catalogue lists every skill rather than filtering.
+                let catalogueSkills = found.map { entry in
+                    Skill(
+                        name: entry.name,
+                        summary: entry.summary,
+                        license: nil,
+                        compatibility: nil,
+                        metadata: [:],
+                        allowedTools: nil,
+                        delegation: nil,
+                        instructions: ""
+                    )
+                }
+                let present = Set(catalogueSkills.map(\.name))
+                let cases: [(String, String)] = [
+                    ("Make me a spreadsheet of the quarterly numbers", "xlsx"),
+                    ("Can you read this .docx and summarise it", "docx"),
+                    ("Build a slide deck from these bullet points", "pptx"),
+                    ("How much does the Claude API cost per million tokens", "claude-api"),
+                    ("Set up an MCP server for my database", "mcp-builder"),
+                    ("Create a new skill for our team", "skill-creator"),
+                    ("Make an animated GIF for Slack", "slack-gif-creator"),
+                    ("Design a distinctive UI for my app", "frontend-design"),
+                    ("Test my local web app in a browser", "webapp-testing"),
+                ]
+                var asked = 0
+                var promoted = 0
+                for (message, expected) in cases where present.contains(expected) {
+                    asked += 1
+                    let ranked = SkillRanking.rank(message, skills: catalogueSkills)
+                    if ranked.contains(expected) { promoted += 1 }
+                }
+                c.check(
+                    "skills: ranking promotes the right skill for \(promoted)/\(asked) real messages",
+                    asked > 0 && promoted >= asked - 1
+                )
+
+                // And whatever it promotes, nothing is dropped from the catalogue.
+                let rendered = SkillContext.catalogue(
+                    query: "Make me a spreadsheet", limit: 40, skills: catalogueSkills
+                )
+                c.equal(
+                    "skills: every installed skill is still listed",
+                    catalogueSkills.filter { rendered.text.contains("- \($0.name):") }.count,
+                    catalogueSkills.count
+                )
+
                 // One install, then put it back. The whole point of the
                 // marketplace is that a folder arrives intact, so the check is
                 // the folder on disk and not the fact that a request succeeded.

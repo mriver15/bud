@@ -12,6 +12,93 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 1.2.0
+
+### The catalogue ranks, and hides nothing
+
+Skill *bodies* were already loaded on demand — 12,901 characters on average, 258,036
+across the twenty skills in the source Bud ships. What rode in the system prompt
+was the catalogue: one line per skill, on every request, growing with every
+install. Twenty skills is roughly ten thousand characters, more than a third of the
+built-in tool block.
+
+It is still one line per skill. What changed is which lines are long.
+
+| message | before | after |
+|---|---|---|
+| "Make me a spreadsheet of the quarterly numbers" | 9,933 | **4,421** (55% off) |
+| "Fill out this W-9 form for me" | 9,933 | **4,596** (53% off) |
+| "Can you read this .docx and summarise it" | 9,933 | **5,043** (49% off) |
+| "What is the weather in Lisbon" | 9,933 | **5,073** (48% off) |
+
+Measured against the nineteen real skills, every one of them still listed in every
+case.
+
+### The reason it ranks instead of filtering
+
+The obvious saving — list only the relevant skills — was measured before it was
+built, against the real inventory with fourteen messages a person would type:
+
+```
+"Fill in a fillable PDF form"      → pdf   ranked first
+"Fill out this W-9 form for me"    → pdf   never scored
+```
+
+Thirteen of the fourteen ranked first, and the one that did not is the one that
+matters: **a W-9 is a PDF**, and no amount of term matching knows that. The model
+does. A filter would have dropped the skill that was right, and the model would
+never have seen it existed.
+
+So the scoring promotes. A promoted skill gets its whole description; everything
+else gets its first sentence, which is what a skill *is* — 2,037 characters against
+9,389 for the whole set, measured. One irrelevant word no longer promotes anything:
+a match has to be within half of the best to get a full line, and no more than three
+ever do.
+
+### Skills can say what people call them
+
+The W-9 case is unfixable by better matching, because the author's words and the
+user's words are different languages. The author knows both:
+
+```yaml
+metadata:
+  triggers: "w-9, tax form, 1099, fillable form"
+```
+
+A trigger the message actually contains triples that skill's score. Absent from
+almost every skill in the wild, and it costs nothing when it is absent.
+
+### And it is bounded
+
+`--measure` was not counting the catalogue at all until 1.1.1; it is, and the
+budget gate now fails if forty maximally verbose skills produce a catalogue over
+14,000 characters — checked with every one of them still listed, so the bound can
+only be met by shortening lines and never by dropping skills.
+
+### How this was measured
+
+By hand first, and then kept honest: the live suite ranks nine real messages
+against the real skills over the network and fails if the right one stops being
+promoted.
+
+---
+
+## Bud 1.1.1
+
+### The measurement was not counting skills
+
+Twenty installed skills cost roughly ten thousand characters on every request —
+more than a third of the built-in tool block — and `--measure` said nothing about
+them, because it measured `config.systemPrompt` and never the catalogue appended
+after it. The figures it did report read as the whole cost.
+
+It is its own line now, and the total includes it. A measurement that omits a
+cost is worse than no measurement: it makes the thing you are trying to reduce
+look smaller than it is, which is how a skill collection grows into the size of
+the tool block without anyone noticing.
+
+---
+
 ## Bud 1.1.0
 
 ### The switch was the saving, and it is on

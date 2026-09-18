@@ -87,6 +87,15 @@ out — and `--self-test` fails if the built-in block grows past its budget. Pas
 120,000 characters of conversation the oldest tool results are emptied from what the
 model is sent: the user keeps seeing them, and the model is told it can call again.
 
+**Skills load themselves, and the list ranks.** Skill bodies arrive only when one
+is used — they average twelve thousand characters. The catalogue that says what is
+installed is ranked against the current message: what looks relevant gets its whole
+description, everything else gets one line, and **nothing is ever dropped from the
+list** — because the matching that would have to drop things scores nothing at all
+for "W-9" against a skill described as "PDF", and the model knows they are the same
+thing. Skills may declare `metadata.triggers` to close that gap from the other
+side.
+
 **Nothing a tool returns is lost.** A result too large to send is written to
 `~/.bud/store/` and the model is handed a handle rather than a truncated head with
 a note saying how much is missing. `read_stored` searches it or reads a line range,

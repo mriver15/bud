@@ -91,6 +91,7 @@ public enum BudSelfTest {
             agents,
             historyBudget,
             storedResults,
+            skillRanking,
             toolBudget,
             searching,
             skillScanning,
@@ -2263,12 +2264,213 @@ public enum BudSelfTest {
         )
         c.equal("nothing installed costs nothing", without.skillChars, 0)
 
+        // MARK: The catalogue
+
+        // The other half of what a request carries, and the half that grows on its
+        // own: every skill installed adds a line, for ever, whether or not it is
+        // ever used. Forty of the longest description the spec allows is the worst
+        // case, and it is checked rather than assumed.
+        let deepest = (0..<40).map { index in
+            Skill(
+                name: "skill-\(index)",
+                summary: "Use this skill whenever the user wants to do a particular kind "
+                    + "of thing that the description explains at length. "
+                    + String(repeating: "More about when to use it, in detail. ", count: 18),
+                license: nil,
+                compatibility: nil,
+                metadata: [:],
+                allowedTools: nil,
+                delegation: nil,
+                instructions: "Body."
+            )
+        }
+        // The query has to overlap the synthetic descriptions, or nothing is
+        // promoted and the check passes for the wrong reason.
+        let worst = SkillContext.catalogue(
+            query: "a particular kind of thing", limit: 40, skills: deepest
+        )
+        let catalogueCap = 14_000
+        c.check(
+            "a forty-skill catalogue stays under \(BudFormat.count(catalogueCap)) characters "
+                + "(worst: \(BudFormat.count(worst.text.count)))",
+            worst.text.count <= catalogueCap
+        )
+        // And it is bounded because the lines are, not because skills went missing.
+        let listed = deepest.filter { worst.text.contains("- \($0.name):") }
+        c.equal("...with every one of them still listed", listed.count, deepest.count)
+        c.check("...and something promoted", !worst.promoted.isEmpty)
+
         // Every tool has to be choosable. A tool whose description is empty is one
         // the model cannot tell from its neighbour, and it is charged regardless.
         let undescribed = measured.filter { entry in
             !providers.isEmpty && entry.name.isEmpty
         }
         c.equal("every tool is named", undescribed.count, 0)
+
+        return c.report()
+    }
+
+    // MARK: Which skills a message needs
+
+    /// Ranking the catalogue, and the property that makes it safe to rank at all.
+    ///
+    /// The scoring is measured and imperfect: against the real skills it put
+    /// thirteen of fourteen messages on the right one and scored nothing for the
+    /// fourteenth, where the user said "W-9" and the skill said "PDF". So the
+    /// catalogue **lists every skill regardless**, and the ranking only decides
+    /// which get their full description. A test that checked the ranking alone
+    /// would pass on a build that had started dropping skills.
+    @MainActor
+    static func skillRanking() -> SelfTestReport {
+        let c = Checker(suite: "ranking")
+
+        func skill(
+            _ name: String,
+            _ summary: String,
+            triggers: String? = nil
+        ) -> Skill {
+            Skill(
+                name: name,
+                summary: summary,
+                license: nil,
+                compatibility: nil,
+                metadata: triggers.map { ["triggers": $0] } ?? [:],
+                allowedTools: nil,
+                delegation: nil,
+                instructions: "Do it carefully."
+            )
+        }
+
+        let skills = [
+            skill("pdf", "Use this skill whenever the user wants to do anything with PDF "
+                + "files. This includes reading, extracting text, and filling forms."),
+            skill("xlsx", "Use this skill any time a spreadsheet file is the primary input "
+                + "or output. Covers creating, editing and analysing workbooks."),
+            skill("pptx", "Use this skill any time a slide deck is involved in any way."),
+            skill("theme-factory", "Toolkit for styling artifacts with a theme. These "
+                + "artifacts can be slides, documents, reports or web pages."),
+        ]
+
+        // MARK: Ranking
+
+        c.equal(
+            "a spreadsheet question finds the spreadsheet skill",
+            SkillRanking.rank("Make me a spreadsheet of the quarterly numbers", skills: skills).first,
+            "xlsx"
+        )
+        c.equal(
+            "a slide question finds the slide skill",
+            SkillRanking.rank("Build a slide deck from these bullet points", skills: skills).first,
+            "pptx"
+        )
+        c.check(
+            "a question about nothing installed promotes nothing",
+            SkillRanking.rank("What is the weather in Lisbon", skills: skills).isEmpty
+        )
+        c.check(
+            "an empty message promotes nothing",
+            SkillRanking.rank("", skills: skills).isEmpty
+        )
+        // A skill sharing one incidental word is not in the same league as one the
+        // message is about, and promoting it would spell out a description of
+        // something nobody asked for — which is how a ranking that is mostly noise
+        // still cost most of the catalogue on an unrelated message.
+        //
+        // Built from controlled overlap rather than from the real skills: those
+        // genuinely share vocabulary, so "slides" promoting the theming skill is
+        // correct behaviour and not a floor that failed.
+        c.equal(
+            "a decisive match promotes alone",
+            SkillRanking.rank(
+                "quarterly spreadsheet",
+                skills: [
+                    skill("alpha", "Quarterly spreadsheet workbook analysis."),
+                    skill("beta", "Something else entirely, mentioning quarterly once."),
+                ]
+            ),
+            ["alpha"]
+        )
+
+        c.equal(
+            "the promoted list is capped",
+            SkillRanking.rank("pdf slides spreadsheet documents reports", skills: skills, limit: 2).count,
+            2
+        )
+
+        // MARK: The case term matching cannot do
+
+        // Measured: this is the one of fourteen that scored nothing, because a W-9
+        // is a PDF and only a reader who knows that makes the connection. The
+        // author does, and says so.
+        c.check(
+            "a W-9 does not find the PDF skill on its own",
+            SkillRanking.rank("Fill out this W-9 form for me", skills: skills).isEmpty
+        )
+        let aware = [
+            skill("pdf", skills[0].summary, triggers: "w-9, tax form, 1099"),
+            skills[1], skills[2], skills[3],
+        ]
+        c.equal(
+            "...but it does when the skill says people call it that",
+            SkillRanking.rank("Fill out this W-9 form for me", skills: aware).first,
+            "pdf"
+        )
+        c.equal(
+            "and to the right skill, not merely to something",
+            SkillRanking.rank("I need to file a tax form", skills: aware).first,
+            "pdf"
+        )
+
+        // MARK: The catalogue itself
+
+        // Every skill is listed, whatever was asked. This is the property the whole
+        // design turns on, so it is checked for a message that matches nothing as
+        // well as one that matches.
+        for query in ["", "Make me a spreadsheet", "What is the weather in Lisbon"] {
+            let catalogue = SkillContext.catalogue(
+                query: query, limit: 40, skills: skills
+            )
+            for each in skills {
+                c.check(
+                    "\"\(query.prefix(24))\" still lists \(each.name)",
+                    catalogue.text.contains("- \(each.name):")
+                )
+            }
+        }
+
+        let promoted = SkillContext.catalogue(query: "Make me a spreadsheet", limit: 40, skills: skills)
+        c.equal("what looks relevant is promoted", promoted.promoted, ["xlsx"])
+        c.check(
+            "...and gets its whole description",
+            promoted.text.contains("Covers creating, editing and analysing")
+        )
+        // The rest keep one line — the first sentence, which is what a skill is.
+        c.check(
+            "...while the others are shortened",
+            promoted.text.contains("- pptx: Use this skill any time a slide deck is involved in any way.")
+        )
+        c.check(
+            "...and do not carry their later sentences",
+            !promoted.text.contains("These \nartifacts can be slides")
+                && !promoted.text.contains("These artifacts can be slides")
+        )
+
+        // A shortened line is bounded, whatever the author wrote.
+        let verbose = String(repeating: "word ", count: 500) + "and then a final sentence."
+        let capped = SkillContext.catalogue(
+            query: "nothing", limit: 40,
+            skills: [skill("long-one", verbose), skill("other", "Short.")]
+        )
+        let line = capped.text
+            .split(separator: "\n")
+            .first { $0.hasPrefix("- long-one:") } ?? ""
+        c.check("a shortened line is bounded (\(line.count) characters)", line.count < 200)
+
+        // MARK: Nothing installed
+
+        let empty = SkillContext.catalogue(query: "anything", limit: 40, skills: [])
+        c.equal("no skills is no catalogue", empty.text, "")
+        c.equal("...and nothing promoted", empty.promoted.count, 0)
 
         return c.report()
     }
