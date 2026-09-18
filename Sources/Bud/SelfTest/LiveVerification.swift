@@ -344,6 +344,74 @@ public enum BudLiveVerification {
         let badUI = await genui.invoke(tool: "render_ui", arguments: .object([:]), callID: "verify-ui-2")
         c.check("genui: malformed spec is rejected with a message", badUI.isError)
 
+        // The picture lookup, against the real thing. A parser that agrees with a
+        // fixture proves nothing here: the whole value is that Wikipedia knows what
+        // a Blaziken is, and only the live call can say whether it still does.
+        let one = await genui.invoke(
+            tool: "find_image",
+            arguments: .object(["query": .string("Blaziken")]),
+            callID: "verify-find-1"
+        )
+        let oneText = one.text ?? ""
+        c.check("find_image: an article returns its own picture", oneText.contains("upload.wikimedia.org"))
+        c.check("find_image: the URL is usable as it came", !oneText.contains("utm_"))
+        c.check("find_image: it says where the picture came from", oneText.contains("wikipedia.org/wiki/"))
+        c.check("find_image: the model is told not to retype it", oneText.contains("do not retype"))
+
+        // A named thing answers once, with its own picture. The fallback was
+        // offering a cosplayer and a shop display alongside the creature, which is
+        // worse than offering nothing: one of those is what a model picks.
+        func imageURLs(_ text: String) -> [String] {
+            text.split(separator: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { line in
+                    guard line.hasPrefix("http") else { return false }
+                    let lowered = line.lowercased()
+                    return [".png", ".jpg", ".jpeg", ".gif", ".webp"].contains { lowered.contains($0) }
+                }
+        }
+        c.check("find_image: a named thing returns its own picture only", imageURLs(oneText).count == 1)
+        c.check("find_image: …and that picture is the article's",
+                imageURLs(oneText).first?.contains("wikipedia/en/") == true)
+
+        // One call for a set — the shape a six-card grid actually needs.
+        let many = await genui.invoke(
+            tool: "find_image",
+            arguments: .object(["queries": .array([
+                .string("Garchomp"), .string("sunset over mountains"),
+                .string("Llanfairpwllgwyngyll"),
+            ])]),
+            callID: "verify-find-2"
+        )
+        let manyText = many.text ?? ""
+        c.check("find_image: a set answers every query", manyText.contains("Garchomp:"))
+        // A phrase is not a title, so this is the one that searches the filenames.
+        c.check("find_image: a phrase falls back to a search", manyText.contains("commons.wikimedia.org"))
+        c.check("find_image: a thing with no picture does not break the others", !many.isError)
+        c.check("find_image: no URL comes back with tracking on it", !manyText.contains("utm_"))
+
+        // The gap this was built to close: no query, no answer, and no crash.
+        let empty = await genui.invoke(tool: "find_image", arguments: .object([:]), callID: "verify-find-3")
+        c.check("find_image: an empty request is refused with a message", empty.isError)
+        let nonsense = await genui.invoke(
+            tool: "find_image",
+            arguments: .object(["query": .string("zzqqxx not a thing 444")]),
+            callID: "verify-find-4"
+        )
+        c.check("find_image: a hopeless query is an answer, not a failure", !nonsense.isError)
+
+        // And the whole point: a URL it returns renders.
+        if let first = oneText.split(separator: "\n").first(where: { $0.contains("http") })?
+            .trimmingCharacters(in: .whitespaces) {
+            let spec = JSONValue(parsing: """
+                {"title":"Found","components":[{"type":"image","url":"\(first)","width":120}]}
+                """)!
+            let rendered = await genui.invoke(tool: "render_ui", arguments: spec, callID: "verify-find-5")
+            c.check("find_image: what it finds renders in a surface", rendered.ui != nil && !rendered.isError)
+        } else {
+            c.check("find_image: what it finds renders in a surface", false)
+        }
+
         // MARK: Agent runtime, end to end
 
         let runtimeEnv = AppEnvironment(config: config)

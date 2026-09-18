@@ -83,6 +83,7 @@ public enum BudSelfTest {
             fileReading,
             uiImages,
             skills,
+            imageSearch,
             skillScanning,
             glamaMapping,
             npmResolution,
@@ -2130,6 +2131,214 @@ public enum BudSelfTest {
     /// matter just as much: a screen that fires on `ignore_index` or on any script
     /// that mentions a URL is one people learn to click past, and then it protects
     /// nobody either.
+    // MARK: Looking up a picture
+
+    /// Reading what Wikipedia and Commons send back.
+    ///
+    /// Offline on purpose. The live suite proves the lookup works; these prove the
+    /// *reading* is right, including the responses only a title that is not an
+    /// article produces — those are the ones that quietly turned a phrase into no
+    /// result at all.
+    static func imageSearch() -> SelfTestReport {
+        let c = Checker(suite: "imageSearch")
+
+        func json(_ text: String) -> JSONValue {
+            JSONValue(parsing: text) ?? .null
+        }
+
+        // MARK: An article's own picture
+
+        let blaziken = json("""
+        {
+          "type": "standard",
+          "title": "Blaziken",
+          "thumbnail": {"source": "https://upload.wikimedia.org/wikipedia/en/a/ab/Blaziken.png"},
+          "originalimage": {"source": "https://upload.wikimedia.org/wikipedia/en/a/ab/Blaziken.png?utm_source=en.wikipedia.org&utm_campaign=api"},
+          "titles": {"canonical": "Blaziken", "normalized": "Blaziken"},
+          "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Blaziken"}}
+        }
+        """)
+        let article = ImageSearch.article(from: blaziken, query: "Blaziken")
+        c.equal("the article answers with its own picture",
+                article?.url, "https://upload.wikimedia.org/wikipedia/en/a/ab/Blaziken.png")
+        c.equal("...credited to where it came from", article?.credit, "Wikipedia")
+        c.equal("...with the page it can be read at",
+                article?.page, "https://en.wikipedia.org/wiki/Blaziken")
+        c.equal("...and the query it answers", article?.query, "Blaziken")
+        // Which kind of answer it is, because a caller choosing between "a picture
+        // of it" and "a picture matching the words" is the whole decision.
+        c.equal("an article image is marked as the article", article?.source, .article)
+        c.equal("a file from a search is marked as a search",
+                ImageSearch.images(from: json("""
+                {"query": {"pages": {"1": {"index": 1, "title": "File:A.png",
+                 "imageinfo": [{"url": "https://upload.wikimedia.org/a.png"}]}}}}
+                """), query: "a").first?.source, .search)
+
+        // The original is preferred, but a response carrying only a thumbnail is
+        // still an answer rather than a miss.
+        let thumbnailOnly = json("""
+        {"type": "standard", "title": "Thing", "thumbnail": {"source": "https://upload.wikimedia.org/a.png"},
+         "titles": {"canonical": "Thing"}}
+        """)
+        c.equal("a thumbnail alone is enough",
+                ImageSearch.article(from: thumbnailOnly, query: "Thing")?.url,
+                "https://upload.wikimedia.org/a.png")
+
+        // MARK: The shapes that are not an article
+
+        // A phrase looks like a title and is not one, and the API says so with a
+        // type rather than a status code. Treating any of these as an answer is how
+        // a surface ends up with the wrong picture in it.
+        for (name, body) in [
+            ("an internal error", #"{"type": "Internal error", "title": null}"#),
+            ("an unknown title", #"{"type": "https://en.wikipedia.org/wiki/Error"}"#),
+            ("a disambiguation page", #"{"type": "disambiguation", "thumbnail": {"source": "https://x/a.png"}}"#),
+            ("a page with no picture", #"{"type": "standard", "title": "Thing"}"#),
+        ] {
+            c.check("\(name) is not an answer", ImageSearch.article(from: json(body), query: "x") == nil)
+        }
+
+        // MARK: An article that is about something else
+
+        // The summary endpoint follows redirects silently. Asked for a creature it
+        // can answer with "List of generation IV Pokémon", and the lead image of a
+        // list is the generic logo: a standard page with a real picture that is an
+        // answer to a different question. Rendered as a team, four of six came back
+        // as that logo.
+        let redirectedToList = json("""
+        {
+          "type": "standard",
+          "title": "List of generation IV Pokémon",
+          "titles": {"canonical": "List_of_generation_IV_Pokémon"},
+          "originalimage": {"source": "https://upload.wikimedia.org/wikipedia/commons/9/98/International_Pok%C3%A9mon_logo.svg"}
+        }
+        """)
+        c.check("a redirect to a list is not a picture of the thing",
+                ImageSearch.article(from: redirectedToList, query: "Rotom") == nil)
+
+        // A parenthetical is a disambiguated name for the same thing, not a
+        // different subject.
+        let disambiguated = json("""
+        {"type": "standard", "title": "Rotom (Pokémon)",
+         "titles": {"canonical": "Rotom_(Pokémon)"},
+         "originalimage": {"source": "https://upload.wikimedia.org/rotom.png"}}
+        """)
+        c.check("a parenthetical name is still the thing",
+                ImageSearch.article(from: disambiguated, query: "Rotom") != nil)
+        // Case and spacing are not the thing.
+        c.check("case does not matter",
+                ImageSearch.article(from: json("""
+                {"type": "standard", "titles": {"canonical": "Pikachu"},
+                 "originalimage": {"source": "https://upload.wikimedia.org/p.png"}}
+                """), query: "pikachu") != nil)
+        c.check("a query with spaces matches an underscored title",
+                ImageSearch.article(from: json("""
+                {"type": "standard", "titles": {"canonical": "Red_panda"},
+                 "originalimage": {"source": "https://upload.wikimedia.org/r.png"}}
+                """), query: "red panda") != nil)
+        // A different subject is a different subject.
+        c.check("an unrelated title is refused",
+                ImageSearch.article(from: json("""
+                {"type": "standard", "titles": {"canonical": "United_States"},
+                 "originalimage": {"source": "https://upload.wikimedia.org/u.png"}}
+                """), query: "USA") == nil)
+        // A response that does not say what it resolved to is taken at its word.
+        c.check("a response with no resolved title is trusted",
+                ImageSearch.article(from: json("""
+                {"type": "standard", "title": "Thing",
+                 "originalimage": {"source": "https://upload.wikimedia.org/t.png"}}
+                """), query: "Thing") != nil)
+
+        // MARK: Files from a search
+
+        let search = json("""
+        {
+          "query": {"pages": {
+            "1": {
+              "index": 1,
+              "title": "File:Red Panda.JPG",
+              "imageinfo": [{
+                "thumburl": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c6/Red_Panda.JPG/640px-Red_Panda.JPG?utm_source=commons.wikimedia.org&utm_campaign=imageinfo",
+                "url": "https://upload.wikimedia.org/wikipedia/commons/c/c6/Red_Panda.JPG",
+                "descriptionurl": "https://commons.wikimedia.org/wiki/File:Red_Panda.JPG",
+                "extmetadata": {"LicenseShortName": {"value": "CC BY-SA 3.0"}}
+              }]
+            },
+            "2": {
+              "index": 2,
+              "title": "File:A diagram.svg",
+              "imageinfo": [{"thumburl": "https://upload.wikimedia.org/a.svg", "url": "https://upload.wikimedia.org/a.svg"}]
+            },
+            "3": {
+              "index": 3,
+              "title": "File:No licence.png",
+              "imageinfo": [{"url": "https://upload.wikimedia.org/b.png"}]
+            },
+            "4": {"index": 4, "title": "File:Not an image at all"}
+          }}
+        }
+        """)
+        let files = ImageSearch.images(from: search, query: "red panda")
+        c.equal("only the pictures come back", files.count, 2)
+
+        // In rank order, not dictionary order: the best match is the one that gets
+        // used, and `pages` being an unordered object makes that a real question.
+        let panda = files.first
+        c.equal("the best match comes first", panda?.title, "Red Panda.JPG")
+        // The thumbnail, not the original: a 4000-pixel photograph to draw a
+        // 96-point tile is megabytes for no gain.
+        c.equal("the scaled copy is used rather than the original",
+                panda?.url, "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c6/Red_Panda.JPG/640px-Red_Panda.JPG")
+        c.equal("the licence comes with it", panda?.credit, "CC BY-SA 3.0")
+        c.equal("the file page comes with it",
+                panda?.page, "https://commons.wikimedia.org/wiki/File:Red_Panda.JPG")
+        c.equal("the File: prefix is dropped from the title", panda?.title, "Red Panda.JPG")
+
+        // A tile that silently fails to decode is worse than the next result.
+        c.check("an SVG is left out", !files.contains { $0.url.hasSuffix(".svg") })
+        // A file with no stated licence is still usable; the source is the credit.
+        c.check("a file with no licence is still offered", files.contains { $0.title == "No licence.png" })
+        c.equal("...with no licence claimed for it",
+                files.first { $0.title == "No licence.png" }?.credit, nil)
+        c.check("a page with no image on it is skipped", !files.contains { $0.title == "Not an image at all" })
+
+        // MARK: Shapes that would crash a looser reader
+
+        for (name, body) in [
+            ("no query key", #"{"batchcomplete": ""}"#),
+            ("an empty page set", #"{"query": {"pages": {}}}"#),
+            ("pages as an array", #"{"query": {"pages": []}}"#),
+            ("not an object", #"[]"#),
+            ("nothing at all", #""#),
+        ] {
+            c.check("\(name) yields no pictures rather than a crash",
+                    ImageSearch.images(from: json(body), query: "x").isEmpty)
+        }
+
+        // MARK: Addresses
+
+        // Wikimedia appends campaign parameters to its own image URLs, and the
+        // model has to reproduce them exactly — so a shorter one is a better one.
+        c.equal("tracking is stripped",
+                ImageSearch.tidy("https://upload.wikimedia.org/a.png?utm_source=x&utm_campaign=y"),
+                "https://upload.wikimedia.org/a.png")
+        c.equal("an address with no tracking is left alone",
+                ImageSearch.tidy("https://upload.wikimedia.org/a.png"), "https://upload.wikimedia.org/a.png")
+        // A query string that is not tracking is part of the address.
+        c.equal("a query that is not tracking is kept",
+                ImageSearch.tidy("https://example.com/a.png?size=large"),
+                "https://example.com/a.png?size=large")
+
+        c.check("a jpg is a picture", ImageSearch.isRaster("https://x/a.JPG"))
+        c.check("a png is a picture", ImageSearch.isRaster("https://x/a.png"))
+        c.check("a webp is a picture", ImageSearch.isRaster("https://x/a.webp"))
+        c.check("a pdf is not", !ImageSearch.isRaster("https://x/a.pdf"))
+        c.check("a tiff is not", !ImageSearch.isRaster("https://x/a.tif"))
+        c.check("a page is not", !ImageSearch.isRaster("https://x/File:Thing"))
+
+        return c.report()
+    }
+
     static func skillScanning() -> SelfTestReport {
         let c = Checker(suite: "scan")
 
