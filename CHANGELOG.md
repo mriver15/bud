@@ -12,6 +12,59 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 0.3.1
+
+### Images you can lay out
+
+The `image` component now takes a size, and stops at it. Before, an image with no
+stated size stretched to whatever contained it — a 96-pixel sprite arrived at the
+width of the panel, which is the wrong answer for everything except a screenshot.
+
+```
+{"type":"image","url":"…","width":96,"height":96,"fit":"fit","radius":10,
+ "action":{"id":"explain","prompt":"Explain what this does on the team."}}
+```
+
+- **width / height** in points; leave one out and the image keeps its aspect ratio
+- **fit** — `fit` shows the whole image, `fill` crops it to the box, which is what
+  makes a row of thumbnails line up instead of each being a different size
+- **radius** — corner rounding, `0` for square
+- **action** — makes the image tappable, with the same contract as a button: the
+  host hears about it, and a `prompt` continues the conversation
+
+Sizes are clamped. A generated spec is free to say `40000`, and a view that tries
+to lay that out is a hung window rather than a wrong picture.
+
+`grid` and `card` were already there. Six sprites in a 3×2 grid of cards is now
+four lines of spec.
+
+### A tool can just return the picture
+
+**This is the part worth knowing about.** An MCP server that answered with an
+image content block had its bytes thrown away: the model was told
+`[image image/png, 41234 bytes]` and you saw nothing.
+
+Now the bytes are written into `~/.bud/images/` and drawn under the tool row. So
+your getcompetitive MCP does not need a public URL — it can return the sprite
+directly and it appears, one tile for one image, a grid for several.
+
+The model still gets the placeholder line, because it cannot look at a picture.
+
+Written by their **bytes**, not by what the server called them: a PNG arrives
+whatever the declared type says, and anything that is not an image is refused.
+Capped at 12MB and pruned to the newest 80, because an answer that carries an
+image leaves a file behind every time.
+
+### A crash, caught by rendering it
+
+Adding the new fields put a **second `height` key** into the `render_ui` schema,
+which is built as a dictionary. That is a fatal `Duplicate values for key` the
+moment the tool list is assembled — a launch crash, not a cosmetic one. It never
+reached a test because no suite builds that schema; the render harness did, on its
+first attempt.
+
+---
+
 ## Bud 0.3.0
 
 An optimisation release, and an honest one: I found and fixed a real hot spot, and

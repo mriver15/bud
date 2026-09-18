@@ -128,8 +128,15 @@ struct UIComponentView: View {
             CodeComponent(language: language, value: value)
         case .callout(let kind, let title, let value):
             CalloutComponent(kind: kind, title: title, value: value)
-        case .image(let url, let alt):
-            ImageComponent(url: url, alt: alt)
+        case .image(let url, let alt, let box, let action):
+            ImageComponent(
+                url: url,
+                alt: alt,
+                box: box,
+                action: action,
+                onAction: onAction,
+                onPrompt: onPrompt
+            )
         case .divider:
             Rectangle()
                 .fill(Color.white.opacity(0.10))
@@ -823,6 +830,10 @@ private struct CalloutComponent: View {
 private struct ImageComponent: View {
     let url: String
     let alt: String?
+    let box: UIImageBox
+    let action: UIAction?
+    let onAction: (GenUIAction) -> Void
+    let onPrompt: (String) -> Void
 
     private var link: URL? {
         guard let link = URL(string: url), let scheme = link.scheme?.lowercased() else { return nil }
@@ -830,10 +841,10 @@ private struct ImageComponent: View {
         case "http", "https":
             return link
         case "file":
-            // Only from Bud's own directory. The browser tools write their page
-            // screenshots there, and a `render_ui` spec is model-authored — a spec
-            // allowed to name any path on disk would turn a UI surface into a
-            // way to probe the filesystem for what exists.
+            // Only from Bud's own directory. Screenshots the browser took and
+            // images an MCP server returned are written there, and a `render_ui`
+            // spec is model-authored — one allowed to name any path on disk turns
+            // a surface into a way to probe the filesystem for what exists.
             let allowed = BudConfigLoader.budDirectory.standardizedFileURL.path
             let target = link.standardizedFileURL.path
             return target.hasPrefix(allowed + "/") ? link : nil
@@ -842,33 +853,64 @@ private struct ImageComponent: View {
         }
     }
 
+    private var height: CGFloat? { box.height.map { CGFloat($0) } }
+    private var radius: CGFloat { box.cornerRadius.map { CGFloat($0) } ?? Bud.Radius.control }
+
     var body: some View {
         Group {
-            if let link {
-                AsyncImage(url: link) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFit()
-                    case .empty:
-                        ProgressView()
-                            .controlSize(.small)
-                            .frame(maxWidth: .infinity, minHeight: 80)
-                    case .failure:
-                        unavailable
-                    @unknown default:
-                        unavailable
-                    }
-                }
+            if action != nil {
+                Button(action: fire) { picture }
+                    .buttonStyle(.plain)
+                    .help(action?.prompt ?? "Open")
             } else {
-                unavailable
+                picture
             }
         }
-        .frame(maxWidth: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous))
+        .frame(maxWidth: box.width.map { CGFloat($0) } ?? .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.6)
         }
+    }
+
+    @ViewBuilder
+    private var picture: some View {
+        if let link {
+            AsyncImage(url: link) { phase in
+                switch phase {
+                case .success(let image):
+                    sized(image)
+                case .empty:
+                    placeholder {
+                        ProgressView().controlSize(.small)
+                    }
+                case .failure:
+                    unavailable
+                @unknown default:
+                    unavailable
+                }
+            }
+        } else {
+            unavailable
+        }
+    }
+
+    /// Fitted into the box it was given, rather than into whatever it was placed
+    /// in. An image with no stated size is full-width, which is what a screenshot
+    /// wants and the wrong thing entirely for a 96-point sprite.
+    private func sized(_ image: Image) -> some View {
+        image
+            .resizable()
+            .aspectRatio(contentMode: box.fit == .fill ? .fill : .fit)
+            .frame(maxWidth: box.width.map { CGFloat($0) } ?? .infinity, maxHeight: height)
+            .clipped()
+    }
+
+    private func placeholder<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .frame(maxWidth: .infinity, minHeight: height ?? 80, maxHeight: height)
+            .background(Color.white.opacity(0.04))
     }
 
     private var altText: String {
@@ -886,9 +928,20 @@ private struct ImageComponent: View {
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
         }
-        .frame(maxWidth: .infinity, minHeight: 80)
+        .frame(maxWidth: .infinity, minHeight: height ?? 80, maxHeight: height)
         .padding(Bud.Space.sm)
         .background(Color.white.opacity(0.04))
+    }
+
+    /// The same contract as a generated button: the host hears about the action,
+    /// and a `prompt` continues the conversation rather than only firing a
+    /// callback.
+    private func fire() {
+        guard let action else { return }
+        onAction(GenUIAction(id: action.id, payload: action.raw))
+        if let prompt = action.prompt, !prompt.isEmpty {
+            onPrompt(prompt)
+        }
     }
 }
 

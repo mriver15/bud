@@ -151,7 +151,54 @@ public actor MCPClient {
             // hand the model an empty string, which reads as "nothing happened".
             text = result["structuredContent"]?.encodedString() ?? ""
         }
-        return ToolResult(text: text, isError: result["isError"]?.boolValue ?? false)
+        return ToolResult(
+            text: text,
+            ui: Self.surface(for: contents, titled: name),
+            isError: result["isError"]?.boolValue ?? false
+        )
+    }
+
+    /// The pictures in a result, as something to draw.
+    ///
+    /// A server that answers with an image content block used to have its bytes
+    /// thrown away — the model was told "[image image/png, 41234 bytes]" and the
+    /// person watching saw nothing at all. The model still gets that line, because
+    /// it cannot look at a picture; the bytes are written to Bud's own directory
+    /// so the picture can be shown beside the call.
+    ///
+    /// This also means a tool does not need somewhere public to put an image. A
+    /// server on the same machine can just return it.
+    private static func surface(for contents: [MCPContent], titled title: String) -> JSONValue? {
+        let files = contents.compactMap { content -> String? in
+            guard case .image(let image) = content,
+                  let url = ImageAssets.store(base64: image.base64, mimeType: image.mimeType)
+            else { return nil }
+            return url.absoluteString
+        }
+        guard !files.isEmpty else { return nil }
+
+        // Tiles rather than one full-width image each: an answer with several
+        // pictures in it is almost always a set — a team, a gallery, a diff — and
+        // six screenshots stacked down the transcript is not how anyone reads it.
+        let tiles: [JSONValue] = files.map { url in
+            .object([
+                "type": .string("image"),
+                "url": .string(url),
+                "height": .number(180),
+                "fit": .string("fit"),
+            ])
+        }
+        let body: JSONValue = tiles.count == 1
+            ? tiles[0]
+            : .object([
+                "type": .string("grid"),
+                "columns": .number(Double(min(3, tiles.count))),
+                "children": .array(tiles),
+            ])
+        return .object([
+            "title": .string(title),
+            "components": .array([body]),
+        ])
     }
 
     // MARK: Request plumbing

@@ -186,11 +186,15 @@ extension GenUIToolProvider {
                 ("language", field("string", "code: the syntax label shown above the block, e.g. \"swift\".")),
                 ("caption", field("string", "progress: a line of context under the bar.")),
                 ("key", field("string", "keyvalue item: the property name.")),
-                ("url", field("string", "image: an http or https URL.")),
+                ("url", field("string", "image: an http, https, or file: URL (file: must be under ~/.bud).")),
+                ("width", field("number", "image: width in points. Omit to fill the available width.")),
+
+                ("fit", field("string", "image: fit (default) shows the whole image; fill crops it to the box.")),
+                ("radius", field("number", "image: corner rounding in points. 0 for square corners.")),
                 ("alt", field("string", "image: description shown when the image cannot load.")),
                 ("symbol", field("string", "list item and button: an SF Symbol name.")),
                 ("badge", field("string", "list item: a short pill on the right.")),
-                ("height", field("number", "html: pixel height of the frame, default 220.")),
+                ("height", field("number", "image: height in points — omit to keep the aspect ratio, ~96 for a sprite. html: pixel height of the frame, default 220.")),
                 ("action", objectSchema(
                     "button: what happens when it is tapped.",
                     properties: [
