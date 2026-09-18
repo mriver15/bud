@@ -17,12 +17,32 @@ public struct RequestCost: Sendable {
         public var name: String
         public var chars: Int
         public var count: Int = 1
+        /// The two halves of a tool's cost, kept apart because the fix differs.
+        ///
+        /// A prose description can be moved somewhere it is loaded only when
+        /// needed; a JSON schema cannot, because it is what the provider validates
+        /// arguments against. A total that does not say which half is which reads
+        /// as though both were removable.
+        public var descriptionChars: Int = 0
+        public var schemaChars: Int = 0
+        /// Of `schemaChars`, how much is strings rather than keys and punctuation.
+        public var schemaProseChars: Int = 0
         public var id: String { name }
 
-        public init(name: String, chars: Int, count: Int = 1) {
+        public init(
+            name: String,
+            chars: Int,
+            count: Int = 1,
+            descriptionChars: Int = 0,
+            schemaChars: Int = 0,
+            schemaProseChars: Int = 0
+        ) {
             self.name = name
             self.chars = chars
             self.count = count
+            self.descriptionChars = descriptionChars
+            self.schemaChars = schemaChars
+            self.schemaProseChars = schemaProseChars
         }
     }
 
@@ -33,6 +53,14 @@ public struct RequestCost: Sendable {
     public var toolChars = 0
     public var toolCount = 0
     public var heaviestTools: [Entry] = []
+    /// How much of the tool block is string content rather than JSON structure.
+    ///
+    /// The distinction is the whole question for a tool like `render_ui`: prose
+    /// inside a schema is documentation and can be moved somewhere it is loaded
+    /// only when needed, while keys, types and enum lists cannot — they are what
+    /// the provider validates arguments against, and a model that has not seen
+    /// them writes arguments that fail.
+    public var toolProseChars: Int = 0
     /// MCP tools summed by the server half of `<server>__<tool>`.
     public var servers: [Entry] = []
 
@@ -71,8 +99,15 @@ public enum RequestMeasurer {
         measured.reserveCapacity(tools.count)
         for tool in tools {
             let chars = tool.openAIToolDefinition.encodedString().count
-            measured.append(RequestCost.Entry(name: tool.name, chars: chars))
+            measured.append(RequestCost.Entry(
+                name: tool.name,
+                chars: chars,
+                descriptionChars: tool.description.count,
+                schemaChars: tool.schema.encodedString().count,
+                schemaProseChars: tool.schema.stringContentLength
+            ))
             cost.toolChars += chars
+            cost.toolProseChars += tool.description.count + tool.schema.stringContentLength
         }
         cost.heaviestTools = Array(measured.sorted { $0.chars > $1.chars }.prefix(10))
 
@@ -202,10 +237,18 @@ public enum RequestMeasureCLI {
             }
         }
 
+        out += "\n  of \(BudFormat.count(cost.toolChars)) characters of tools, "
+        out += "\(BudFormat.count(cost.toolProseChars)) are prose — the rest is structure\n"
+
         out += "\nHeaviest tools\n"
         for tool in cost.heaviestTools {
             out += "  \(tool.name.padding(toLength: 40, withPad: " ", startingAt: 0))"
-            out += "\(BudFormat.count(tool.chars))\n"
+            out += "\(BudFormat.count(tool.chars).padding(toLength: 9, withPad: " ", startingAt: 0))"
+            out += "  prose \(BudFormat.count(tool.descriptionChars))"
+            out += " · schema \(BudFormat.count(tool.schemaChars))"
+            // What the schema would cost if its documentation moved out of it.
+            let skeleton = tool.schemaChars - tool.schemaProseChars
+            out += " (skeleton \(BudFormat.count(skeleton)))\n"
         }
 
         let ready = mcp.servers.filter { mcp.statuses[$0.id]?.state == .ready }.count
