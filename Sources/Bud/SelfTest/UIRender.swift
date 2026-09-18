@@ -404,6 +404,54 @@ public enum UIRender {
             into: &written
         )
 
+        // MARK: A team, looked up
+
+        // The whole story in one picture: nothing below knows a single URL. Six
+        // names go in, six pictures come back, and the grid is built out of what
+        // came back. The species artwork is the article's own lead image, which is
+        // what a filename search would never have found.
+        let looked = Deferred<[String: FoundImage]>()
+        let lookedFor = ["Blaziken", "Garchomp", "Rotom", "Corviknight", "Amoonguss", "Kingambit"]
+        Task {
+            let found = await ImageSearch.find(lookedFor)
+            looked.value = Dictionary(found.map { ($0.query, $0) }, uniquingKeysWith: { first, _ in first })
+        }
+        runLoop(20.0)
+
+        let found = looked.value ?? [:]
+        let foundTiles: [JSONValue] = foundTilesFrom(lookedFor, found)
+        let foundSpec: JSONValue = .object([
+            "title": .string("Team, looked up"),
+            "components": .array([
+                .object([
+                    "type": .string("grid"),
+                    "columns": .number(3),
+                    "children": .array(foundTiles),
+                ]),
+                .object([
+                    "type": .string("callout"),
+                    "kind": .string("info"),
+                    "title": .string("Where these came from"),
+                    "value": .string(
+                        lookedFor.compactMap { found[$0] }
+                            .map { "\($0.title) — \($0.credit ?? "unstated")" }
+                            .joined(separator: " · ")
+                    ),
+                ]),
+            ]),
+        ])
+        emit(
+            "looked-up",
+            GenerativeUIView(spec: foundSpec, onAction: { _ in }, onPrompt: { _ in })
+                .padding(Bud.Space.md)
+                .frame(width: Bud.contentMeasure)
+                .background(Color.black.opacity(0.30)),
+            width: Bud.contentMeasure,
+            height: 620,
+            directory: directory,
+            into: &written
+        )
+
         // MARK: Skills
 
         emit(
@@ -545,6 +593,42 @@ public enum UIRender {
     }
 
     // MARK: - Capture
+
+    /// The tile a looked-up picture becomes, or a note that nothing was found —
+    /// an empty card is a worse answer than one that says so.
+    @MainActor
+    private static func foundTilesFrom(_ names: [String], _ found: [String: FoundImage]) -> [JSONValue] {
+        names.map { name in
+            let image = found[name]
+            var children: [JSONValue] = []
+            if let image {
+                children.append(.object([
+                    "type": .string("image"),
+                    "url": .string(image.url),
+                    "alt": .string(name),
+                    "width": .number(96),
+                    "height": .number(96),
+                    "radius": .number(10),
+                ]))
+                children.append(.object([
+                    "type": .string("text"),
+                    "value": .string((image.source == .article ? "the article · " : "a match on the words · ") + image.title),
+                    "style": .string("caption"),
+                ]))
+            } else {
+                children.append(.object([
+                    "type": .string("text"),
+                    "value": .string("Nothing found."),
+                    "style": .string("caption"),
+                ]))
+            }
+            return .object([
+                "type": .string("card"),
+                "title": .string(name),
+                "children": .array(children),
+            ])
+        }
+    }
 
     private static func emit<V: View>(
         _ name: String,

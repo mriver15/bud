@@ -12,6 +12,65 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 0.3.2
+
+### A picture, when nothing else has one
+
+Bud could already draw an image in a generated surface, but only if something else
+had produced one. Ask for a team and you get six names, a tidy grid, and no
+pictures — and the answer to that is not "write an MCP server that returns
+sprites", because the same hole appears for a bird, a city, a product or a diagram.
+
+`find_image` fills it. One thing, or a whole set in a single call:
+
+```
+find_image {"queries": ["Blaziken", "Garchomp", "Rotom", "Corviknight"]}
+```
+
+Wikipedia answers first, so anything with an article comes back as its own lead
+image — which is what a team sheet, a gallery of places or a product comparison
+actually needs, and what a search over filenames would never find. Anything else
+falls back to a search of Wikimedia Commons. Both are keyless, and every result
+carries the page it came from and its licence where the source states one.
+
+**The results say which kind they are.** The strongest answer is *the article for
+the thing*; the fallback is *a match on the words*, which is a different claim and
+sometimes a photograph of somebody in a costume. The model choosing between them
+is told which it is holding, because a surface showing the wrong picture is worse
+than one showing none.
+
+An MCP server returning images directly is unchanged: those render under the tool
+row and nothing is looked up.
+
+### Three bugs, all found by rendering it
+
+**The Pokémon logo, four times over.** Rendered as a team, four of six cards showed
+the generic Pokémon logo. The summary endpoint follows redirects and does not say
+it did: asked for "Rotom" it answers with *List of generation IV Pokémon*, whose
+lead image is the logo. A standard page, a real picture, an answer to a question
+nobody asked. The resolved title now has to be the title asked for — a parenthetical
+is still the thing ("Rotom (Pokémon)"), a different subject is not.
+
+**Multi-word lookups returned nothing.** `URL(string:)` re-encodes an already
+encoded `%`, so `sunset over mountains` was being searched for as the literal text
+`sunset%2520over%2520mountains`. Single words have no space, which is why only
+phrases failed. Both endpoints are composed with `URLComponents` now.
+
+**The results came back in a random order.** `pages` is a JSON object and objects
+have no order, so "the first result" was whatever the dictionary felt like. The
+response carries the search rank on every page; that is the order now.
+
+A fourth, smaller one: a query that found nothing was dropped from the answer
+silently, which is what kept the encoding bug invisible.
+
+### Also
+
+An offline suite for the reading — the response shapes that are not an article,
+the ranks, the licence and address handling — and live checks that ask Wikipedia
+for a Blaziken and render what comes back.
+
+---
+
 ## Bud 0.3.1
 
 ### Images you can lay out

@@ -18,6 +18,10 @@ public final class GenUIToolProvider: ToolProvider {
 
     public init() {}
 
+    /// The picture lookup, which lives here rather than in a provider of its own
+    /// because it exists for one purpose: to have something to put in an image.
+    public static let findToolName = ToolNaming.sanitize("find_image")
+
     public func toolDescriptors() async -> [ToolDescriptor] {
         [
             ToolDescriptor(
@@ -26,11 +30,21 @@ public final class GenUIToolProvider: ToolProvider {
                 schema: Self.renderUISchema,
                 providerID: providerID,
                 providerName: providerName
-            )
+            ),
+            ToolDescriptor(
+                name: Self.findToolName,
+                description: Self.findToolDescription,
+                schema: Self.findImageSchema,
+                providerID: providerID,
+                providerName: providerName
+            ),
         ]
     }
 
     public func invoke(tool: String, arguments: JSONValue, callID: String) async -> ToolResult {
+        if tool == Self.findToolName {
+            return await findImages(arguments)
+        }
         guard tool == Self.renderToolName else {
             return .error(
                 "The \(providerName) provider exposes only '\(Self.renderToolName)'; it has no tool named '\(tool)'."
@@ -111,7 +125,102 @@ extension GenUIToolProvider {
     - divider: no fields
     - button: label (required), action (required: {id, prompt?}), symbol? (SF Symbol), style? (primary|secondary|destructive); tapping sends the action to the host and, when 'prompt' is present, sends it as the user's next message
     - html: value (required: an inline HTML fragment using inline CSS or SVG; scripts never run and links are inert), height? (number, default 220)
+
+    Reach for a picture when one would carry something words cannot: a team of \
+    creatures, a set of places, a row of products, a map, a logo, a finished piece of \
+    work. Call find_image first — one call for a whole set of them — and put the URLs \
+    it returns straight into image components. A card with a picture in it reads as \
+    finished; the same card without one reads as a form.
+
+    Do not invent urls. A guessed address is a broken tile, and find_image exists so \
+    there is no reason to guess.
     """
+
+    /// Looking a picture up, for a surface that would be clearer with one.
+    private static let findToolDescription = """
+        Find an image for something, to use in render_ui. Ask for one thing or a whole set \
+        at once — six creatures is one call, not six. Wikipedia is tried first, so anything \
+        with an article (a species, a place, a person, a product) comes back as its own \
+        picture; anything else falls back to a search of Wikimedia Commons. Every result \
+        carries the page it came from and its licence where the source states one, so credit \
+        can be given.
+
+        Use this whenever a surface would read better with a picture in it: a team, a \
+        gallery of places, a product comparison, a diagram of something recognisable. Do \
+        NOT invent image URLs — a made-up URL renders as a broken tile, and a lookup is one \
+        call.
+        """
+
+    private static let findImageSchema: JSONValue = .object([
+        "type": .string("object"),
+        "properties": .object([
+            "query": field("string", "What to find a picture of."),
+            "queries": .object([
+                "type": .string("array"),
+                "description": .string(
+                    "Several things at once, up to \(ImageSearch.batchLimit). "
+                        + "Use this rather than calling repeatedly."
+                ),
+                "items": .object(["type": .string("string")]),
+            ]),
+            "per_query": field("number", "How many options each, default 3, maximum 6."),
+        ]),
+    ])
+
+    /// Best first. The result is a list of URLs the model can paste straight into
+    /// an image component, with where each came from so it can be credited.
+    private func findImages(_ arguments: JSONValue) async -> ToolResult {
+        var queries: [String] = []
+        if let one = arguments["query"]?.stringValue, !one.isEmpty { queries.append(one) }
+        queries.append(contentsOf: (arguments["queries"]?.arrayValue ?? []).compactMap(\.stringValue))
+        queries = queries.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        guard !queries.isEmpty else {
+            return .error("\(Self.findToolName) needs 'query', or 'queries' for a set of them.")
+        }
+        if queries.count > ImageSearch.batchLimit {
+            queries = Array(queries.prefix(ImageSearch.batchLimit))
+        }
+        let perQuery = min(max(Int(arguments["per_query"]?.doubleValue ?? 3), 1), 6)
+
+        let found = await ImageSearch.find(queries, perQuery: perQuery)
+        guard !found.isEmpty else {
+            return .ok("Nothing found for \(queries.map { "“\($0)”" }.joined(separator: ", ")).")
+        }
+
+        var lines: [String] = []
+        // A query that found nothing is stated, not omitted. Dropping it silently
+        // is how a broken lookup came back looking like a shorter answer.
+        for query in queries where !found.contains(where: { $0.query == query }) {
+            lines.append("")
+            lines.append("\(query): nothing found — try a plainer or more specific name.")
+        }
+        var current = ""
+        for image in found {
+            if image.query != current {
+                current = image.query
+                lines.append("")
+                lines.append("\(current):")
+            }
+            lines.append("  \(image.url)")
+            var note = "    "
+            switch image.source {
+            case .article: note += "the article for it"
+            // Said plainly, because the difference matters when the choice is
+            // between a picture of the thing and a picture of someone dressed as it.
+            case .search: note += "a match on the words — check the title before using it"
+            }
+            note += " · \(image.title)"
+            if let credit = image.credit, !credit.isEmpty { note += " · \(credit)" }
+            if let page = image.page, !page.isEmpty { note += " · \(page)" }
+            lines.append(note)
+        }
+        let header = """
+            Use these URLs directly in an image component — do not retype or shorten them. \
+            An article image is the thing itself; anything else is the closest file whose \
+            name matched, so read its title before putting it in front of someone.
+            """
+        return .ok(header + "\n" + lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines))
+    }
 
     private static let renderUISchema: JSONValue = {
         let componentItem = objectSchema(

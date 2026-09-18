@@ -57,6 +57,17 @@ model emits a declarative UI spec instead of a wall of text: cards, metrics,
 tables, charts, progress, callouts, code, images and buttons. Buttons can carry
 a follow-up prompt, so a generated surface can drive the conversation.
 
+**Pictures, without a picture source.** A surface that needs an image asks
+`find_image` for one — one thing or a whole set in a single call. Wikipedia
+answers for anything with an article, which is what a team sheet, a gallery of
+places or a product comparison actually needs; anything else falls back to a
+search of Wikimedia Commons. Both are keyless. Every result says where it came
+from and under what licence, and says whether it is *the article for the thing*
+or merely *closest file whose name matched* — because those are different
+answers, and a surface showing the wrong picture is worse than one showing none.
+An MCP server can still return images directly, in which case they render under
+the tool row and no lookup happens.
+
 **Local capabilities out of the box.** `read_file`, `write_file`, `list_files`,
 `run_shell` and `web_fetch` are built in, so Bud is useful before you connect
 anything.
@@ -280,7 +291,7 @@ Sources/Bud/
 ├── MCP/                      JSON-RPC, stdio + HTTP transports, manager
 ├── Marketplace/              registry client, store, browser UI
 ├── Subagents/                concurrent supervisor + roster UI
-├── GenUI/                    UI spec language, renderer, render_ui tool
+├── GenUI/                    UI spec language, renderer, render_ui + find_image
 ├── UI/                       glass design system, chat, settings, panel
 └── SelfTest/                 offline assertion suite (`--self-test`)
 ```
