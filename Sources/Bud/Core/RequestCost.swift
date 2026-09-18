@@ -50,6 +50,12 @@ public struct RequestCost: Sendable {
     public var systemChars = 0
     public var liveContextChars = 0
     public var notesChars = 0
+    /// The skill catalogue, which rides in the system prompt.
+    ///
+    /// Counted separately because it was not counted at all: a request with twenty
+    /// skills installed carries roughly ten thousand characters that this report
+    /// said nothing about, and the figures it did give read as the whole cost.
+    public var skillChars = 0
     public var toolChars = 0
     public var toolCount = 0
     public var heaviestTools: [Entry] = []
@@ -65,7 +71,7 @@ public struct RequestCost: Sendable {
     public var servers: [Entry] = []
 
     public var totalChars: Int {
-        modelChars + systemChars + liveContextChars + notesChars + toolChars
+        modelChars + systemChars + liveContextChars + notesChars + skillChars + toolChars
     }
 
     /// Deliberately crude, and named so it is not mistaken for billing. No
@@ -86,13 +92,15 @@ public enum RequestMeasurer {
         config: BudConfig,
         tools: [ToolDescriptor],
         notes: String,
-        liveContext: String
+        liveContext: String,
+        skills: String = ""
     ) -> RequestCost {
         var cost = RequestCost()
         cost.modelChars = config.model.count
         cost.systemChars = config.systemPrompt.count
         cost.liveContextChars = liveContext.count
         cost.notesChars = notes.isEmpty ? 0 : notes.count
+        cost.skillChars = skills.isEmpty ? 0 : skills.count
         cost.toolCount = tools.count
 
         var measured: [RequestCost.Entry] = []
@@ -166,7 +174,8 @@ public enum RequestMeasureCLI {
             config: config,
             tools: tools,
             notes: BudStore.lessonContext(),
-            liveContext: liveContextSample(config: config)
+            liveContext: liveContextSample(config: config),
+            skills: SkillContext.prompt()
         )
 
         if let index = arguments.firstIndex(of: "--dump-tool"),
@@ -209,6 +218,9 @@ public enum RequestMeasureCLI {
         var out = "\nRequest cost — what every message carries before you type anything\n\n"
         out += line("system prompt", cost.systemChars)
         out += line("live context", cost.liveContextChars, "time, model, reasoning effort")
+        if cost.skillChars > 0 {
+            out += line("skill catalogue", cost.skillChars, "in the instructions, one line per skill")
+        }
         out += line(
             "notes",
             cost.notesChars,
