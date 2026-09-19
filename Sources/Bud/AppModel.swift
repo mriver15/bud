@@ -164,18 +164,42 @@ public final class AppModel {
     /// because agreeing once mid-task is not the same act as setting a preference.
     private var sessionApprovedTools: Set<String> = []
 
+    /// One tool, allowed inside one directory, for the rest of this session.
+    ///
+    /// Keyed by tool *and* directory so a write to `~/Projects/foo` being allowed
+    /// does not also clear the way for a shell command in `~` — a different class,
+    /// and a different place. In memory like the session scope, because it is a
+    /// working-set decision ("this folder is where I am working now"), not a
+    /// standing policy.
+    private struct DirectoryApproval: Hashable {
+        let tool: String
+        let directory: String
+    }
+
+    private var directoryApprovedTools: Set<DirectoryApproval> = []
+
     /// Asks before a tool that changes the machine.
     ///
     /// Called from the tool, not from the UI, so a subagent's calls are gated too —
     /// a subagent runs in its own context but on the same machine.
     public func requestConfirmation(_ request: ToolConfirmation) async -> ToolConfirmation.Decision {
         guard config.confirmDangerousTools else { return .allow }
-        if sessionApprovedTools.contains(request.tool) { return .allow }
+        if isApproved(request) { return .allow }
 
         return await withCheckedContinuation { continuation in
             queuedConfirmations.append((request, continuation))
             presentNextConfirmation()
         }
+    }
+
+    /// Whether a session- or directory-scoped approval already covers this
+    /// request, so it can run without being put on screen.
+    private func isApproved(_ request: ToolConfirmation) -> Bool {
+        if sessionApprovedTools.contains(request.tool) { return true }
+        guard let directory = request.scopeDirectory else { return false }
+        return directoryApprovedTools.contains(
+            DirectoryApproval(tool: request.tool, directory: directory)
+        )
     }
 
     /// Answers the request on screen.
@@ -186,8 +210,17 @@ public final class AppModel {
     public func answerConfirmation(_ decision: ToolConfirmation.Decision) {
         guard !queuedConfirmations.isEmpty else { return }
         let (request, continuation) = queuedConfirmations.removeFirst()
-        if decision == .allowForSession {
+        switch decision {
+        case .allowForSession:
             sessionApprovedTools.insert(request.tool)
+        case .allowForDirectory:
+            if let directory = request.scopeDirectory {
+                directoryApprovedTools.insert(
+                    DirectoryApproval(tool: request.tool, directory: directory)
+                )
+            }
+        case .allow, .deny:
+            break
         }
         pendingConfirmation = nil
         continuation.resume(returning: decision)
@@ -200,7 +233,7 @@ public final class AppModel {
         guard pendingConfirmation == nil else { return }
 
         while let (request, continuation) = queuedConfirmations.first {
-            if sessionApprovedTools.contains(request.tool) {
+            if isApproved(request) {
                 queuedConfirmations.removeFirst()
                 continuation.resume(returning: .allow)
                 continue
@@ -296,6 +329,14 @@ public final class AppModel {
             (SkillStore.installed(), self?.mcp.servers ?? [])
         }
         agents.refresh()
+        // MCP mutations ask through the same gate as native tools. The manager
+        // holds the closure rather than reaching for the model, for the same
+        // reason the native provider does: it knows nothing about the panel.
+        mcp.confirm = { [weak self] request in
+            guard let self else { return .deny }
+            return await self.requestConfirmation(request)
+        }
+
         let providers: [any ToolProvider] = [
             NativeToolsProvider(confirm: { [weak self] request in
                 // No model means no panel and nobody to ask. An unasked question

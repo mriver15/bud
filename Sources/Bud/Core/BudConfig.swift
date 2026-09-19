@@ -129,6 +129,13 @@ public struct BudConfig: Sendable, Codable, Hashable {
     /// 120,000 characters is about 30,000 tokens: comfortably more than the whole
     /// request prefix, and small enough to leave a 64k window room to think.
     public var historyBudgetChars: Int
+    /// Whether the first-run onboarding has been finished or skipped.
+    ///
+    /// False on a fresh install so the panel can walk a new user from "nothing
+    /// configured" to a first response. Set once by the onboarding sheet and
+    /// persisted, so it never comes back once the user has connected a provider
+    /// or chosen to set one up later.
+    public var hasCompletedOnboarding: Bool
 
     // MARK: Updates
 
@@ -237,6 +244,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         confirmDangerousTools: Bool = true,
         compactSchemas: Bool = false,
         historyBudgetChars: Int = 120_000,
+        hasCompletedOnboarding: Bool = false,
         updateRepo: String = BudConfig.defaultUpdateRepo,
         updateFeedURL: String = "",
         updateToken: String = "",
@@ -260,6 +268,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         self.confirmDangerousTools = confirmDangerousTools
         self.compactSchemas = compactSchemas
         self.historyBudgetChars = historyBudgetChars
+        self.hasCompletedOnboarding = hasCompletedOnboarding
         self.updateRepo = updateRepo
         self.updateFeedURL = updateFeedURL
         self.updateToken = updateToken
@@ -384,6 +393,21 @@ public struct BudConfig: Sendable, Codable, Hashable {
     /// True when the custom provider is selected but has no endpoint to call.
     public var customProviderNeedsBaseURL: Bool {
         activeProvider.isCustom && baseURL.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// Whether a fresh install has nothing to talk to yet.
+    ///
+    /// True when no provider key has been stored anywhere and no local runtime is
+    /// reachable. Both matter: a stored key means the user already configured a
+    /// provider, and a reachable local runtime answers on localhost with no key at
+    /// all — either one means the panel can already send a first message without
+    /// walking through onboarding.
+    public var needsProviderOnboarding: Bool {
+        let hasKey = providerKeys.values.contains {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        if hasKey { return false }
+        return !LocalRuntimeDetector.hasReachableRuntime
     }
 
     /// The first thing standing between the user and a working request, or nil
@@ -534,6 +558,7 @@ public enum BudConfigLoader {
         if let v = stored.confirmDangerousTools { config.confirmDangerousTools = v }
         if let v = stored.compactSchemas { config.compactSchemas = v }
         if let v = stored.historyBudgetChars { config.historyBudgetChars = v }
+        if let v = stored.hasCompletedOnboarding { config.hasCompletedOnboarding = v }
         return config
     }
 
@@ -732,6 +757,7 @@ public enum BudConfigLoader {
         public var confirmDangerousTools: Bool?
         public var compactSchemas: Bool?
         public var historyBudgetChars: Int?
+        public var hasCompletedOnboarding: Bool?
 
         /// The single-provider shape Bud used before it supported more than
         /// DeepSeek. Read once and folded into `providerKeys`, never written.
@@ -775,6 +801,10 @@ public enum BudConfigLoader {
             // install that never turned it on.
             self.compactSchemas = config.compactSchemas ? true : nil
             self.historyBudgetChars = config.historyBudgetChars
+            // Left out when false, like `compactSchemas`: the default is what a
+            // fresh install already is, and the flag is only written once the
+            // user has actually finished or skipped onboarding.
+            self.hasCompletedOnboarding = config.hasCompletedOnboarding ? true : nil
         }
 
         public init(
@@ -800,6 +830,7 @@ public enum BudConfigLoader {
             allowParallelSubagents: Int? = nil,
             confirmDangerousTools: Bool? = nil,
             compactSchemas: Bool? = nil,
+            hasCompletedOnboarding: Bool? = nil,
             apiKey: String? = nil,
             baseURL: String? = nil
         ) {
@@ -824,6 +855,7 @@ public enum BudConfigLoader {
             self.allowParallelSubagents = allowParallelSubagents
             self.confirmDangerousTools = confirmDangerousTools
             self.compactSchemas = compactSchemas
+            self.hasCompletedOnboarding = hasCompletedOnboarding
             self.apiKey = apiKey
             self.baseURL = baseURL
         }

@@ -1,5 +1,51 @@
 import Foundation
 
+/// The class of thing a tool wants to do to the machine or the world, from least
+/// to most consequential.
+///
+/// The class is what the dialog labels, and what decides which scopes it may
+/// offer. A read and a write are not the same decision: the first is about
+/// showing something the user could already see, the second is about destroying
+/// something that already exists. Keeping them separate is what lets the dialog
+/// say "replace" for a file, "run" for a command, and "change" for an MCP server
+/// without inventing a new surface for each.
+public enum ToolRisk: String, Sendable, Equatable, CaseIterable {
+    /// Reading a local file. Never confirmed — the user could already read it.
+    case read
+    /// Reading through a provider (an MCP server, a page fetch). Attributed in
+    /// the transcript rather than confirmed.
+    case externalRead
+    /// Writing a file the user owns. Confirmed only when it replaces something.
+    case localWrite
+    /// Running a shell command. Always confirmed while the gate is on.
+    case execution
+    /// A mutation through a provider — an MCP server changing something outside
+    /// this machine. Confirmed when the server asks for it.
+    case externalMutation
+
+    /// The class, as the dialog labels it.
+    public var label: String {
+        switch self {
+        case .read: return "Read"
+        case .externalRead: return "External read"
+        case .localWrite: return "Local write"
+        case .execution: return "Execution"
+        case .externalMutation: return "External mutation"
+        }
+    }
+
+    /// The symbol shown beside the headline, in the same family the panel uses.
+    public var symbol: String {
+        switch self {
+        case .read: return "doc.text.magnifyingglass"
+        case .externalRead: return "globe"
+        case .localWrite: return "square.and.pencil"
+        case .execution: return "terminal"
+        case .externalMutation: return "arrow.up.forward.square"
+        }
+    }
+}
+
 /// One thing the agent wants to do to the machine, waiting for a person to agree
 /// to it.
 ///
@@ -10,10 +56,10 @@ import Foundation
 /// cost of an injection; this is the part that does not depend on the model
 /// noticing.
 ///
-/// Only the two tools that change the machine ask. Reading a file the user can
-/// already read, listing a directory, or fetching a page is not a decision
-/// somebody needs to make every time, and a confirmation that appears constantly
-/// is one that gets dismissed without being read.
+/// Only the tools that change things ask. Reading a file the user can already
+/// read, listing a directory, or fetching a page is not a decision somebody needs
+/// to make every time, and a confirmation that appears constantly is one that
+/// gets dismissed without being read.
 public struct ToolConfirmation: Identifiable, Sendable, Equatable {
 
     /// What the person decided.
@@ -27,6 +73,10 @@ public struct ToolConfirmation: Identifiable, Sendable, Equatable {
         /// standing preference forever. The setting in Settings is how that is
         /// expressed, and it is a different click in a different place.
         case allowForSession
+        /// Run it, and everything else this tool is asked to do inside the same
+        /// directory, until Bud quits. Offered only where a directory is in scope:
+        /// a write's parent folder, a command's working directory.
+        case allowForDirectory
         /// Do not run it. The tool returns this to the model as a refusal.
         case deny
 
@@ -48,6 +98,17 @@ public struct ToolConfirmation: Identifiable, Sendable, Equatable {
     /// Whether `detail` is a shell command. A command is shown verbatim; a path is
     /// shown as the absolute path it will actually resolve to.
     public let isCommand: Bool
+    /// The class of thing being asked about, shown as a label and used to decide
+    /// which scopes the dialog may offer.
+    public let risk: ToolRisk
+    /// Whether this write replaces a file that already exists. A new file runs
+    /// without asking; a replacement is a decision because it destroys something.
+    public let overwrites: Bool
+    /// The size, in bytes, of the file being replaced, when `overwrites`.
+    public let overwrittenBytes: Int?
+    /// The normalised directory an `.allowForDirectory` covers, when the class
+    /// has one — a write's parent folder or a command's working directory.
+    public let scopeDirectory: String?
 
     public init(
         id: UUID = UUID(),
@@ -56,7 +117,11 @@ public struct ToolConfirmation: Identifiable, Sendable, Equatable {
         detail: String,
         note: String? = nil,
         preview: String? = nil,
-        isCommand: Bool
+        isCommand: Bool,
+        risk: ToolRisk = .execution,
+        overwrites: Bool = false,
+        overwrittenBytes: Int? = nil,
+        scopeDirectory: String? = nil
     ) {
         self.id = id
         self.tool = tool
@@ -65,6 +130,10 @@ public struct ToolConfirmation: Identifiable, Sendable, Equatable {
         self.note = note
         self.preview = preview
         self.isCommand = isCommand
+        self.risk = risk
+        self.overwrites = overwrites
+        self.overwrittenBytes = overwrittenBytes
+        self.scopeDirectory = scopeDirectory
     }
 
     /// How much of a file's content to show. Enough to recognise what is being
@@ -92,24 +161,58 @@ public struct ToolConfirmation: Identifiable, Sendable, Equatable {
                 headline: "Run this command?",
                 detail: command,
                 note: cwd.map { "in \(expandingTilde($0))" },
-                isCommand: true
+                isCommand: true,
+                risk: .execution,
+                scopeDirectory: normalizedDirectory(expandingTilde(cwd ?? "~"))
             )
 
         case "write_file":
             guard let raw = arguments["path"]?.stringValue else { return nil }
             let content = arguments["content"]?.stringValue ?? ""
+            let path = expandingTilde(raw)
+            // A new file runs without asking; only a replacement is a decision
+            // somebody has to make, because it is the one thing that destroys
+            // content that already exists.
+            guard let size = existingSize(atPath: path) else { return nil }
             return ToolConfirmation(
                 tool: tool,
-                headline: "Write this file?",
-                detail: expandingTilde(raw),
-                note: content.isEmpty ? "empty file" : "\(content.count) characters",
+                headline: "Replace this file?",
+                detail: path,
+                note: sizeText(size),
                 preview: preview(of: content),
-                isCommand: false
+                isCommand: false,
+                risk: .localWrite,
+                overwrites: true,
+                overwrittenBytes: size,
+                scopeDirectory: normalizedDirectory((path as NSString).deletingLastPathComponent)
             )
 
         default:
             return nil
         }
+    }
+
+    /// The confirmation for a provider-side mutation — an MCP tool that changes
+    /// something outside this machine. Named separately from `request` because it
+    /// carries the server and the un-namespaced action, which the argument-only
+    /// native path does not have.
+    public static func externalMutation(
+        server: String,
+        action: String,
+        tool: String,
+        arguments: JSONValue
+    ) -> ToolConfirmation {
+        let args = nonEmptyArgumentsText(arguments)
+        let detail = args.isEmpty ? action : "\(action) \(args)"
+        return ToolConfirmation(
+            tool: tool,
+            headline: "Allow this change on \(server)?",
+            detail: detail,
+            note: nil,
+            preview: nil,
+            isCommand: false,
+            risk: .externalMutation
+        )
     }
 
     /// The beginning of a file, cut on a line boundary where there is one, so the
@@ -122,5 +225,98 @@ public struct ToolConfirmation: Identifiable, Sendable, Equatable {
             return String(head[head.startIndex..<lastBreak])
         }
         return head
+    }
+
+    // MARK: - Mutation naming
+
+    /// The verbs that mean "this changes something", matched on word boundaries
+    /// of a tool's un-namespaced name. Deliberately over-inclusive: a false-
+    /// positive confirmation costs a click, a silent mutation does not.
+    private static let mutationVerbs: Set<String> = [
+        "create", "update", "delete", "remove", "write", "put", "post", "patch",
+        "push", "send", "submit", "install", "uninstall", "approve", "reject",
+        "publish", "deploy", "move", "rename", "grant", "revoke", "set",
+    ]
+
+    /// Whether an un-namespaced tool name looks like it mutates something, by
+    /// scanning for a mutation verb on a word boundary. `delete_issue`,
+    /// `delete-issue` and `deleteIssue` all match; `getDelete` matches; a
+    /// read-only `list_issues` does not.
+    public static func looksLikeMutation(_ toolName: String) -> Bool {
+        words(in: toolName).contains(where: mutationVerbs.contains)
+    }
+
+    /// Splits a name into lowercase words on non-alphanumeric boundaries and on
+    /// lower→upper transitions, so `deleteIssue` and `delete_issue` yield the
+    /// same `delete`.
+    private static func words(in name: String) -> [String] {
+        var words: [String] = []
+        var current = ""
+        var previous: Character?
+        for ch in name {
+            if ch.isLetter || ch.isNumber {
+                if let p = previous, p.isLowercase, ch.isUppercase {
+                    words.append(current)
+                    current = ""
+                }
+                current.append(ch)
+            } else if !current.isEmpty {
+                words.append(current)
+                current = ""
+            }
+            previous = ch
+        }
+        if !current.isEmpty { words.append(current) }
+        return words.map { $0.lowercased() }
+    }
+
+    // MARK: - Small pieces
+
+    /// The size in bytes of an existing file, or `nil` when nothing is there —
+    /// the one fact that separates "create" from "replace".
+    static func existingSize(atPath path: String) -> Int? {
+        guard FileManager.default.fileExists(atPath: path) else { return nil }
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path) else {
+            return nil
+        }
+        return attributes[.size] as? Int
+    }
+
+    /// A human size, in the form Finder uses — "2.4 KB", "3.1 MB".
+    static func sizeText(_ bytes: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+
+    /// Collapses `.`/`..`/repeated slashes so two spellings of one folder share
+    /// one scope key.
+    static func normalizedDirectory(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.path
+    }
+
+    /// The non-empty arguments of a call, as a single `key: value` line, so the
+    /// dialog names what is being changed without pasting an empty argument block.
+    private static func nonEmptyArgumentsText(_ arguments: JSONValue) -> String {
+        guard let object = arguments.objectValue, !object.isEmpty else { return "" }
+        let parts = object
+            .sorted { $0.key < $1.key }
+            .compactMap { (key, value) -> String? in
+                let text = argumentText(value)
+                guard !text.isEmpty else { return nil }
+                return "\(key): \(text)"
+            }
+        return parts.isEmpty ? "" : parts.joined(separator: ", ")
+    }
+
+    private static func argumentText(_ value: JSONValue) -> String {
+        switch value {
+        case .null: return ""
+        case .bool(let b): return b ? "true" : "false"
+        case .number(let d):
+            return d == d.rounded() && abs(d) < 1e15 ? String(Int64(d)) : String(d)
+        case .string(let s):
+            return s.count > 200 ? String(s.prefix(200)) + "…" : s
+        case .array, .object:
+            return value.encodedString()
+        }
     }
 }

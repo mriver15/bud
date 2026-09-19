@@ -688,6 +688,54 @@ public enum UIRender {
             into: &written
         )
 
+        // MARK: The overwrite confirmation
+        //
+        // The one confirmation that did not exist before: replacing a file is the
+        // only write that destroys content, and the dialog has to say so — plus
+        // the directory-scope button that makes a batch of edits ask once.
+
+        emit(
+            "confirm-overwrite",
+            ToolConfirmationView(
+                request: ToolConfirmation(
+                    tool: "write_file",
+                    headline: "Replace this file?",
+                    detail: "/Users/someone/Projects/bud/Sources/Bud/Core/Domain.swift",
+                    note: "1,284 bytes on disk",
+                    preview: "public struct Turn: Sendable, Identifiable {",
+                    isCommand: false,
+                    risk: .localWrite,
+                    overwrites: true,
+                    overwrittenBytes: 1_284,
+                    scopeDirectory: "/Users/someone/Projects/bud/Sources/Bud/Core"
+                ),
+                onAnswer: { _ in }
+            )
+            .padding(Bud.Space.md)
+            .frame(width: 520, height: 420)
+            .background(Color.black.opacity(0.30)),
+            width: 520,
+            height: 420,
+            directory: directory,
+            into: &written
+        )
+
+        // MARK: Onboarding
+        //
+        // Rendered for the same reason the banner is: the condition that shows it
+        // is a state the harness cannot reach through the real panel, and a flow
+        // nobody reviewed is a flow nobody should walk.
+
+        emit(
+            "onboarding",
+            OnboardingView(state: OnboardingState(model: model), onDismiss: {})
+                .frame(width: 640, height: 720),
+            width: 640,
+            height: 720,
+            directory: directory,
+            into: &written
+        )
+
         // MARK: Marketplace with live registry data
 
         emit(

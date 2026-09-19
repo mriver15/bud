@@ -9,6 +9,9 @@ import SwiftUI
 struct RootView: View {
     @Bindable var model: AppModel
     @Environment(\.openWindow) private var openWindow
+    /// The first-run flow, created once the panel's start-up work has finished
+    /// and presented only when a fresh install has nothing to talk to.
+    @BudState private var onboarding: OnboardingState?
 
     init(model: AppModel) {
         self.model = model
@@ -36,6 +39,12 @@ struct RootView: View {
             }
         }
         .animation(.easeOut(duration: 0.15), value: model.pendingConfirmation?.id)
+        // The first-run flow, over everything: a fresh install with no provider
+        // and no local runtime has to get from zero to a first response, and the
+        // panel's own empty state does not explain how.
+        .sheet(item: $onboarding) { state in
+            OnboardingView(state: state) { onboarding = nil }
+        }
         // The surface is switched from outside the header too — the menu bar's
         // history row, and anything that opens or starts a conversation — so it
         // cannot belong to the picker alone.
@@ -51,6 +60,18 @@ struct RootView: View {
                 NSApp.activate(ignoringOtherApps: true)
             }
             await model.start()
+            await prepareOnboarding()
+        }
+    }
+
+    /// Decides whether the first-run flow should appear, probing local runtimes
+    /// only when the answer is not already obvious. Runs after `start()` so the
+    /// panel is live before a fresh install is asked anything.
+    private func prepareOnboarding() async {
+        guard onboarding == nil else { return }
+        let state = OnboardingState(model: model)
+        if await state.determinePresentation() {
+            onboarding = state
         }
     }
 

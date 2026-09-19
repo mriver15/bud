@@ -12,6 +12,70 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.4.0
+
+### The first minute now works without a README
+
+A fresh install used to leave the panel greeting you with nothing configured and
+no path to configure it — the README knew how, and the app did not. First launch
+now opens **Set up Bud**: pick a local runtime (Ollama and LM Studio are probed
+and listed when they answer) or a hosted provider, paste a key, press *Test
+connection*, and finish — which sends one harmless first question so the first
+answer arrives inside the flow.
+
+What makes it trustworthy rather than a tour:
+
+- **A failed connection says which failure.** A 401 says the key was rejected;
+  a 400 blames the model id, the usual culprit; a transport error says the
+  provider is unreachable. Not one generic sentence.
+- **No key, no mystery.** It states exactly where Bud looked — config file,
+  environment, shell profile — and that a Finder launch inherits none of a
+  terminal's environment.
+- **Skip is always there** — *use Bud locally later* — and finishing stays
+  finished.
+
+### What is about to happen is labelled by its risk
+
+Every confirmation now carries a risk class: **Local write**, **Execution**, or
+**External mutation** — named in a chip on the dialog, so a "yes" is given to a
+class of action rather than to a blob.
+
+- **Replacing a file is now the only write that asks.** A new file runs; a
+  replacement asks, shows the path and the file's size on disk, and — on
+  allowance — **stashes the previous version** with a `read_stored` handle, so an
+  overwrite has an undo. A refused replacement leaves the file byte-for-byte.
+- **Scoped approvals.** The dialog gains *Allow for this directory*: a batch of
+  edits in one folder asks once, and only that folder. Session and once scopes
+  stay. A different directory still asks.
+- **Provider-side mutations confirm.** A server's create/update/delete-shaped
+  tools ask before running — naming the server, the action, and the arguments —
+  behind a per-server *Confirm mutation tools* toggle that defaults on. A false
+  positive asks a question; a false negative mutates, so the name list is
+  deliberately conservative.
+- Reading never asks. External reads keep their provider badge in the transcript.
+
+**One thing to know, because it refines an earlier choice:** `write_file` used
+to confirm *always*, per the decision made during the security pass. The spec's
+risk table says a write is only destructive when it replaces — and this release
+follows the spec, with the overwrite case (the destructive one) still gated and
+now undoable. If you want the old blanket gate back, it is a small revert; say
+the word.
+
+### Verification
+
+```
+--self-test      1031/1031   (+21: new-file-runs, refused-replacement-untouched,
+                            overwrite stash, risk classes, mutation heuristic,
+                            directory scopes, onboarding trigger and error
+                            translation)
+--verify-ui        25/25     --verify-browser   39/39    --verify-live   135/135
+```
+
+The overwrite dialog and the onboarding flow are both rendered and reviewed; the
+gate never appears in headless or scratch sessions, and `--verify-ui` proves it.
+
+---
+
 ## Bud 2.3.0
 
 ### A turn now pays only for the tools it might use

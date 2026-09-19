@@ -48,11 +48,14 @@ struct ToolConfirmationView: View {
 
     private var heading: some View {
         HStack(spacing: Bud.Space.sm) {
-            Image(systemName: request.isCommand ? "terminal" : "square.and.pencil")
+            Image(systemName: request.risk.symbol)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text(request.headline)
                 .font(Bud.Font.title)
+            // The class, not the tool: "running a command" and "writing a file"
+            // are different decisions, and the label is what keeps them apart.
+            GlassChip(request.risk.label, tint: riskTint, isActive: true)
             Spacer(minLength: 0)
             if let note = request.note {
                 Text(note)
@@ -60,6 +63,24 @@ struct ToolConfirmationView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// The class's colour, so a command reads as dangerous at a glance while a
+    /// write reads as routine.
+    private var riskTint: Color {
+        switch request.risk {
+        case .read, .externalRead: return Color.secondary
+        case .localWrite: return Bud.Palette.accent
+        case .execution: return Bud.Palette.danger
+        case .externalMutation: return Bud.Palette.warning
+        }
+    }
+
+    /// Whether the dialog may offer the directory scope. Only a class with a
+    /// meaningful directory — a write's parent, a command's working directory —
+    /// offers it; a provider-side mutation has no such place.
+    private var supportsDirectoryScope: Bool {
+        request.risk == .execution || request.risk == .localWrite
     }
 
     private var detail: some View {
@@ -96,6 +117,12 @@ struct ToolConfirmationView: View {
                 .keyboardShortcut(.cancelAction)
 
             Spacer(minLength: 0)
+
+            if supportsDirectoryScope {
+                Button("Allow for this directory") { onAnswer(.allowForDirectory) }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+            }
 
             Button("Allow for session") { onAnswer(.allowForSession) }
                 .buttonStyle(.plain)

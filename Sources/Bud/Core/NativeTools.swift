@@ -462,6 +462,18 @@ public nonisolated struct NativeToolsProvider: ToolProvider {
         }
         let path = expand(raw)
         let url = URL(fileURLWithPath: path)
+        // A replacement is the one write that destroys something, so the previous
+        // content is kept under a handle before it is gone. Undo, where it is
+        // feasible, is reading that handle back and writing it again. A file too
+        // large to keep — or one that is not UTF-8 text — is simply replaced,
+        // without pretending there is a copy to go back to.
+        var previous: String?
+        if let size = ToolConfirmation.existingSize(atPath: path),
+           size <= StoredResults.maxStoredBytes,
+           let data = try? Data(contentsOf: url),
+           let text = String(data: data, encoding: .utf8) {
+            previous = text
+        }
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -472,7 +484,11 @@ public nonisolated struct NativeToolsProvider: ToolProvider {
             throw ToolFailure(message: "Could not write \(path): \(error.localizedDescription)")
         }
         let lines = content.components(separatedBy: "\n").count
-        return .ok("Wrote \(content.utf8.count) bytes (\(lines) lines) to \(path).")
+        var message = "Wrote \(content.utf8.count) bytes (\(lines) lines) to \(path)."
+        if let previous, let handle = StoredResults.store(previous) {
+            message += "\n[previous version stored as \(handle) — read_stored to restore.]"
+        }
+        return .ok(message)
     }
 
     // MARK: - list_files

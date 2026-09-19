@@ -13,6 +13,14 @@ public final class MCPManager: MCPManaging, ToolProvider {
     public let providerID = "mcp"
     public let providerName = "MCP"
 
+    /// Asked before an external mutation, and answered by whatever is holding the
+    /// panel. `nil` means there is nobody to ask — the measurement CLIs, and
+    /// checks that are exercising the tool rather than the gate — and the tool
+    /// runs.
+    public typealias Confirmation = @Sendable (ToolConfirmation) async -> ToolConfirmation.Decision
+
+    public var confirm: Confirmation?
+
     public private(set) var servers: [MCPServerConfig] = []
     public private(set) var statuses: [String: MCPServerStatus] = [:]
     public private(set) var allTools: [ToolDescriptor] = []
@@ -243,6 +251,9 @@ public final class MCPManager: MCPManaging, ToolProvider {
         guard let client = clients[route.serverID] else {
             return .error("MCP server '\(route.serverName)' is not connected. Reconnect it in Settings.")
         }
+        if let refusal = await refusalUnlessConfirmed(route: route, arguments: arguments) {
+            return refusal
+        }
         do {
             let result = try await client.callTool(name: route.tool, arguments: arguments)
             appendLog(
@@ -264,6 +275,27 @@ public final class MCPManager: MCPManaging, ToolProvider {
             }
             return .error("MCP tool '\(tool)' failed: \(detail)")
         }
+    }
+
+    /// Asks before an external mutation, when there is anyone to ask, the server
+    /// has asked to be asked, and the tool's un-namespaced name looks like it
+    /// changes something. Returns a refusal to hand back to the model, or `nil`
+    /// to carry on.
+    private func refusalUnlessConfirmed(route: Route, arguments: JSONValue) async -> ToolResult? {
+        guard let confirm else { return nil }
+        guard let config = servers.first(where: { $0.id == route.serverID }),
+              config.confirmMutations,
+              ToolConfirmation.looksLikeMutation(route.tool)
+        else { return nil }
+
+        let request = ToolConfirmation.externalMutation(
+            server: config.name,
+            action: route.tool,
+            tool: ToolNaming.namespaced(server: config.name, tool: route.tool),
+            arguments: arguments
+        )
+        let decision = await confirm(request)
+        return decision.isAllowed ? nil : NativeToolsProvider.refusal(for: request)
     }
 
     // MARK: Diagnostics

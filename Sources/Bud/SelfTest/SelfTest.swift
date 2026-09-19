@@ -104,6 +104,7 @@ public enum BudSelfTest {
             toolProvenance,
             budLinks,
             toolConfirmation,
+            onboarding,
             toolPlanning,
             descriptorCompaction,
             historyCompaction,
@@ -168,8 +169,19 @@ public enum BudSelfTest {
             "...which says it was not run, so the model has nothing to report",
             refused.text.lowercased().contains("not run")
         )
+        // A new file is not a decision: it runs even under a deny-gated provider,
+        // which proves no confirmation was asked for. Replacing one is the
+        // decision — refused, the file is untouched, asserted on the bytes.
         _ = await denying.invoke(tool: "write_file", arguments: write, callID: "2")
-        c.check("a refused write leaves no file", !FileManager.default.fileExists(atPath: wrote))
+        c.check("a new file needs no confirmation and lands",
+                FileManager.default.fileExists(atPath: wrote))
+
+        let replaced = scratch.appendingPathComponent("replaced.txt").path
+        try? "original".write(toFile: replaced, atomically: true, encoding: .utf8)
+        let replaceArgs: JSONValue = .object(["path": .string(replaced), "content": .string("new")])
+        _ = await denying.invoke(tool: "write_file", arguments: replaceArgs, callID: "2b")
+        c.equal("a refused replacement leaves the file byte-for-byte",
+                try? String(contentsOfFile: replaced, encoding: .utf8), "original")
 
         // Allowed.
         let allowing = NativeToolsProvider(confirm: { _ in .allow })
@@ -177,6 +189,16 @@ public enum BudSelfTest {
         c.check("an allowed command runs", FileManager.default.fileExists(atPath: ran))
         _ = await allowing.invoke(tool: "write_file", arguments: write, callID: "4")
         c.check("an allowed write lands", FileManager.default.fileExists(atPath: wrote))
+
+        // An allowed replacement stashes the previous version, so an overwrite has
+        // an undo the model can reach.
+        let replaceResult = await allowing.invoke(tool: "write_file", arguments: replaceArgs, callID: "4b")
+        c.equal("an allowed replacement writes the new content",
+                try? String(contentsOfFile: replaced, encoding: .utf8), "new")
+        let stashHandle = replaceResult.text
+            .split(separator: " ").first { $0.hasPrefix("store_") }.map(String.init)
+        c.check("...and stashes the previous version where it can be restored",
+                stashHandle.map { StoredResults.read(handle: $0) == "original" } == true)
 
         // Nobody to ask — the measurement CLIs build the provider without a gate,
         // and those must keep working.
@@ -228,15 +250,36 @@ public enum BudSelfTest {
         c.check("...and it is marked as a command", shellRequest?.isCommand == true)
         c.equal("...with the directory it will run in", shellRequest?.note, "in /tmp/work")
 
+        // A write confirmation exists only when the file already exists — the
+        // shape checks point at a real file, and the risk class rides along.
+        let existingFile = scratch.appendingPathComponent("notes.md").path
+        try? "hello".write(toFile: existingFile, atomically: true, encoding: .utf8)
         let writeRequest = ToolConfirmation.request(
             tool: "write_file",
-            arguments: .object(["path": .string("~/notes.md"), "content": .string("hello")]),
-            expandingTilde: { $0.replacingOccurrences(of: "~", with: "/Users/someone") }
+            arguments: .object(["path": .string(existingFile), "content": .string("hello")]),
+            expandingTilde: { $0 }
         )
         c.equal("a write shows the path it will actually resolve to",
-                writeRequest?.detail, "/Users/someone/notes.md")
+                writeRequest?.detail, existingFile)
         c.check("...and is not marked as a command", writeRequest?.isCommand == false)
-        c.equal("...and says how much is being written", writeRequest?.note, "5 characters")
+        c.equal("...and names the risk class for what it is", writeRequest?.risk, .localWrite)
+        c.check("...and says the existing file's size", writeRequest?.note?.isEmpty == false)
+        c.nilValue("a write that creates rather than replaces never asks", ToolConfirmation.request(
+            tool: "write_file",
+            arguments: .object([
+                "path": .string(scratch.appendingPathComponent("brand-new.txt").path),
+                "content": .string("hi"),
+            ]),
+            expandingTilde: { $0 }
+        ))
+
+        // Risk classes, and the mutation-name heuristic that gates provider-side
+        // changes. A false positive asks a question; a false negative mutates.
+        c.equal("a shell command is execution risk", shellRequest?.risk, .execution)
+        c.check("create_record is a mutation", ToolConfirmation.looksLikeMutation("create_record"))
+        c.check("send_message is a mutation", ToolConfirmation.looksLikeMutation("send_message"))
+        c.check("...but read_records is not", !ToolConfirmation.looksLikeMutation("read_records"))
+        c.check("...and get_status is not", !ToolConfirmation.looksLikeMutation("get_status"))
 
         c.nilValue("a read never needs a confirmation", ToolConfirmation.request(
             tool: "read_file",
@@ -307,6 +350,52 @@ public enum BudSelfTest {
         ))
         c.equal("a session approval answers the next call without asking", afterwards, .allow)
         c.nilValue("...and the second one was never put on screen", model.pendingConfirmation)
+
+        // A directory approval covers what follows in that directory, and nothing
+        // elsewhere — the scoped middle between once and the whole session.
+        let dir = scratch.appendingPathComponent("scoped", isDirectory: true).path
+        let scoped = AppModel()
+        scoped.config.confirmDangerousTools = true
+        func scopedWrite(_ name: String) -> ToolConfirmation {
+            ToolConfirmation(
+                tool: "write_file",
+                headline: "Replace this file?",
+                detail: dir + "/" + name,
+                note: nil,
+                preview: nil,
+                isCommand: false,
+                risk: .localWrite,
+                overwrites: true,
+                overwrittenBytes: 3,
+                scopeDirectory: dir
+            )
+        }
+        let firstScoped = Task { await scoped.requestConfirmation(scopedWrite("a.txt")) }
+        _ = await settle { scoped.pendingConfirmation != nil }
+        scoped.answerConfirmation(.allowForDirectory)
+        c.equal("the directory approval answers the one that asked",
+                await firstScoped.value, .allowForDirectory)
+        let secondScoped = await scoped.requestConfirmation(scopedWrite("b.txt"))
+        c.equal("...and covers the next write in that directory", secondScoped, .allow)
+        c.nilValue("...without putting it on screen", scoped.pendingConfirmation)
+        let elsewhere = ToolConfirmation(
+            tool: "write_file",
+            headline: "Replace this file?",
+            detail: scratch.appendingPathComponent("elsewhere.txt").path,
+            note: nil,
+            preview: nil,
+            isCommand: false,
+            risk: .localWrite,
+            overwrites: true,
+            overwrittenBytes: 3,
+            scopeDirectory: scratch.path
+        )
+        let otherDir = Task { await scoped.requestConfirmation(elsewhere) }
+        _ = await settle { scoped.pendingConfirmation != nil }
+        c.check("...but a different directory still asks",
+                scoped.pendingConfirmation?.detail == elsewhere.detail)
+        scoped.answerConfirmation(.deny)
+        _ = await otherDir.value
 
         // Two at once: the second waits rather than replacing the first, which
         // would leave a tool suspended on a continuation nobody still holds.
@@ -903,6 +992,52 @@ public enum BudSelfTest {
         } else {
             c.check("the summary round-trips the archive", false)
         }
+
+        return c.report()
+    }
+
+    // MARK: First run
+
+    /// The first-run promise: onboarding appears exactly when there is no key and
+    /// no local runtime, finishing it stays finished, and a failed connection says
+    /// which of the usual failures it was.
+    @MainActor
+    static func onboarding() -> SelfTestReport {
+        let c = Checker(suite: "onboarding")
+
+        var keyless = BudConfig()
+        keyless.providerKeys = [:]
+        c.equal("a keyless config needs onboarding exactly when no local runtime answers",
+                keyless.needsProviderOnboarding, !LocalRuntimeDetector.hasReachableRuntime)
+
+        var keyed = BudConfig()
+        keyed.providerKeys = ["deepseek": "sk-test"]
+        c.check("a stored key never needs onboarding", !keyed.needsProviderOnboarding)
+
+        var done = BudConfig()
+        done.hasCompletedOnboarding = true
+        if let data = try? JSONEncoder().encode(BudConfigLoader.StoredConfig(from: done)),
+           let decoded = try? JSONDecoder().decode(BudConfigLoader.StoredConfig.self, from: data) {
+            c.check("finishing onboarding survives a save and a load",
+                    BudConfigLoader.apply(decoded, to: BudConfig()).hasCompletedOnboarding)
+        } else {
+            c.check("the onboarding flag round-trips", false)
+        }
+
+        // A failed connection names the failure, so a first-run user fixes the
+        // right thing rather than one generic sentence.
+        c.check("a rejected key is named a rejected key",
+                OnboardingState.translate(ChatBackendError.http(status: 401, body: "unauthorized"), providerName: "DeepSeek")
+                    .lowercased().contains("rejected"))
+        c.check("a malformed request blames the model id",
+                OnboardingState.translate(ChatBackendError.http(status: 400, body: "bad"), providerName: "DeepSeek")
+                    .lowercased().contains("malformed"))
+        c.check("a transport failure says the provider is unreachable",
+                OnboardingState.translate(ChatBackendError.transport("timeout"), providerName: "DeepSeek")
+                    .lowercased().contains("reach"))
+        c.check("a missing key says to paste one",
+                OnboardingState.translate(ChatBackendError.missingKey(provider: "DeepSeek"), providerName: "DeepSeek")
+                    .lowercased().contains("key"))
 
         return c.report()
     }

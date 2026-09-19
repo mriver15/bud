@@ -34,6 +34,7 @@ public struct ServerEditorView: View {
     @BudState private var enabled: Bool
     @BudState private var autoStart: Bool
     @BudState private var compactOptOut: Bool
+    @BudState private var confirmMutations: Bool
     @BudState private var hasTrimmableSchemas = false
     @BudState private var didConnect = false
     @BudState private var isConnecting = false
@@ -72,6 +73,7 @@ public struct ServerEditorView: View {
         _enabled = BudState(initialValue: config?.enabled ?? true)
         _autoStart = BudState(initialValue: config?.autoStart ?? true)
         _compactOptOut = BudState(initialValue: config?.compactOptOut ?? false)
+        _confirmMutations = BudState(initialValue: config?.confirmMutations ?? true)
     }
 
     public var body: some View {
@@ -261,6 +263,21 @@ public struct ServerEditorView: View {
                     Text(schemaOptOutCaption)
                         .font(Bud.Font.caption)
                         .foregroundStyle(.tertiary)
+
+                    Divider().opacity(0.2)
+
+                    Toggle("Confirm mutation tools", isOn: $confirmMutations)
+                        .toggleStyle(.switch)
+                    Text(
+                        confirmMutations
+                            ? "Bud asks before running tools whose names look like they change "
+                                + "something — create, delete, publish and so on — so a silent "
+                                + "change cannot slip past you."
+                            : "Bud runs this server's tools without asking, including ones that "
+                                + "change or delete things."
+                    )
+                    .font(Bud.Font.caption)
+                    .foregroundStyle(confirmMutations ? .tertiary : .secondary)
                 }
             }
         }
@@ -588,6 +605,7 @@ public struct ServerEditorView: View {
                 enabledTools: enabledTools,
                 delegated: delegated,
                 compactOptOut: compactOptOut,
+                confirmMutations: confirmMutations,
                 registryName: registryName,
                 notes: notes
             )
@@ -606,6 +624,7 @@ public struct ServerEditorView: View {
                 enabledTools: enabledTools,
                 delegated: delegated,
                 compactOptOut: compactOptOut,
+                confirmMutations: confirmMutations,
                 registryName: registryName,
                 notes: notes
             )
