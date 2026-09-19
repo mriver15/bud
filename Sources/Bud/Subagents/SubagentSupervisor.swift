@@ -41,6 +41,14 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
     /// bounds the tree; this bounds the widest part of it.
     nonisolated static let maxChildren = 4
 
+    /// The ceiling on a subagent's final message as the parent reads it. A handoff
+    /// longer than this is truncated on a line boundary before it reaches the
+    /// parent, and the suffix points at the Agents panel, which keeps the whole
+    /// run. Six thousand characters is one long, well-evidenced answer — four
+    /// sections plus real paths and line numbers fit inside it, and a parent that
+    /// folds several handoffs together is still handed digests, not novels.
+    nonisolated static let subagentOutputBudget = 6_000
+
     nonisolated public static let spawnToolName = ToolNaming.sanitize("spawn_subagents")
 
     nonisolated private static let spawnSchema: JSONValue = .object([
@@ -505,7 +513,7 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         return text
     }
 
-    private nonisolated static func systemPrompt(_ spec: SubagentSpec, agent: AgentDefinition?) -> String {
+    nonisolated static func systemPrompt(_ spec: SubagentSpec, agent: AgentDefinition?) -> String {
         var text = ""
         // The agent's own instructions come first: they are the identity, and the
         // contract below is what every workstream has in common on top of it.
@@ -521,10 +529,14 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
             Your assignment: \(spec.title)
 
             Your final message is not read by a human. It is returned verbatim to the agent that \
-            dispatched you and folded into the report the user sees. Report findings, not \
-            pleasantries: what you established, the concrete evidence (paths, line numbers, \
-            values, URLs), anything you could not determine, and what you would do next. No \
-            greeting, no restating the assignment, no asking whether to continue.
+            dispatched you and folded into the report the user sees. It is your whole deliverable, \
+            so give it exactly four short sections and nothing else — no greeting, no restating \
+            the assignment, no narrative, no asking whether to continue.
+
+            Answer — the outcome.
+            Evidence — what backs it, with provenance (paths, line numbers, values, URLs).
+            Unresolved — what is still open and why.
+            Handles — any store_ handles you were given for results too large to inline.
             """
         if spec.depth < maxDepth {
             text += """
@@ -614,16 +626,24 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
                 block += "\nerror: \(error)"
             }
             let body = run.output.trimmingCharacters(in: .whitespacesAndNewlines)
-            block += "\n" + (body.isEmpty ? "(no output)" : clipped(body, limit: 4_000))
+            block += "\n" + (body.isEmpty ? "(no output)" : boundedHandoff(body, budget: subagentOutputBudget))
             return block
         }
         .joined(separator: "\n\n")
     }
 
-    private nonisolated static func clipped(_ text: String, limit: Int) -> String {
-        guard text.count > limit else { return text }
-        let end = text.index(text.startIndex, offsetBy: limit)
-        return String(text[..<end]) + "\n…[truncated \(text.count - limit) characters]"
+    /// The parent's view of a run's final message: the whole of it up to the budget,
+    /// cut on a line boundary past that so the last finding shown is never a half
+    /// sentence, with a suffix pointing at the full record the Agents panel keeps.
+    ///
+    /// Pure and static so the boundary behaviour can be tested without a live run.
+    nonisolated static func boundedHandoff(_ text: String, budget: Int) -> String {
+        guard text.count > budget else { return text }
+        let cut = text.index(text.startIndex, offsetBy: budget)
+        var kept = String(text[..<cut])
+        if let lastBreak = kept.lastIndex(of: "\n") { kept = String(kept[..<lastBreak]) }
+        let dropped = text.count - kept.count
+        return kept + "\n\n…[\(dropped) characters not shown — the full run is in the Agents panel]"
     }
 }
 

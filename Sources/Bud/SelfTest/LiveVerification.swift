@@ -485,6 +485,10 @@ public enum BudLiveVerification {
             c.check("runtime: the finished turn knows its usage",
                     last.promptTokens != nil && last.completionTokens != nil)
             c.check("runtime: ...and how long it took", last.duration != nil)
+            // DeepSeek reports cache fields on every response, so a real round is
+            // the proof that the prefix-cache accounting reaches the transcript
+            // footer rather than stopping at the wire.
+            c.check("runtime: ...and what the provider cached", last.cachedTokens != nil)
         } else {
             c.check("runtime: a finished assistant turn exists to be measured", false)
         }

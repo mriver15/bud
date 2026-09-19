@@ -635,10 +635,11 @@ public final class AgentRuntime {
                 case .finish(let reason):
                     finishReason = reason
 
-                case .usage(let prompt, let completion, _):
+                case .usage(let prompt, let completion, let cached):
                     env.recordUsage(prompt: prompt, completion: completion)
                     turn.promptTokens = prompt
                     turn.completionTokens = completion
+                    turn.cachedTokens = cached
                 }
             }
         } catch {

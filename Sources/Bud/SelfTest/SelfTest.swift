@@ -104,6 +104,8 @@ public enum BudSelfTest {
             toolProvenance,
             budLinks,
             toolConfirmation,
+            prefixStability,
+            subagentHandoff,
             onboarding,
             toolPlanning,
             descriptorCompaction,
@@ -1038,6 +1040,77 @@ public enum BudSelfTest {
         c.check("a missing key says to paste one",
                 OnboardingState.translate(ChatBackendError.missingKey(provider: "DeepSeek"), providerName: "DeepSeek")
                     .lowercased().contains("key"))
+
+        return c.report()
+    }
+
+    // MARK: Phase 3 — the context engine's contracts
+
+    /// The prefix-stability diagnostic's promises: a same-query run is fully
+    /// stable, and the system prompt is never the volatile part.
+    static func prefixStability() -> SelfTestReport {
+        let c = Checker(suite: "stability")
+
+        let config = BudConfig()
+        let tools = [
+            ToolDescriptor(
+                name: "mock",
+                description: "A mock tool.",
+                schema: .object(["type": .string("object")]),
+                providerID: "native",
+                providerName: "Bud"
+            ),
+        ]
+
+        let same = PrefixStability.measure(
+            queryA: "What time is it?", queryB: "What time is it?", config: config, tools: tools
+        )
+        c.check("the same query changes nothing", same.blocks.allSatisfy { $0.changedChars == 0 })
+        c.check("...and reports a fully stable prefix", same.stableShare == 1.0)
+
+        let different = PrefixStability.measure(
+            queryA: "What time is it?", queryB: "Browse the web", config: config, tools: tools
+        )
+        c.check("different queries report a share in range",
+                different.stableShare >= 0 && different.stableShare <= 1)
+        c.equal("...and the system prompt is never the volatile part",
+                different.blocks.first { $0.name == "system prompt" }?.changedChars, 0)
+        c.check("...and every block accounts for its characters",
+                different.blocks.allSatisfy { $0.stableChars + $0.changedChars >= $0.stableChars })
+
+        return c.report()
+    }
+
+    /// The subagent handoff: the parent gets a bounded, structured deliverable,
+    /// and the cut is honest about what was left out and where to find it.
+    static func subagentHandoff() -> SelfTestReport {
+        let c = Checker(suite: "handoff")
+
+        let short = "Answer — done."
+        c.equal("a short handoff is untouched",
+                SubagentSupervisor.boundedHandoff(short, budget: 100), short)
+
+        let long = (1...400).map { "line \($0)" }.joined(separator: "\n")
+        let bounded = SubagentSupervisor.boundedHandoff(long, budget: 500)
+        c.check("an over-budget handoff is cut", bounded.count < long.count)
+        c.check("...and points at the full run", bounded.contains("Agents panel"))
+        let suffix = "\n\n…["
+        guard let cut = bounded.range(of: suffix).map({ bounded[..<$0.lowerBound] }) else {
+            c.check("the handoff ends with the disclosure", false)
+            return c.report()
+        }
+        c.check("...and the kept head is a line-cut prefix of the original",
+                long.hasPrefix(cut + "\n"))
+
+        // The four-section contract is the deliverable: it is what stops a child
+        // from replying with a narrative the parent then has to mine.
+        let prompt = SubagentSupervisor.systemPrompt(
+            SubagentSpec(title: "Probe", prompt: "Do a thing."),
+            agent: nil
+        )
+        for section in ["Answer", "Evidence", "Unresolved", "Handles"] {
+            c.check("the dispatch contract names \(section)", prompt.contains(section))
+        }
 
         return c.report()
     }

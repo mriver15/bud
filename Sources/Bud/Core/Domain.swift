@@ -377,6 +377,11 @@ public struct Turn: Sendable, Identifiable {
     /// written before these existed still decode.
     public var promptTokens: Int?
     public var completionTokens: Int?
+    /// Prompt tokens served from the provider's cache this turn, when the stream
+    /// reported it. Optional for the same reason as the other usage figures: an
+    /// archive written before this existed still decodes, and a backend that saw
+    /// no cache hit says nothing rather than "0".
+    public var cachedTokens: Int?
     /// Wall time of the whole turn, from its first event to its last.
     public var duration: TimeInterval?
     /// How that time broke down, where the flow can say so.
@@ -391,6 +396,7 @@ public struct Turn: Sendable, Identifiable {
         createdAt: Date = Date(),
         promptTokens: Int? = nil,
         completionTokens: Int? = nil,
+        cachedTokens: Int? = nil,
         duration: TimeInterval? = nil,
         phases: TurnPhases? = nil
     ) {
@@ -402,6 +408,7 @@ public struct Turn: Sendable, Identifiable {
         self.createdAt = createdAt
         self.promptTokens = promptTokens
         self.completionTokens = completionTokens
+        self.cachedTokens = cachedTokens
         self.duration = duration
         self.phases = phases
     }

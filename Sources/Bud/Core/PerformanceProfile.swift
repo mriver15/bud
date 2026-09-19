@@ -53,6 +53,14 @@ public enum PerformanceProfileCLI {
         let installed = SkillStore.installed()
         let tools = await env.registry.descriptors().filter { !$0.agentOnly }
 
+        // The prefix-stability report needs the registry but not a credential:
+        // it compares what two queries would send, offline.
+        if arguments.contains("--prefix-stability") {
+            print(prefixStabilityReport(config: config, tools: tools))
+            await mcp.shutdown()
+            return true
+        }
+
         // Phase 1 — request build. Everything the first message carries before a
         // byte leaves the machine; the three lines under the phase table are this
         // same number broken out.
@@ -225,5 +233,48 @@ public enum PerformanceProfileCLI {
         case 2: return "synthetic tool round"
         default: return "synthesis"
         }
+    }
+
+    // MARK: - Prefix stability
+
+    /// `--profile --prefix-stability`: how much of the request prefix survives
+    /// between two representative queries. One generic, one with clear browse
+    /// intent, so the tool-plan difference is visible rather than papered over.
+    private static func prefixStabilityReport(config: BudConfig, tools: [ToolDescriptor]) -> String {
+        let generic = "What time is it?"
+        let browse = "Browse https://example.com and summarise what you find."
+        let report = PrefixStability.measure(
+            queryA: generic,
+            queryB: browse,
+            config: config,
+            tools: tools
+        )
+
+        var out = "\nPrefix stability — two queries through the same composition\n\n"
+        out += "  generic  \"\(generic)\"\n"
+        out += "  browse   \"\(browse)\"\n\n"
+
+        out += "  " + "block".padding(toLength: 16, withPad: " ", startingAt: 0)
+        out += "stable".padding(toLength: 9, withPad: " ", startingAt: 0)
+        out += "changed".padding(toLength: 9, withPad: " ", startingAt: 0)
+        out += "share\n"
+
+        for block in report.blocks {
+            let share = block.aChars == 0 && block.bChars == 0
+                ? "  —"
+                : String(format: "%6.1f%%", block.share * 100)
+            out += "  " + block.name.padding(toLength: 16, withPad: " ", startingAt: 0)
+            out += BudFormat.count(block.stableChars).padding(toLength: 9, withPad: " ", startingAt: 0)
+            out += BudFormat.count(block.changedChars).padding(toLength: 9, withPad: " ", startingAt: 0)
+            out += share + "\n"
+        }
+
+        out += "\n  whole prefix (generic)  sha256 \(report.hashA)\n"
+        out += "  whole prefix (browse)   sha256 \(report.hashB)\n"
+
+        out += "\n  total prefix: \(BudFormat.count(report.totalChars)) characters"
+        out += " — \(String(format: "%.1f%%", report.stableShare * 100)) stable\n"
+
+        return out
     }
 }

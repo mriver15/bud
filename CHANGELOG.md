@@ -12,6 +12,56 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.5.0
+
+### The prefix cache is measured, not hoped for
+
+Every request's prefix is now hashable and diffable. `--profile
+--prefix-stability` builds the request prefix for two different queries and
+reports, per block, what stayed byte-identical and what changed:
+
+```
+block           stable   changed  share
+system prompt   1,509    0         100.0%
+live context    123      0         100.0%
+memory notes    0        0          —
+skill catalogue 0        0          —
+tool block      3,400    3,355      50.3%
+
+total prefix: 8,387 characters — 60.0% stable
+```
+
+The honest part is in the tool block: a different query plans different tools,
+so that is the volatile half — exactly what the earlier work (the clock moved to
+the end, ranked catalogues that re-render only when the ranking changes) was
+meant to keep everything else. The report is descriptive, not tuned to any one
+provider's cache semantics.
+
+And the accounting reaches the user: the per-turn footer now shows what the
+provider cached — all three backends already parsed the field (OpenAI
+`prompt_cache_hit_tokens`, Anthropic cached, Google cached content) and the
+runtime was throwing it away. The live suite asserts a real round carries it,
+so the number in the footer is data rather than decoration.
+
+### Subagents hand back a report, not a transcript
+
+A subagent's final message was whatever it felt like writing. It is now a
+four-section handoff — **Answer, Evidence, Unresolved, Handles** — enforced in
+the dispatch prompt, and bounded to 6,000 characters. A longer reply is cut on
+a line boundary with the disclosure `…[N characters not shown — the full run is
+in the Agents panel]`, so the parent folds digests rather than mining novels,
+and nothing is lost: the full run stays inspectable.
+
+### Verification
+
+```
+--self-test      1044/1044   (+13: prefix-stability promises, the handoff
+                            contract and its line-cut, the disclosure)
+--verify-ui        25/25     --verify-browser   39/39    --verify-live   136/136
+```
+
+---
+
 ## Bud 2.4.0
 
 ### The first minute now works without a README

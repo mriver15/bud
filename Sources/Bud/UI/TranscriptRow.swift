@@ -238,10 +238,11 @@ public struct TranscriptRow: View {
     // MARK: - Footer
 
     /// The measured facts for a completed turn, in order: prompt tokens in,
-    /// completion tokens out, tool calls, wall time. A nil measurement is left
-    /// out rather than rendered as "0" — a guess dressed up as a fact. Restored
-    /// turns predate the instrumentation, so their token and wall-time fields are
-    /// nil and the footer shrinks to whatever is still knowable.
+    /// completion tokens out, cached tokens, tool calls, wall time. A nil
+    /// measurement is left out rather than rendered as "0" — a guess dressed up
+    /// as a fact. Restored turns predate the instrumentation, so their token and
+    /// wall-time fields are nil and the footer shrinks to whatever is still
+    /// knowable.
     private var turnFooterItems: [String] {
         var items: [String] = []
         if let prompt = turn.promptTokens {
@@ -249,6 +250,9 @@ public struct TranscriptRow: View {
         }
         if let completion = turn.completionTokens {
             items.append("\(BudFormat.tokens(completion)) out")
+        }
+        if let cached = turn.cachedTokens {
+            items.append("\(BudFormat.tokens(cached)) cached")
         }
         let tools = turn.segments.reduce(into: 0) { count, segment in
             if case .tool = segment { count += 1 }
