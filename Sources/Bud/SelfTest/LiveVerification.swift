@@ -478,6 +478,34 @@ public enum BudLiveVerification {
         c.check("runtime: tool result reached the transcript", succeeded)
         c.check("runtime: produced a final answer", !runtime.turns.compactMap { $0.plainText.isEmpty ? nil : $0 }.isEmpty)
 
+        // The per-turn accounting the transcript footer reads: a real turn must
+        // leave real numbers behind, or the footer would silently show nothing
+        // and the numbers would be decoration rather than data.
+        if let last = runtime.turns.last(where: { $0.role == .assistant && !$0.isStreaming }) {
+            c.check("runtime: the finished turn knows its usage",
+                    last.promptTokens != nil && last.completionTokens != nil)
+            c.check("runtime: ...and how long it took", last.duration != nil)
+        } else {
+            c.check("runtime: a finished assistant turn exists to be measured", false)
+        }
+
+        // Tool stamps belong to the turn that ran the tools, which is not the
+        // final answering turn — a tool round and its answer are separate turns.
+        if let toolTurn = runtime.turns.last(where: { turn in
+            turn.role == .assistant && !turn.isStreaming
+                && turn.segments.contains { if case .tool = $0 { return true } else { return false } }
+        }) {
+            let timedCall = toolTurn.segments.contains { segment in
+                if case .tool(_, let call, _, _, _, _) = segment {
+                    return call.startedAt != nil && call.endedAt != nil
+                }
+                return false
+            }
+            c.check("runtime: ...and the tool round knows when its call ran", timedCall)
+        } else {
+            c.check("runtime: the tool round's turn exists to be timed", false)
+        }
+
         // MARK: Rewinding
 
         // Retry and delete-from-here both restore a checkpoint, and having a

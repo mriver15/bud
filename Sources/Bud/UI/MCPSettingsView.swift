@@ -168,6 +168,12 @@ private struct ServerRow: View {
     private var state: MCPConnectionState { status?.state ?? .stopped }
     private var isLive: Bool { state == .ready || state == .connecting }
 
+    /// The labelled health badge, derived from the same state the status line
+    /// reads — see `ServerHealth.derive` for the exact mapping.
+    private var health: ServerHealth {
+        ServerHealth.derive(state: state, enabled: config.enabled, error: status?.error)
+    }
+
     var body: some View {
         GlassCard(cornerRadius: Bud.Radius.card, padding: Bud.Space.md) {
             VStack(alignment: .leading, spacing: Bud.Space.sm) {
@@ -179,6 +185,7 @@ private struct ServerRow: View {
                     .truncationMode(.middle)
                     .textSelection(.enabled)
                 stateLine
+                if let hint = delegationHint { delegationHintView(hint) }
                 actionLine
                 if isExpanded { DiagnosticsPanel(config: config, mcp: mcp) }
             }
@@ -207,9 +214,7 @@ private struct ServerRow: View {
     private var stateLine: some View {
         VStack(alignment: .leading, spacing: Bud.Space.hairline) {
             HStack(spacing: Bud.Space.sm) {
-                Text(state.label)
-                    .font(Bud.Font.caption)
-                    .foregroundStyle(state == .failed ? Bud.Palette.danger : Color.secondary)
+                healthChip
                 if state == .ready {
                     Text(toolCountLabel)
                         .font(Bud.Font.caption)
@@ -318,6 +323,96 @@ private struct ServerRow: View {
         case .failed: return Bud.Palette.danger
         case .stopped: return Color.secondary.opacity(0.5)
         }
+    }
+
+    // MARK: Health badge
+
+    private var healthChip: some View {
+        GlassChip(health.label, systemImage: health.symbol, tint: healthTint)
+    }
+
+    private var healthTint: Color {
+        switch health {
+        case .healthy: return Bud.Palette.success
+        case .starting: return Bud.Palette.warning
+        case .authNeeded: return Bud.Palette.warning
+        case .crashed: return Bud.Palette.danger
+        case .disabled: return Color.secondary
+        }
+    }
+
+    // MARK: Delegation hint
+
+    /// Below this many tools a server's schema is a paragraph the model can hold,
+    /// and handing it to an agent only adds the round trip. Eight is the point
+    /// where a server stops being "a tool or two" and becomes a surface.
+    private static let delegationToolThreshold = 8
+    /// Above this many characters of schema a single server starts to dominate
+    /// the tool block. 4,000 characters is roughly 1,000 tokens of schema — the
+    /// point where carrying it on every request costs more than the delegation
+    /// that would move it.
+    private static let delegationSchemaCharThreshold = 4_000
+
+    /// Whether to nudge this server towards delegation, and the copy for the
+    /// nudge when so. Computed as one value so the served schema is serialised
+    /// once per render rather than once per row part. `nil` means there is
+    /// nothing to nudge about: the server is not connected, already delegated,
+    /// dismissed, or under both thresholds. Only a connected server is nudged —
+    /// one that is not ready has no tools to carry — and only once, unless the
+    /// user acts: dismissing it or handing it over both silence it.
+    private var delegationHint: String? {
+        guard !config.delegated, state == .ready, !mcp.isDelegationHintDismissed(config.id) else {
+            return nil
+        }
+        let served = mcp.serverTools(id: config.id)
+        var schemaChars = 0
+        var chars = 0
+        for tool in served {
+            schemaChars += tool.schema.encodedString().count
+            chars += tool.openAIToolDefinition.encodedString().count
+        }
+        guard served.count > Self.delegationToolThreshold
+            || schemaChars > Self.delegationSchemaCharThreshold else { return nil }
+        let noun = served.count == 1 ? "tool" : "tools"
+        let amount = chars >= 1000 ? "\(chars / 1000)k characters" : "\(chars) characters"
+        return "This server adds \(served.count) \(noun) / \(amount) to every request — "
+            + "hand it to an agent to carry the name instead."
+    }
+
+    private func delegationHintView(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: Bud.Space.sm) {
+            Image(systemName: "lightbulb.fill")
+                .font(Bud.Font.micro.weight(.semibold))
+                .foregroundStyle(Bud.Palette.warning)
+            VStack(alignment: .leading, spacing: Bud.Space.xs) {
+                Text(text)
+                    .font(Bud.Font.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: Bud.Space.md) {
+                    Button("Hand to agent") { handToAgent() }
+                        .buttonStyle(.plain)
+                        .font(Bud.Font.caption)
+                        .foregroundStyle(Bud.Palette.accent)
+                    Button("Dismiss") { mcp.dismissDelegationHint(config.id) }
+                        .buttonStyle(.plain)
+                        .font(Bud.Font.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(Bud.Space.sm)
+        .background {
+            RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)
+                .fill(Bud.Palette.warning.opacity(0.10))
+        }
+    }
+
+    private func handToAgent() {
+        var updated = config
+        updated.delegated = true
+        Task { await mcp.updateServer(updated) }
     }
 }
 

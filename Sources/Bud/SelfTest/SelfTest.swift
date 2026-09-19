@@ -104,6 +104,12 @@ public enum BudSelfTest {
             toolProvenance,
             budLinks,
             toolConfirmation,
+            promptSelection,
+            markerHandles,
+            tokenBenchmark,
+            serverHealth,
+            diagnosticsBundle,
+            budgetBanner,
             greeting,
             promptDefaults,
         ]
@@ -445,6 +451,236 @@ public enum BudSelfTest {
         } else {
             c.check("the config round-trips through its stored form", false)
         }
+
+        return c.report()
+    }
+
+    // MARK: Phase 0 — the baseline the roadmap measures against
+
+    /// The starter-prompt promise: a fresh install is never offered a prompt it
+    /// cannot satisfy, and the `always` prompt leads regardless of what is
+    /// installed.
+    static func promptSelection() -> SelfTestReport {
+        let c = Checker(suite: "prompts")
+
+        // For every capability combination, nothing offered is unsatisfiable.
+        for hasMCP in [false, true] {
+            for hasSkills in [false, true] {
+                let offered = ChatView.selectablePrompts(hasMCP: hasMCP, hasSkills: hasSkills)
+                let satisfiable = offered.allSatisfy { prompt in
+                    switch prompt.capability {
+                    case .always, .files, .browser: return true
+                    case .mcp: return hasMCP
+                    case .skills: return hasSkills
+                    }
+                }
+                c.check(
+                    "mcp \(hasMCP), skills \(hasSkills): every offer is satisfiable",
+                    satisfiable
+                )
+                c.check("mcp \(hasMCP), skills \(hasSkills): the always prompt leads",
+                        offered.first?.capability == .always)
+                c.check("mcp \(hasMCP), skills \(hasSkills): capped at four",
+                        offered.count <= 4)
+            }
+        }
+
+        let fresh = ChatView.selectablePrompts(hasMCP: false, hasSkills: false)
+        c.check("a fresh install is offered nothing it has not installed",
+                !fresh.contains { $0.capability == .mcp || $0.capability == .skills })
+
+        let servers = ChatView.selectablePrompts(hasMCP: true, hasSkills: false)
+        c.check("a connected server earns its prompt a slot",
+                servers.contains { $0.capability == .mcp })
+        let skilled = ChatView.selectablePrompts(hasMCP: false, hasSkills: true)
+        c.check("an installed skill earns its prompt a slot",
+                skilled.contains { $0.capability == .skills })
+
+        return c.report()
+    }
+
+    /// What a dropped tool result leaves behind.
+    ///
+    /// The one case worth testing that the history suite does not: a dropped
+    /// result whose content *is* the handle of a spilled payload must keep the
+    /// handle, or the data becomes unreachable — and a `store_`-shaped word that
+    /// points at nothing must not pretend it does.
+    static func markerHandles() -> SelfTestReport {
+        let c = Checker(suite: "markers")
+
+        func call(_ id: String) -> ChatMessage {
+            ChatMessage(role: .assistant, toolCalls: [ToolCall(id: id, name: "t", arguments: "{}")])
+        }
+        func ask(_ text: String) -> ChatMessage { ChatMessage(role: .user, content: text) }
+
+        guard let handle = StoredResults.store("payload worth keeping") else {
+            c.check("the spilled payload exists to be dropped", false)
+            return c.report()
+        }
+
+        let withHandle = AgentRuntime.bounded(
+            [ask("first"), call("a"), ChatMessage(role: .tool, content: handle, toolCallID: "a", name: "t"),
+             ask("second"), call("b"), ChatMessage(role: .tool, content: String(repeating: "y", count: 2_000), toolCallID: "b", name: "t")],
+            budget: 300
+        )
+        c.check("a dropped spilled result keeps its handle", withHandle.messages[2].content.contains(handle))
+        c.check("...which still points at the data", StoredResults.read(handle: handle) != nil)
+
+        // A `store_`-shaped word that points at nothing is a word, not a handle.
+        let impostorText = "see store_deadbeef99 in the logs"
+            + String(repeating: "y", count: 400)
+        let impostor = AgentRuntime.bounded(
+            [ask("first"), call("a"), ChatMessage(role: .tool, content: impostorText, toolCallID: "a", name: "t"),
+             ask("second"), call("b"), ChatMessage(role: .tool, content: String(repeating: "y", count: 2_000), toolCallID: "b", name: "t")],
+            budget: 300
+        )
+        c.check("a fake handle is not offered as a way back to data",
+                !impostor.messages[2].content.contains("store_deadbeef99"))
+
+        return c.report()
+    }
+
+    /// The token benchmark the spec's Phase 0 asks for: full exposure versus
+    /// delegation at 0/10/50/200 tools, and a ceiling on the fixed built-ins so
+    /// accidental schema inflation fails CI instead of sailing through.
+    @MainActor
+    static func tokenBenchmark() async -> SelfTestReport {
+        let c = Checker(suite: "benchmark")
+
+        func syntheticTool(_ index: Int, agentOnly: Bool = false) -> ToolDescriptor {
+            ToolDescriptor(
+                name: "mock_tool_\(index)",
+                description: "A synthetic tool with a realistic-length description so the benchmark "
+                    + "measures schema weight rather than noise. Parameter \(index) controls the "
+                    + "\(index)th aspect of the mock behaviour, one of several in this inventory.",
+                schema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "value_\(index)": .object([
+                            "type": .string("string"),
+                            "description": .string("The \(index)th value of the mock tool."),
+                        ]),
+                    ]),
+                    "required": .array([.string("value_\(index)")]),
+                ]),
+                providerID: "mock",
+                providerName: "Mock server",
+                agentOnly: agentOnly
+            )
+        }
+
+        let config = BudConfig()
+
+        let none = RequestMeasurer.measure(config: config, tools: [], notes: "", liveContext: "")
+        c.equal("zero tools cost zero tool characters", none.toolChars, 0)
+
+        var previous = 0
+        for count in [10, 50, 200] {
+            let full = RequestMeasurer.measure(
+                config: config,
+                tools: (0..<count).map { syntheticTool($0) },
+                notes: "",
+                liveContext: ""
+            )
+            c.check("\(count) exposed tools cost more than \(previous == 0 ? "none" : "the previous inventory")",
+                    full.toolChars > previous)
+            c.equal("\(count) exposed tools are counted", full.toolCount, count)
+            c.equal("...and they form exactly one group", full.toolGroups.count, 1)
+            c.equal("...which carries all of their characters",
+                    full.toolGroups.first?.chars, full.toolChars)
+
+            // Delegation: the tools exist, but none are sent to the main agent.
+            let exposed = (0..<count).map { syntheticTool($0, agentOnly: true) }.filter { !$0.agentOnly }
+            let delegated = RequestMeasurer.measure(config: config, tools: exposed, notes: "", liveContext: "")
+            c.equal("delegating \(count) tools costs the main agent nothing of them",
+                    delegated.toolChars, 0)
+            c.check("...so delegation is strictly cheaper at \(count)",
+                    delegated.toolChars < full.toolChars)
+
+            previous = full.toolChars
+        }
+
+        // The fixed built-ins — the part that does not grow with what a user
+        // installs. 16,834 characters today; the ceiling is headroom, not a
+        // target, and raising it is a deliberate edit, not an accident.
+        let providers: [any ToolProvider] = [
+            NativeToolsProvider(),
+            MemoryToolsProvider(),
+            GenUIToolProvider(),
+            BrowserToolProvider(engine: BrowserEngine()),
+        ]
+        var builtIns: [ToolDescriptor] = []
+        for provider in providers {
+            builtIns.append(contentsOf: await provider.toolDescriptors())
+        }
+        let measured = RequestMeasurer.measure(config: config, tools: builtIns, notes: "", liveContext: "")
+        c.check(
+            "the fixed built-ins stay under the inflation ceiling (now \(measured.toolChars))",
+            measured.toolChars < 25_000
+        )
+
+        return c.report()
+    }
+
+    /// The five-state badge vocabulary over what the MCP manager already exposes.
+    static func serverHealth() -> SelfTestReport {
+        let c = Checker(suite: "health")
+
+        c.equal("ready is healthy", ServerHealth.derive(state: .ready, enabled: true, error: nil), .healthy)
+        c.equal("connecting is starting", ServerHealth.derive(state: .connecting, enabled: true, error: nil), .starting)
+        c.equal("a failure that does not look like credentials is a crash",
+                ServerHealth.derive(state: .failed, enabled: true, error: "the process died with code 1"), .crashed)
+        c.equal("a 401 is auth, not a crash",
+                ServerHealth.derive(state: .failed, enabled: true, error: "HTTP 401 Unauthorized"), .authNeeded)
+        c.equal("an invalid key is auth",
+                ServerHealth.derive(state: .failed, enabled: true, error: "invalid api key"), .authNeeded)
+        c.equal("a disabled server is disabled however it would otherwise look",
+                ServerHealth.derive(state: .ready, enabled: false, error: nil), .disabled)
+        c.equal("a stopped server is disabled", ServerHealth.derive(state: .stopped, enabled: true, error: nil), .disabled)
+
+        return c.report()
+    }
+
+    /// The support bundle: useful, and never the secrets.
+    @MainActor
+    static func diagnosticsBundle() -> SelfTestReport {
+        let c = Checker(suite: "diagnostics")
+
+        let model = AppModel()
+        let bundle = DiagnosticBundle.build(model: model)
+
+        c.check("names the provider", bundle.contains(model.config.provider))
+        c.check("names the model", bundle.contains(model.config.model))
+        c.check("says what was left out",
+                bundle.lowercased().contains("omitted") || bundle.lowercased().contains("redacted"))
+
+        // The strong test: a configured secret, planted in an error string the
+        // bundle will carry, must not survive.
+        for key in model.config.providerKeys.values where key.count >= 4 {
+            model.errorMessage = "the server said \(key) was rejected"
+            let planted = DiagnosticBundle.build(model: model)
+            c.check("a configured key planted in an error does not reach the bundle",
+                    !planted.contains(key))
+        }
+
+        return c.report()
+    }
+
+    /// The warning that is supposed to appear before the budget runs out.
+    @MainActor
+    static func budgetBanner() -> SelfTestReport {
+        let c = Checker(suite: "budget")
+
+        let model = AppModel()
+        model.config.conversationTokenBudget = 1_000
+        model.env.recordUsage(prompt: 799, completion: 0)
+        c.check("under 80% there is nothing to warn about", !model.isNearBudget)
+
+        model.env.recordUsage(prompt: 2, completion: 0)
+        c.check("at 80% the warning appears", model.isNearBudget)
+
+        model.config.conversationTokenBudget = 0
+        c.check("...and a budget of zero is no budget, so it never warns", !model.isNearBudget)
 
         return c.report()
     }
@@ -3279,13 +3515,17 @@ public enum BudSelfTest {
         let marker = trimmed.messages[2].content
         c.check("the model is told it was dropped", marker.contains("dropped"))
         c.check("...with the size, so it can judge whether to refetch", marker.contains("5,000"))
-        c.check("...and that the user can still see it", marker.contains("user can still see"))
-        c.check("...and that it can be fetched again", marker.contains("calling the tool again"))
+        c.check(
+            "...and told how to get it back — call again, or read the handle",
+            marker.contains("call the tool again") || marker.contains("read_stored")
+        )
+        c.check("...and the marker is short enough to stay cheap", marker.count < 90)
 
-        // A result too small to be worth explaining away stays.
-        let mixed = [ask("first"), call("a"), result("a", 300), call("b"), result("b", 4_000)]
+        // A result too small to be worth explaining away stays. The threshold is
+        // 200 characters; 150 is safely below it.
+        let mixed = [ask("first"), call("a"), result("a", 150), call("b"), result("b", 4_000)]
         let kept = AgentRuntime.bounded(mixed, budget: 500)
-        c.equal("a result below the threshold is left alone", kept.messages[2].content.count, 300)
+        c.equal("a result below the threshold is left alone", kept.messages[2].content.count, 150)
 
         // Never the newest, however far over the budget that leaves it.
         let newest = [ask("first"), call("a"), result("a", 9_000)]

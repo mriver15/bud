@@ -114,6 +114,7 @@ private struct GeneralSettingsTab: View {
 
     @BudState private var probe: Probe = .idle
     @BudState private var ompLine = "checking…"
+    @BudState private var budget: ContextBudget?
 
     private static let knownEfforts = ["low", "medium", "high", "max"]
     private static let glamaKeysURLString = "https://glama.ai/settings/api-keys"
@@ -128,6 +129,7 @@ private struct GeneralSettingsTab: View {
                 modelSection
                 limitsSection
                 promptSection
+                contextSection
             }
             // Cap the measure. A text field stretched across the whole pane is
             // hard to scan, and a label stops reading as paired with its value
@@ -148,6 +150,12 @@ private struct GeneralSettingsTab: View {
             } else {
                 ompLine = "no modelRoles.default in ~/.omp/agent/config.yml"
             }
+        }
+        .task {
+            // Measured on appear rather than per keystroke: the tool list is an
+            // actor read, and re-serialising every schema on each keypress of the
+            // form would be the one expensive thing this pane does.
+            budget = await ContextBudget.measure(model: model)
         }
     }
 
@@ -782,7 +790,7 @@ private struct GeneralSettingsTab: View {
             is what the model is sent: past it, the oldest tool results are emptied — the \
             user keeps seeing them, and the model is told it can call the tool again.
             """
-        let carried = model.runtime.historyChars
+        let carried = model.runtime.historyCharacterCount
         if carried > 0 {
             let percent = Int((Double(carried) / Double(max(1, model.config.historyBudgetChars))) * 100)
             text += "\n\nThis conversation is carrying \(BudFormat.count(carried)) characters"
@@ -874,6 +882,82 @@ private struct GeneralSettingsTab: View {
         )
     }
 
+    // MARK: Context budget
+
+    private var contextSection: some View {
+        VStack(alignment: .leading, spacing: Bud.Space.sm) {
+            SectionHeader(
+                "Context budget",
+                subtitle: "What the next request carries before you type anything.",
+                systemImage: "chart.bar.doc.horizontal"
+            )
+            GlassCard {
+                VStack(alignment: .leading, spacing: Bud.Space.sm) {
+                    if let budget {
+                        ForEach(budget.rows) { row in
+                            budgetRow(row)
+                        }
+                        Divider().opacity(0.2)
+                        budgetTotal(budget)
+                    } else {
+                        HStack(spacing: Bud.Space.xs) {
+                            ProgressView().controlSize(.small)
+                            Text("Measuring…")
+                                .font(Bud.Font.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func budgetRow(_ row: ContextBudget.Row) -> some View {
+        HStack(alignment: .top, spacing: Bud.Space.sm) {
+            VStack(alignment: .leading, spacing: Bud.Space.hairline) {
+                Text(row.label)
+                    .font(Bud.Font.callout)
+                if let detail = row.detail {
+                    Text(detail)
+                        .font(Bud.Font.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            Spacer(minLength: Bud.Space.sm)
+            VStack(alignment: .trailing, spacing: Bud.Space.hairline) {
+                Text(BudFormat.count(row.chars))
+                    .font(Bud.Font.mono)
+                    .foregroundStyle(.secondary)
+                Text("≈ \(BudFormat.tokens(row.estimatedTokens)) tokens · \(shareLabel(row.share))")
+                    .font(Bud.Font.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private func budgetTotal(_ budget: ContextBudget) -> some View {
+        HStack(alignment: .top, spacing: Bud.Space.sm) {
+            Text("Total")
+                .font(Bud.Font.callout)
+                .fontWeight(.semibold)
+            Spacer(minLength: Bud.Space.sm)
+            VStack(alignment: .trailing, spacing: Bud.Space.hairline) {
+                Text(BudFormat.count(budget.totalChars))
+                    .font(Bud.Font.mono)
+                    .foregroundStyle(.primary)
+                Text("≈ \(BudFormat.tokens(budget.estimatedTokens)) tokens")
+                    .font(Bud.Font.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// A row's share of the whole, rounded to a whole percent. The figure is only
+    /// meaningful relative to the total line directly beneath it.
+    private func shareLabel(_ share: Double) -> String {
+        "\(Int((share * 100).rounded()))%"
+    }
+
     private enum Probe: Equatable {
         case idle, running
         case ok(String)
@@ -885,6 +969,8 @@ private struct GeneralSettingsTab: View {
 
 private struct AboutTab: View {
     let model: AppModel
+
+    @BudState private var didCopyDiagnostics = false
 
     var body: some View {
         ScrollView {
@@ -917,6 +1003,25 @@ private struct AboutTab: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
+            Button(didCopyDiagnostics ? "Copied" : "Copy diagnostics") {
+                copyDiagnostics()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+    }
+
+    /// The bundle lives in About rather than General because it is a support
+    /// action — something run once to report a problem — not a setting to tune.
+    /// It goes straight to the pasteboard with no file written, and every secret
+    /// a server declares is redacted before it leaves the app.
+    private func copyDiagnostics() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(DiagnosticBundle.build(model: model), forType: .string)
+        didCopyDiagnostics = true
+        Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            didCopyDiagnostics = false
         }
     }
 

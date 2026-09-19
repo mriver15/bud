@@ -14,6 +14,12 @@ public struct ServerEditorView: View {
     private let dismiss: () -> Void
     private let registryName: String?
     private let notes: String?
+    /// Carried through an edit untouched: these are configured in the expanded
+    /// diagnostics panel, not here, and rebuilding the config without them would
+    /// silently reset a delegation or a tool allowlist every time the server was
+    /// renamed.
+    private let delegated: Bool
+    private let enabledTools: [String]?
 
     /// Stable across edits so "Save & Connect" can address the server it just
     /// wrote without waiting for the caller to hand an id back.
@@ -47,6 +53,8 @@ public struct ServerEditorView: View {
         self.dismiss = onCancel
         self.registryName = config?.registryName
         self.notes = config?.notes
+        self.delegated = config?.delegated ?? false
+        self.enabledTools = config?.enabledTools
         _id = BudState(initialValue: config?.id ?? UUID().uuidString)
         _name = BudState(initialValue: config?.name ?? "")
         _transport = BudState(initialValue: config?.transport ?? .stdio)
@@ -526,6 +534,8 @@ public struct ServerEditorView: View {
                 headers: [:],
                 enabled: enabled,
                 autoStart: autoStart,
+                enabledTools: enabledTools,
+                delegated: delegated,
                 registryName: registryName,
                 notes: notes
             )
@@ -541,6 +551,8 @@ public struct ServerEditorView: View {
                 headers: dictionary(from: headers.map { ($0.key, $0.value) }),
                 enabled: enabled,
                 autoStart: autoStart,
+                enabledTools: enabledTools,
+                delegated: delegated,
                 registryName: registryName,
                 notes: notes
             )

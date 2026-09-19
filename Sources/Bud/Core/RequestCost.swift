@@ -46,6 +46,35 @@ public struct RequestCost: Sendable {
         }
     }
 
+    /// One row of the per-provider tool breakdown.
+    ///
+    /// The tool block is grouped by where each tool comes from, so a heavy
+    /// server and a heavy built-in read as separate lines instead of one
+    /// "tools" total that hides which of them is the problem. MCP tools become
+    /// one row per server; built-ins are one row per provider.
+    public struct ToolGroup: Sendable, Identifiable {
+        public var name: String
+        public var chars: Int
+        /// Description text plus prose inside schemas — the part that could move
+        /// to something loaded only when needed.
+        public var proseChars: Int
+        /// Number of tools the group contributes.
+        public var count: Int
+        public var id: String { name }
+
+        /// The same four-characters-per-token estimate as
+        /// `RequestCost.estimatedTokens`, so a group and the whole rank on one
+        /// scale.
+        public var estimatedTokens: Int { chars / 4 }
+
+        public init(name: String, chars: Int, proseChars: Int, count: Int) {
+            self.name = name
+            self.chars = chars
+            self.proseChars = proseChars
+            self.count = count
+        }
+    }
+
     public var modelChars = 0
     public var systemChars = 0
     public var liveContextChars = 0
@@ -69,6 +98,10 @@ public struct RequestCost: Sendable {
     public var toolProseChars: Int = 0
     /// MCP tools summed by the server half of `<server>__<tool>`.
     public var servers: [Entry] = []
+    /// Tools summed under the provider that publishes them: one row per
+    /// built-in provider, one row per connected MCP server. The Settings pane
+    /// reads these same numbers.
+    public var toolGroups: [ToolGroup] = []
 
     public var totalChars: Int {
         modelChars + systemChars + liveContextChars + notesChars + skillChars + toolChars
@@ -105,8 +138,10 @@ public enum RequestMeasurer {
 
         var measured: [RequestCost.Entry] = []
         measured.reserveCapacity(tools.count)
+        var groupSums: [String: (chars: Int, prose: Int, count: Int)] = [:]
         for tool in tools {
             let chars = tool.openAIToolDefinition.encodedString().count
+            let prose = tool.description.count + tool.schema.stringContentLength
             measured.append(RequestCost.Entry(
                 name: tool.name,
                 chars: chars,
@@ -115,9 +150,19 @@ public enum RequestMeasurer {
                 schemaProseChars: tool.schema.stringContentLength
             ))
             cost.toolChars += chars
-            cost.toolProseChars += tool.description.count + tool.schema.stringContentLength
+            cost.toolProseChars += prose
+
+            // The group is read off the descriptor, not remembered here: a
+            // future provider shows up under its own ID with no change to this
+            // loop.
+            let group = Self.groupName(for: tool)
+            let running = groupSums[group] ?? (0, 0, 0)
+            groupSums[group] = (running.chars + chars, running.prose + prose, running.count + 1)
         }
         cost.heaviestTools = Array(measured.sorted { $0.chars > $1.chars }.prefix(10))
+        cost.toolGroups = groupSums
+            .map { RequestCost.ToolGroup(name: $0.key, chars: $0.value.chars, proseChars: $0.value.prose, count: $0.value.count) }
+            .sorted { $0.chars > $1.chars }
 
         // Everything before the `__` boundary that `ToolNaming.namespaced` put
         // there. Native tools have no boundary and are not MCP traffic.
@@ -133,6 +178,19 @@ public enum RequestMeasurer {
             .sorted { $0.chars > $1.chars }
 
         return cost
+    }
+
+    /// The group a descriptor belongs to, derived from the descriptor rather
+    /// than from a list of tool names. MCP tools carry their server in
+    /// `providerName`, so they become one row per server; every other provider
+    /// is one row under its `providerID`, which a provider owns and therefore
+    /// cannot collide with a tool name a future one happens to publish.
+    private static func groupName(for tool: ToolDescriptor) -> String {
+        switch tool.providerID {
+        case "mcp": return tool.providerName
+        case "genui": return "generated-ui"
+        default: return tool.providerID
+        }
     }
 }
 
@@ -239,6 +297,20 @@ public enum RequestMeasureCLI {
 
         out += "  " + String(repeating: "─", count: 46) + "\n"
         out += line("prefix", cost.totalChars, "≈ \(BudFormat.count(cost.estimatedTokens)) tokens per request")
+
+        // The same tool block, split by where each tool comes from. A heavy
+        // server and a heavy built-in are optimised differently, so they do not
+        // belong in one number.
+        if !cost.toolGroups.isEmpty {
+            out += "\nTool groups\n"
+            for group in cost.toolGroups {
+                out += "  \(group.name.padding(toLength: 18, withPad: " ", startingAt: 0))"
+                out += "\(BudFormat.count(group.chars).padding(toLength: 9, withPad: " ", startingAt: 0))"
+                out += "  prose \(BudFormat.count(group.proseChars))"
+                out += " · ≈ \(BudFormat.count(group.estimatedTokens)) tokens"
+                out += " · \(group.count) tool\(group.count == 1 ? "" : "s")\n"
+            }
+        }
 
         // Delegated servers are absent from the breakdown above — their tools are
         // deliberately not in the main list — so they are named here instead, with

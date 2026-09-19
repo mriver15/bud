@@ -60,7 +60,22 @@ public final class AgentRuntime {
     /// What the model is currently being sent, before the budget trims it. Shown
     /// against the budget in Settings, because a limit nobody can see the distance
     /// to is a limit nobody can set.
-    public var historyChars: Int { history.reduce(0) { $0 + $1.content.count } }
+    public var historyCharacterCount: Int { history.reduce(0) { $0 + $1.content.count } }
+
+    /// Applies the budget to the conversation in place, now, and says what it freed.
+    ///
+    /// The bounder normally runs when the next request is built; this forces it
+    /// early so a user watching the conversation grow can reclaim the space without
+    /// waiting for another turn. `turns` and the transcript are untouched — the
+    /// model sees the markers, the user still sees everything. Returns the number
+    /// of characters freed as a sentence, zero when nothing was dropped.
+    public func compactConversationNow() -> String {
+        let bounded = Self.bounded(history, budget: env.config.historyBudgetChars)
+        history = bounded.messages
+        droppedFromHistory = bounded.dropped
+        return "dropped \(BudFormat.count(bounded.dropped)) characters of old tool results"
+    }
+
     private var runTask: Task<Void, Never>?
 
     /// Called when a run settles, however it settled.
@@ -234,6 +249,7 @@ public final class AgentRuntime {
             var assistant = Turn(role: .assistant, isStreaming: true)
             turns.append(assistant)
             let turnIndex = turns.count - 1
+            let turnStarted = Date()
 
             let outcome = await streamRound(into: &assistant, turnIndex: turnIndex)
 
@@ -241,6 +257,7 @@ public final class AgentRuntime {
             case .failed(let message):
                 assistant.isStreaming = false
                 assistant.error = message
+                assistant.duration = Date().timeIntervalSince(turnStarted)
                 turns[turnIndex] = assistant
                 lastError = message
                 statusText = "Error"
@@ -249,6 +266,7 @@ public final class AgentRuntime {
 
             case .cancelled:
                 assistant.isStreaming = false
+                assistant.duration = Date().timeIntervalSince(turnStarted)
                 turns[turnIndex] = assistant
                 statusText = "Stopped"
 
@@ -261,6 +279,7 @@ public final class AgentRuntime {
 
             case .answered:
                 assistant.isStreaming = false
+                assistant.duration = Date().timeIntervalSince(turnStarted)
                 turns[turnIndex] = assistant
                 statusText = ""
                 lastError = nil
@@ -290,6 +309,9 @@ public final class AgentRuntime {
                     // not read as something the user asked for.
                     history.append(.toolResult(call, result))
                 }
+                // This turn's last event is its final tool result landing, so its
+                // wall time includes the execution that fills in its tool segments.
+                turns[turnIndex].duration = Date().timeIntervalSince(turnStarted)
                 continue
             }
         }
@@ -326,6 +348,7 @@ public final class AgentRuntime {
 
     private func streamRound(into turn: inout Turn, turnIndex: Int) async -> RoundOutcome {
         let config = env.config
+        let roundStart = Date()
         // Everything except what an agent holds.
         //
         // Filtered after the await rather than before, and that ordering is the
@@ -349,6 +372,11 @@ public final class AgentRuntime {
         var pending: [Int: (id: String, name: String, args: String)] = [:]
         var finishReason: String?
 
+        // Request build ends the moment the provider is handed the request; the
+        // first token is the first streamed content after that.
+        let providerCalled = Date()
+        var firstTokenAt: Date?
+
         do {
             for try await event in env.makeBackend().stream(request) {
                 if Task.isCancelled { return .cancelled }
@@ -359,6 +387,7 @@ public final class AgentRuntime {
                     turns[turnIndex] = turn
 
                 case .contentDelta(let d):
+                    if firstTokenAt == nil { firstTokenAt = Date() }
                     turn.appendText(d)
                     turns[turnIndex] = turn
 
@@ -374,6 +403,8 @@ public final class AgentRuntime {
 
                 case .usage(let prompt, let completion, _):
                     env.recordUsage(prompt: prompt, completion: completion)
+                    turn.promptTokens = prompt
+                    turn.completionTokens = completion
                 }
             }
         } catch {
@@ -381,6 +412,17 @@ public final class AgentRuntime {
         }
 
         if Task.isCancelled { return .cancelled }
+
+        // The phases this round can measure. `synthesis` is left nil: the answer
+        // arrives in a later round than the tool results it synthesises, so a
+        // single round cannot place its boundary. `toolExecution` is filled in by
+        // `execute` when this round asked for tools.
+        var phases = turn.phases ?? TurnPhases()
+        phases.requestBuild = providerCalled.timeIntervalSince(roundStart)
+        if let firstTokenAt {
+            phases.firstToken = firstTokenAt.timeIntervalSince(providerCalled)
+        }
+        turn.phases = phases
 
         if finishReason == "tool_calls" || !pending.isEmpty {
             let calls = pending.keys.sorted().compactMap { index -> ToolCall? in
@@ -404,6 +446,7 @@ public final class AgentRuntime {
     /// on the main actor as each finishes, which means a fast tool's result shows
     /// up while a slow sibling is still running.
     private func execute(_ calls: [ToolCall], turnIndex: Int) async -> [ToolResult] {
+        let toolStart = Date()
         var segmentIDs: [String: String] = [:]
         var providers: [String: String] = [:]
 
@@ -412,10 +455,14 @@ public final class AgentRuntime {
             segmentIDs[call.id] = id
             let provider = await env.registry.providerName(forTool: call.name)
             providers[call.id] = provider
+            // The segment carries the call that is about to run, so its clock is
+            // stamped here rather than on a detached copy.
+            var stamped = call
+            stamped.startedAt = Date()
             turns[turnIndex].segments.append(
                 .tool(
                     id: id,
-                    call: call,
+                    call: stamped,
                     providerName: provider,
                     state: .running,
                     resultText: nil,
@@ -456,6 +503,13 @@ public final class AgentRuntime {
         }
 
         statusText = ""
+
+        // Tool execution is this whole span, from the moment the calls were about
+        // to run to the moment the last result landed.
+        var phases = turns[turnIndex].phases ?? TurnPhases()
+        phases.toolExecution = Date().timeIntervalSince(toolStart)
+        turns[turnIndex].phases = phases
+
         return calls.map { results[$0.id] ?? .error("No result produced for \($0.name)") }
     }
 
@@ -470,9 +524,12 @@ public final class AgentRuntime {
         guard let idx = segments.firstIndex(where: { $0.id == segmentID }),
               case .tool(let id, let call, let provider, _, _, _) = segments[idx] else { return }
 
+        // The call's clock stops the moment its result lands, success or failure.
+        var stamped = call
+        stamped.endedAt = Date()
         turns[turnIndex].segments[idx] = .tool(
             id: id,
-            call: call,
+            call: stamped,
             providerName: provider,
             state: state,
             resultText: result.text,
@@ -498,8 +555,9 @@ public final class AgentRuntime {
     /// the model has not read yet.
     ///
     /// This bounds what the *model* carries, not what happened. `turns` keeps the
-    /// full text, the transcript keeps showing it, and the model is told it can
-    /// call the tool again — which is true, and is the only recovery it needs.
+    /// full text, the transcript keeps showing it, and the model is told how to
+    /// recover — call the tool again, or `read_stored` when the result had already
+    /// spilled to the store — which is true, and is all the recovery it needs.
     private func boundedHistory() -> [ChatMessage] {
         let bounded = Self.bounded(history, budget: env.config.historyBudgetChars)
         droppedFromHistory = bounded.dropped
@@ -525,7 +583,7 @@ public final class AgentRuntime {
             let content = bounded[index].content
             // Not worth emptying something the marker would be nearly as long as.
             guard content.count > dropThreshold else { continue }
-            let marker = droppedMarker(characters: content.count)
+            let marker = droppedMarker(for: content)
             guard marker.count < content.count else { continue }
             total -= content.count - marker.count
             dropped += content.count
@@ -534,21 +592,41 @@ public final class AgentRuntime {
         return (bounded, dropped)
     }
 
-    /// Below this a result is cheaper to send than to explain away.
-    nonisolated private static let dropThreshold = 400
+    /// Below this a result is cheaper to send than to explain away. The marker is
+    /// now under ~90 characters, so this sits a few times above it: a result has
+    /// to be comfortably larger than its replacement before the rewrite is worth
+    /// the churn.
+    nonisolated private static let dropThreshold = 200
 
-    nonisolated private static func droppedMarker(characters: Int) -> String {
-        "[dropped from the conversation to stay inside the context budget: "
-            + "\(BudFormat.count(characters)) characters. The user can still see this "
-            + "result, and calling the tool again will produce it fresh.]"
+    nonisolated private static func droppedMarker(for content: String) -> String {
+        if let handle = storedHandle(in: content) {
+            // A spilled result keeps its handle: the data is still on disk, and
+            // `read_stored` is how the model gets back to it.
+            return "[dropped to fit the budget; still stored as \(handle) — read_stored to retrieve.]"
+        }
+        return "[dropped \(BudFormat.count(content.count)) characters; call the tool again to see it.]"
+    }
+
+    /// The `store_` handle a spilled result carries, when its data is still there.
+    ///
+    /// The spill marker sits at the end of the content, so the *last* handle in
+    /// the text is the one for this result; any earlier one is part of the result's
+    /// own text. A handle is only kept when the file still exists — a token that
+    /// merely looks like a handle points nowhere.
+    nonisolated private static func storedHandle(in content: String) -> String? {
+        guard let expression = try? NSRegularExpression(pattern: #"store_[0-9a-fA-F]{8}"#) else {
+            return nil
+        }
+        let range = NSRange(content.startIndex..., in: content)
+        guard let match = expression.matches(in: content, range: range).last,
+              let tokenRange = Range(match.range, in: content) else { return nil }
+        let token = String(content[tokenRange]).lowercased()
+        return FileManager.default.fileExists(atPath: StoredResults.url(for: token).path) ? token : nil
     }
 
     private func systemMessage() -> ChatMessage {
         let config = env.config
         var text = config.systemPrompt
-        let stamp = DateFormatter()
-        stamp.dateFormat = "EEEE, d MMMM yyyy, HH:mm"
-        text += "\n\nCurrent time: \(stamp.string(from: Date()))."
         text += "\nDefault model for this session: \(config.model)."
         if let effort = config.reasoningEffort { text += " Reasoning effort: \(effort)." }
 
@@ -583,6 +661,14 @@ public final class AgentRuntime {
             renderedSkills = catalogue.text
         }
         if !renderedSkills.isEmpty { text += "\n\n" + renderedSkills }
+
+        // The one line that changes every minute rides last. Providers cache the
+        // front of the prompt, so keeping the volatile clock at the end means a
+        // new timestamp invalidates only the tail instead of the whole stable
+        // prefix above it.
+        let stamp = DateFormatter()
+        stamp.dateFormat = "EEEE, d MMMM yyyy, HH:mm"
+        text += "\n\nCurrent time: \(stamp.string(from: Date()))."
 
         return ChatMessage(role: .system, content: text)
     }

@@ -601,12 +601,17 @@ public enum UIRender {
             // — the limits, the last card on General, were below it for two
             // releases. The frame is a review artifact, not a claim about the
             // window's size, which is still 620.
+            //
+            // General grew a Context budget section below the prompt, so it gets a
+            // taller capture than the other tabs; a section that renders off the
+            // bottom of its own review image is a section nobody reviewed.
+            let generalHeight: CGFloat = tab == .general ? 2_400 : 1_500
             emit(
                 "settings-\(tab.rawValue)",
                 SettingsView(model: model, initialTab: tab)
-                    .frame(width: 900, height: 1_500),
+                    .frame(width: 900, height: generalHeight),
                 width: 900,
-                height: 1_500,
+                height: generalHeight,
                 directory: directory,
                 into: &written
             )
@@ -657,6 +662,31 @@ public enum UIRender {
                 into: &written
             )
         }
+
+        // MARK: The budget warning
+        //
+        // Rendered standalone because the condition that shows it — a
+        // conversation at 80% of its ceiling — is a state the harness does not
+        // otherwise reach, and the whole point of the banner is that it appears
+        // before the ceiling does.
+
+        emit(
+            "budget-banner",
+            BudgetBanner(
+                spent: 1_600,
+                budget: 2_000,
+                onNewChat: {},
+                onCompact: {},
+                onRaiseBudget: {}
+            )
+            .padding(Bud.Space.md)
+            .frame(width: Bud.contentMeasure)
+            .background(Color.black.opacity(0.30)),
+            width: Bud.contentMeasure,
+            height: 200,
+            directory: directory,
+            into: &written
+        )
 
         // MARK: Marketplace with live registry data
 

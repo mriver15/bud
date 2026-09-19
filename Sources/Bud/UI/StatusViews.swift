@@ -202,3 +202,118 @@ public struct KeyMissingBanner: View {
         }
     }
 }
+
+/// Warns above the composer once the conversation has spent most of its token
+/// budget, and offers the three ways out: start over, compact what is in
+/// context, or raise the ceiling in Settings. Amber rather than red because the
+/// turn has not been refused yet — this is a warning with an easy answer, not a
+/// failure.
+public struct BudgetBanner: View {
+    private let spent: Int
+    private let budget: Int
+    private let onNewChat: () -> Void
+    private let onCompact: () -> Void
+    private let onRaiseBudget: () -> Void
+
+    public init(
+        spent: Int,
+        budget: Int,
+        onNewChat: @escaping () -> Void,
+        onCompact: @escaping () -> Void,
+        onRaiseBudget: @escaping () -> Void
+    ) {
+        self.spent = spent
+        self.budget = budget
+        self.onNewChat = onNewChat
+        self.onCompact = onCompact
+        self.onRaiseBudget = onRaiseBudget
+    }
+
+    public var body: some View {
+        HStack(alignment: .center, spacing: Bud.Space.sm) {
+            Image(systemName: "gauge.with.dots.needle.50percent")
+                .font(Bud.Font.caption.weight(.semibold))
+                .foregroundStyle(Bud.Palette.warning)
+
+            VStack(alignment: .leading, spacing: Bud.Space.hairline) {
+                Text(title)
+                    .font(Bud.Font.caption)
+                    .foregroundStyle(.primary)
+                Text(detail)
+                    .font(Bud.Font.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+
+            Spacer(minLength: 0)
+
+            Button("Start new chat", action: onNewChat)
+                .buttonStyle(.glass)
+                .controlSize(.small)
+            Button("Compact context", action: onCompact)
+                .buttonStyle(.glass)
+                .controlSize(.small)
+            Button("Raise budget", action: onRaiseBudget)
+                .buttonStyle(.glass)
+                .controlSize(.small)
+                .tint(Bud.Palette.accent)
+        }
+        .padding(Bud.Space.md)
+        .background {
+            RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)
+                .fill(Bud.Palette.warning.opacity(0.12))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)
+                        .strokeBorder(Bud.Palette.warning.opacity(0.30), lineWidth: 0.6)
+                }
+        }
+    }
+
+    private var remaining: Int { max(0, budget - spent) }
+
+    private var title: String {
+        remaining > 0 ? "Approaching the token budget" : "Token budget spent"
+    }
+
+    private var detail: String {
+        "\(BudFormat.tokens(spent)) of \(BudFormat.tokens(budget)) used · \(BudFormat.tokens(remaining)) left"
+    }
+}
+
+/// Shown in place of the budget banner after a context compact: the summary the
+/// runtime returned, which is the report of what was dropped rather than a fresh
+/// warning. Success-tinted because the action completed, and dismissible because
+/// the reader may want the banner — with its updated figures — back.
+public struct CompactSummaryBanner: View {
+    private let summary: String
+    private let onDismiss: () -> Void
+
+    public init(summary: String, onDismiss: @escaping () -> Void) {
+        self.summary = summary
+        self.onDismiss = onDismiss
+    }
+
+    public var body: some View {
+        HStack(alignment: .top, spacing: Bud.Space.sm) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(Bud.Font.caption.weight(.semibold))
+                .foregroundStyle(Bud.Palette.success)
+            Text(summary)
+                .font(Bud.Font.callout)
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            GlassIconButton(systemImage: "xmark", help: "Dismiss", action: onDismiss)
+        }
+        .padding(Bud.Space.md)
+        .background {
+            RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)
+                .fill(Bud.Palette.success.opacity(0.12))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)
+                        .strokeBorder(Bud.Palette.success.opacity(0.30), lineWidth: 0.6)
+                }
+        }
+    }
+}

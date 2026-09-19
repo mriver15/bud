@@ -15,11 +15,24 @@ public struct ToolCall: Sendable, Codable, Hashable, Identifiable {
     public var id: String
     public var name: String
     public var arguments: String
+    /// When the call began executing and when its result landed. Optional and
+    /// defaulted, so archives written before these existed still decode and every
+    /// existing call site keeps compiling.
+    public var startedAt: Date?
+    public var endedAt: Date?
 
-    public init(id: String, name: String, arguments: String) {
+    public init(
+        id: String,
+        name: String,
+        arguments: String,
+        startedAt: Date? = nil,
+        endedAt: Date? = nil
+    ) {
         self.id = id
         self.name = name
         self.arguments = arguments
+        self.startedAt = startedAt
+        self.endedAt = endedAt
     }
 
     public var parsedArguments: JSONValue { .objectOrEmpty(parsing: arguments) }
@@ -325,6 +338,33 @@ public struct DroppedFile: Sendable, Identifiable, Equatable {
     public var stagingLine: String { path }
 }
 
+/// How a turn's wall clock broke down across its phases.
+///
+/// Each phase is measured from the moment the previous one ended, so together
+/// they tile the turn: request build ends when the provider is called, the first
+/// token is the first streamed content, tool execution spans the tool calls, and
+/// synthesis runs from the last tool result to the finished answer. A phase the
+/// current flow cannot measure reliably stays nil — a missing phase is honest, a
+/// fabricated one is not.
+public struct TurnPhases: Sendable, Codable, Hashable {
+    public var requestBuild: TimeInterval?
+    public var firstToken: TimeInterval?
+    public var toolExecution: TimeInterval?
+    public var synthesis: TimeInterval?
+
+    public init(
+        requestBuild: TimeInterval? = nil,
+        firstToken: TimeInterval? = nil,
+        toolExecution: TimeInterval? = nil,
+        synthesis: TimeInterval? = nil
+    ) {
+        self.requestBuild = requestBuild
+        self.firstToken = firstToken
+        self.toolExecution = toolExecution
+        self.synthesis = synthesis
+    }
+}
+
 /// One user or assistant turn in the transcript.
 public struct Turn: Sendable, Identifiable {
     public var id: String
@@ -333,6 +373,14 @@ public struct Turn: Sendable, Identifiable {
     public var isStreaming: Bool
     public var error: String?
     public var createdAt: Date
+    /// That turn's usage, recorded as the stream reports it. Optional so archives
+    /// written before these existed still decode.
+    public var promptTokens: Int?
+    public var completionTokens: Int?
+    /// Wall time of the whole turn, from its first event to its last.
+    public var duration: TimeInterval?
+    /// How that time broke down, where the flow can say so.
+    public var phases: TurnPhases?
 
     public init(
         id: String = UUID().uuidString,
@@ -340,7 +388,11 @@ public struct Turn: Sendable, Identifiable {
         segments: [Segment] = [],
         isStreaming: Bool = false,
         error: String? = nil,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        promptTokens: Int? = nil,
+        completionTokens: Int? = nil,
+        duration: TimeInterval? = nil,
+        phases: TurnPhases? = nil
     ) {
         self.id = id
         self.role = role
@@ -348,6 +400,10 @@ public struct Turn: Sendable, Identifiable {
         self.isStreaming = isStreaming
         self.error = error
         self.createdAt = createdAt
+        self.promptTokens = promptTokens
+        self.completionTokens = completionTokens
+        self.duration = duration
+        self.phases = phases
     }
 
     /// Appends to the trailing segment when it matches, so streamed deltas

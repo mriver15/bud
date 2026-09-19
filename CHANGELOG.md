@@ -12,6 +12,86 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.2.0
+
+### The first slice of the roadmap
+
+This is Phase 0 plus the quick wins of the technical-review spec: the
+measurement baseline every later phase is judged against, and the small
+visible things that make the cost of a conversation legible.
+
+### You can see what a request costs, before you send it
+
+Settings → General now carries a **Context budget** section: the system prompt,
+live context, memory notes, skill catalogue, tool schemas and the conversation
+history, each with characters, an estimated token count, and its share of the
+whole. The numbers come from the same `RequestCost` measurement the `--measure`
+CLI uses, so the pane cannot disagree with the benchmark.
+
+`--measure` itself now breaks the tool block down by group — native, browser,
+generated-ui, memory, skills, subagents, and each connected MCP server — above
+the existing heaviest-tools leaderboard, and CI runs it on every push, keeping
+the output as an artifact so prompt-size regressions are diffs against a
+baseline rather than against memory.
+
+### And what a turn costs, after
+
+Every finished turn carries a quiet footer: tokens in, tokens out, tool rounds,
+wall time — measured by the runtime, shown where it happened. A turn that was
+never measured omits the item rather than inventing a zero. The token benchmark
+the spec asks for — 0/10/50/200 tools, full exposure against delegation — is now
+part of `--self-test`, along with a ceiling on the built-in schemas so accidental
+prompt inflation fails CI instead of sailing through.
+
+### The budget warns before it runs out
+
+At 80% of a conversation's token budget, the panel shows an amber banner:
+*Start new chat*, *Compact context*, *Raise budget* — actions, not instructions
+to visit Settings. Compact applies the same bounding the runtime already uses and
+reports what it freed; the transcript keeps everything, as before.
+
+### Quick wins, all of them
+
+- **The clock left the stable prefix.** The one line that changes every minute now
+  rides at the end of the system prompt, so it cannot invalidate a cached prefix.
+- **Tool rows know when they ran.** Every call is stamped start and end, and the
+  transcript shows the duration — success or failure, because a failed call's
+  duration is part of what happened.
+- **Dropped results stopped shouting.** The old marker was ~150 characters; it is
+  now under 90, and when the dropped result was a spilled payload it keeps its
+  `read_stored` handle so the data stays reachable.
+- **Large MCP servers suggest delegating.** More than eight tools, or more than
+  4,000 characters of schema, and the Connections pane offers to hand the server
+  to its agent — the 69% reduction turned into a one-click suggestion instead of a
+  setting nobody finds.
+- **Connection health badges.** Healthy, Starting, Auth needed, Crashed, Disabled
+  — one chip per server, derived from the state the manager already publishes.
+- **Starter prompts know what you have.** A fresh install is never offered a
+  prompt it cannot satisfy; a connected server or an installed skill earns its
+  prompt a slot.
+- **One-click diagnostics.** Settings → About copies a redacted bundle — app and
+  macOS version, provider and model names, per-server state and command line,
+  recent errors — with every declared secret and provider key scrubbed before the
+  pasteboard. The check plants a real key in an error and proves it does not
+  survive, because the clipboard is where text leaves the app.
+
+### Verification
+
+```
+--self-test      975/975   (+52: prompt guarantees, marker handles, the token
+                           benchmark, badge derivation, bundle redaction, the
+                           80% warning — each verified to fail without its fix)
+--verify-ui       25/25    --verify-browser  39/39    --verify-live  135/135
+```
+
+The live suite now asserts a real turn leaves real numbers behind — usage,
+duration, and tool-call timestamps — so the footer and the phase profile are
+fed by data rather than by hope. `--profile` times a synthetic turn phase by
+phase (request build, provider first token, tool round, synthesis) and stops
+honestly wherever it stops, key or no key.
+
+---
+
 ## Bud 2.1.0
 
 ### It has a voice now

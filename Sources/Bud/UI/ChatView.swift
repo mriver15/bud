@@ -14,20 +14,44 @@ public struct ChatView: View {
     @BudState private var findQuery = ""
     @BudState private var findCursor = 0
     @FocusState private var isFindFocused: Bool
+    /// The report a context compact returned, shown in place of the budget banner
+    /// until the next turn or a new chat clears it.
+    @BudState private var compactSummary: String?
 
     private static let bottomAnchor = "bud.chat.bottom"
+
+    /// What a starter prompt needs before it can be kept. `always` needs nothing
+    /// beyond the model; `files` and `browser` are built in, so only `mcp` and
+    /// `skills` gate on what the user has actually set up.
+    enum StarterCapability: Hashable {
+        case always, files, browser, mcp, skills
+    }
+
+    struct StarterPrompt {
+        let text: String
+        let capability: StarterCapability
+    }
+
     /// What the panel offers before you have thought of anything.
     ///
-    /// These were capability demonstrations — "What tools do you have right now?"
-    /// asks the user to admire the machinery. A colleague does not open with what
-    /// they are able to do; they offer something worth doing. Each of these is a
-    /// real task that happens to need a different part of the tool set, so the
-    /// range is shown by use rather than by advertisement.
-    private static let starterPrompts = [
-        "What's actually eating my disk?",
-        "Read this folder and tell me what it's for",
-        "Compare two options and tell me which to pick",
-        "Make a dashboard of this project",
+    /// Each entry is a real task that happens to need a different part of the
+    /// tool set, so the range is shown by use rather than by advertisement; the
+    /// tag decides only whether it is shown, never how it is phrased. Ordered so
+    /// the `always` prompt leads, then the built-ins, then the gated ones — a
+    /// fresh install fills its four slots from the built-ins, and a gated prompt
+    /// takes a slot when its capability exists. With four slots and everything
+    /// installed, the last gated prompt can lose its slot to pool order; the
+    /// promise is never to offer what cannot be satisfied, not to show everything
+    /// that could be.
+    private static let starterPool: [StarterPrompt] = [
+        StarterPrompt(text: "Compare two options and tell me which to pick", capability: .always),
+        StarterPrompt(text: "What's actually eating my disk?", capability: .files),
+        StarterPrompt(text: "Find out what changed and give me the short version", capability: .browser),
+        StarterPrompt(text: "Use my connected services to check something for me", capability: .mcp),
+        StarterPrompt(text: "Put my installed skills to work on this task", capability: .skills),
+        StarterPrompt(text: "Read this folder and tell me what it's for", capability: .files),
+        StarterPrompt(text: "Look up what's new and tell me if it matters", capability: .browser),
+        StarterPrompt(text: "Make a dashboard of this project", capability: .files),
     ]
 
     public init(model: AppModel) {
@@ -59,6 +83,24 @@ public struct ChatView: View {
                     .contentColumn()
             }
 
+            if let summary = compactSummary, !summary.isEmpty {
+                CompactSummaryBanner(summary: summary) { compactSummary = nil }
+                    .padding(.horizontal, Bud.Space.md)
+                    .padding(.bottom, Bud.Space.xs)
+                    .contentColumn()
+            } else if showsBudgetBanner, let budget = model.conversationBudget {
+                BudgetBanner(
+                    spent: model.conversationTokens,
+                    budget: budget,
+                    onNewChat: { startNewChat() },
+                    onCompact: { compactSummary = model.runtime.compactConversationNow() },
+                    onRaiseBudget: { model.openSettings(tab: .general) }
+                )
+                .padding(.horizontal, Bud.Space.md)
+                .padding(.bottom, Bud.Space.xs)
+                .contentColumn()
+            }
+
                 Composer(model: model)
                     .padding(.horizontal, Bud.Space.md)
                     .padding(.top, Bud.Space.xs)
@@ -66,6 +108,12 @@ public struct ChatView: View {
                     .contentColumn()
             }
             .onChange(of: findCursor) { _, _ in scrollToCurrentMatch(proxy) }
+            .onChange(of: model.isStreaming) { _, streaming in
+                // A compact report is about the context that just existed; once a
+                // new turn starts, the banner should reflect the live figures
+                // rather than a stale summary.
+                if streaming { compactSummary = nil }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .budFindInChat)) { _ in
             openFind()
@@ -375,9 +423,9 @@ public struct ChatView: View {
                     columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)],
                     spacing: 6
                 ) {
-                    ForEach(Self.starterPrompts, id: \.self) { prompt in
-                        StarterPromptButton(prompt: prompt) {
-                            Task { await model.send(prompt) }
+                    ForEach(starterPrompts, id: \.text) { prompt in
+                        StarterPromptButton(prompt: prompt.text) {
+                            Task { await model.send(prompt.text) }
                         }
                     }
                 }
@@ -397,6 +445,49 @@ public struct ChatView: View {
 
     /// What the panel says before anyone has typed anything.
     private var greeting: ChatGreeting { ChatGreeting.make(from: model.conversations) }
+
+    // MARK: - Starter prompt selection
+
+    /// The capabilities this install can actually satisfy. Files and the browser
+    /// ship with Bud; MCP and skills only count once something is set up.
+    /// The prompts worth offering, `always` first, capped at four. A prompt whose
+    /// capability is absent is dropped rather than offered and then failed.
+    ///
+    /// Pure so the promise — a fresh install is never offered a prompt it cannot
+    /// satisfy — is a check rather than a hope.
+    static func selectablePrompts(
+        hasMCP: Bool,
+        hasSkills: Bool,
+        pool: [StarterPrompt] = starterPool
+    ) -> [StarterPrompt] {
+        var caps: Set<StarterCapability> = [.always, .files, .browser]
+        if hasMCP { caps.insert(.mcp) }
+        if hasSkills { caps.insert(.skills) }
+        return Array(
+            pool.filter { $0.capability == .always || caps.contains($0.capability) }.prefix(4)
+        )
+    }
+
+    private var starterPrompts: [StarterPrompt] {
+        Self.selectablePrompts(
+            hasMCP: !model.mcp.servers.isEmpty,
+            hasSkills: !model.skills.installedNames.isEmpty
+        )
+    }
+
+    // MARK: - Budget banner
+
+    /// The banner is a warning, not a streamer: mid-turn it would flicker as the
+    /// budget climbs, and a suggestion to compact is nonsense while the model is
+    /// still answering.
+    private var showsBudgetBanner: Bool {
+        !model.isStreaming && model.isNearBudget
+    }
+
+    private func startNewChat() {
+        compactSummary = nil
+        model.newConversation()
+    }
 }
 
 /// The line above the starter prompts.

@@ -43,5 +43,22 @@ jobs:
           ./.build/debug/Bud --verify-ui
           ./.build/debug/Bud --verify-browser
 
+      # The repeatable baseline: what a request costs and what a turn's phases
+      # cost, on a clean machine, so a regression in prompt size or latency is a
+      # diff against an artifact rather than against memory. Runs without a key
+      # by design.
+      - name: Baseline measurement
+        run: |
+          ./.build/debug/Bud --measure | tee measure-baseline.txt
+          ./.build/debug/Bud --profile | tee profile-baseline.txt
+
+      - name: Upload baselines
+        uses: actions/upload-artifact@v5
+        with:
+          name: baseline-measurement
+          path: |
+            measure-baseline.txt
+            profile-baseline.txt
+
       - name: Assemble the app bundle
         run: ./Scripts/build-app.sh

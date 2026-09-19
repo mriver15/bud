@@ -7,7 +7,7 @@ draw its own interface when prose is the wrong shape.
 
 Built for macOS 26 with Swift 6 strict concurrency. No third-party packages.
 
-![Bud's panel on a fresh install: a floating glass window with a sparkle-marked header reading Bud, tabs for Chat, Agents, Browser and History, the words "Ask me something" over one line about what it can do and what it will not pretend to, four suggested questions, and a composer showing the active model, reasoning effort and tool count](docs/panel.png)
+![Bud's panel on an empty chat: a floating glass window with a sparkle-marked header reading Bud, tabs for Chat, Agents, Browser and History, the words "Ask me something" over a one-line introduction, four suggested questions chosen by what is installed, and a composer showing the active model, reasoning effort and tool count](docs/panel.png)
 
 ---
 
@@ -121,9 +121,12 @@ a follow-up prompt, so a generated surface can drive the conversation.
 
 **What a request costs is measured, and bounded.** Every tool is charged on every
 request whether or not it is called, so `--measure` reports what the prefix carries
-— split into prose, schema, and the skeleton left when a schema's own strings come
-out — and `--self-test` fails if the built-in block grows past its budget. Past
-120,000 characters of conversation the oldest tool results are emptied from what the
+— split per tool group (native, browser, generated-ui, memory, skills, subagents,
+and each connected MCP server), with a leaderboard of the heaviest individual
+tools, and `--self-test` fails if the built-in block grows past its ceiling. At
+80% of a conversation's token budget the panel warns — with *Start new chat*,
+*Compact context*, or *Raise budget* on the banner rather than in a settings page.
+Past 120,000 characters of conversation the oldest tool results are emptied from what the
 model is sent: the user keeps seeing them, and the model is told it can call again.
 
 **You can watch it think.** Reasoning models stream their thinking, and the
@@ -545,9 +548,13 @@ swift build
 ./.build/debug/Bud --verify-live        # a real model and a real MCP server; needs a key
 ./.build/debug/Bud --render-ui /tmp/ui  # writes a PNG of every surface
 ./.build/debug/Bud --measure            # what a request costs, tool by tool
+./.build/debug/Bud --profile            # where a turn's time goes, phase by phase
 ```
 
-Each one prints its own total, so there is no count here to go stale.
+Each one prints its own total, so there is no count here to go stale. CI runs
+`--measure` and `--profile` on every push and keeps the output as an artifact, so
+prompt-size and latency regressions are diffs against a baseline rather than
+against memory.
 
 **`--self-test`** covers the surfaces where a silent bug is expensive: SSE frame
 decoding (including the terminal frame that carries `finish_reason` *and* `usage`

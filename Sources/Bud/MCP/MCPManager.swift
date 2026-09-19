@@ -28,6 +28,13 @@ public final class MCPManager: MCPManaging, ToolProvider {
     @ObservationIgnored private var connectTokens: [String: Int] = [:]
     private var toolsByServer: [String: [ToolDescriptor]] = [:]
     private var logBuffers: [String: [String]] = [:]
+    /// Server ids whose "hand this to an agent" hint the user dismissed this
+    /// session. Not persisted: it is a nag-reducer, not a preference, and a hint
+    /// that has been acted on disappears anyway because `delegated` is set. The
+    /// manager holds it rather than the view so the dismissal survives switching
+    /// panes — the row is rebuilt on every tab change, and view-local state would
+    /// re-suggest the same server the moment the user came back.
+    private var dismissedDelegationHints: Set<String> = []
 
     private static let logLimit = 200
     /// Four at a time: connecting a dozen servers at once spawns a dozen node
@@ -266,6 +273,14 @@ public final class MCPManager: MCPManaging, ToolProvider {
     public func logs(id: String) -> [String] { logBuffers[id] ?? [] }
 
     public func clearLogs(id: String) { logBuffers[id] = [] }
+
+    public func isDelegationHintDismissed(_ id: String) -> Bool {
+        dismissedDelegationHints.contains(id)
+    }
+
+    public func dismissDelegationHint(_ id: String) {
+        dismissedDelegationHints.insert(id)
+    }
 
     /// Cached descriptors for one server. Synchronous so a view can call it while
     /// rendering; call `refreshTools()` when a fresh read is needed.

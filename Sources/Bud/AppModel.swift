@@ -458,6 +458,15 @@ public final class AppModel {
         return min(1, Double(conversationTokens) / Double(budget))
     }
 
+    /// Whether the conversation has spent at least 80% of its ceiling — the point
+    /// at which the composer warns rather than waits for the hard stop. Four
+    /// fifths is enough warning to compact or raise the ceiling before the next
+    /// question bounces, and not so early that the banner is ever-present.
+    public var isNearBudget: Bool {
+        guard let fraction = budgetFraction else { return false }
+        return fraction >= 0.8
+    }
+
     // MARK: - Message actions
 
     /// Whether this turn can be retried or dropped.

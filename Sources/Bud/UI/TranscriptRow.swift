@@ -186,6 +186,10 @@ public struct TranscriptRow: View {
             if let error = turn.error, !error.isEmpty {
                 TurnErrorNote(message: error)
             }
+
+            if !turn.isStreaming, !turnFooterItems.isEmpty {
+                turnFooter
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -229,6 +233,41 @@ public struct TranscriptRow: View {
     /// turn. Only that one gets a caret, a shimmer, or a pulse.
     private func isTail(_ id: String) -> Bool {
         turn.isStreaming && turn.segments.last?.id == id
+    }
+
+    // MARK: - Footer
+
+    /// The measured facts for a completed turn, in order: prompt tokens in,
+    /// completion tokens out, tool calls, wall time. A nil measurement is left
+    /// out rather than rendered as "0" — a guess dressed up as a fact. Restored
+    /// turns predate the instrumentation, so their token and wall-time fields are
+    /// nil and the footer shrinks to whatever is still knowable.
+    private var turnFooterItems: [String] {
+        var items: [String] = []
+        if let prompt = turn.promptTokens {
+            items.append("\(BudFormat.tokens(prompt)) in")
+        }
+        if let completion = turn.completionTokens {
+            items.append("\(BudFormat.tokens(completion)) out")
+        }
+        let tools = turn.segments.reduce(into: 0) { count, segment in
+            if case .tool = segment { count += 1 }
+        }
+        if tools > 0 {
+            items.append(tools == 1 ? "1 tool" : "\(tools) tools")
+        }
+        if let duration = turn.duration {
+            items.append(BudFormat.duration(duration))
+        }
+        return items
+    }
+
+    private var turnFooter: some View {
+        Text(turnFooterItems.joined(separator: " · "))
+            .font(Bud.Font.caption)
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+            .padding(.top, Bud.Space.xs)
     }
 }
 
