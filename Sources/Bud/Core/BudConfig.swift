@@ -9,18 +9,19 @@ import Foundation
 ///   2. `~/.omp/agent/config.yml`       (the user's existing oh-my-pi setup)
 ///   3. built-in defaults
 ///
-/// The API key comes from `~/.bud/config.json`, then the variable the provider
-/// names in the process environment, then that same variable as set in
-/// `~/.zshrc`, `~/.zprofile`, `~/.bash_profile` or `~/.profile` — see
-/// `resolveKey(named:)`. The profile search is what a GUI launch from Finder
-/// depends on, since it inherits no shell environment. There is no Keychain
-/// lookup, and none is planned here: a reader who trusts a comment saying a
-/// credential is in the Keychain will not think to look for it in `~/.bud`.
+/// Secrets resolve from the Keychain first, then the stored config file (for an
+/// install that has not migrated yet), then the variable the provider names in
+/// the process environment, then that same variable as set in `~/.zshrc`,
+/// `~/.zprofile`, `~/.bash_profile` or `~/.profile` — see `resolveKey(named:)`.
+/// The profile search is what a GUI launch from Finder depends on, since it
+/// inherits no shell environment. A Keychain read that fails falls through to
+/// the file rather than emptying a credential, so a busy Keychain never makes a
+/// key vanish.
 ///
-/// The Glama marketplace key follows the same shape: the stored config, then
-/// `GLAMA_API_KEY` in the environment, then the same profile search. Skipping
-/// the profile search would strand a key that is already exported in `~/.zshrc`,
-/// which is where keys usually live.
+/// The Glama marketplace key follows the same shape: the Keychain, then the
+/// stored config, then `GLAMA_API_KEY` in the environment, then the same profile
+/// search. Skipping the profile search would strand a key that is already
+/// exported in `~/.zshrc`, which is where keys usually live.
 /// How much of the model's thinking is shown in the transcript.
 public enum ReasoningVisibility: String, Sendable, Codable, CaseIterable, Identifiable {
     /// Streamed while the turn is running, folded away when it finishes. Watching
@@ -333,7 +334,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
     }
 
     /// Everything a backend needs for the current provider, with the key
-    /// resolved from storage, the environment, or the shell profile.
+    /// resolved from the Keychain, the environment, or the shell profile.
     public var activeCredentials: ProviderCredentials {
         ProviderCredentials(
             apiKey: resolvedKey(for: activeProvider),
@@ -343,7 +344,8 @@ public struct BudConfig: Sendable, Codable, Hashable {
     }
 
     /// Resolves a provider's credential, in the order that makes a
-    /// Finder-launched app work: what the user typed, then the process
+    /// Finder-launched app work: what Bud has stored (the Keychain, or the
+    /// config file on an install that has not migrated), then the process
     /// environment, then their shell profile.
     public func resolvedKey(for provider: ProviderDescriptor) -> String {
         let stored = providerKeys[provider.id]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -353,7 +355,8 @@ public struct BudConfig: Sendable, Codable, Hashable {
 
     public static let defaultUpdateRepo = "mriver15/bud"
 
-    /// The repository's token, from settings or the environment.
+    /// The repository's token, from the Keychain (or the stored config on an
+    /// install that has not migrated), then the environment.
     ///
     /// Both variable names are read because `gh` uses `GH_TOKEN` while most CI
     /// sets `GITHUB_TOKEN`, and a user who has exported either should not have to
@@ -445,11 +448,51 @@ public enum BudConfigLoader {
     public static var configURL: URL { budDirectory.appendingPathComponent("config.json") }
     public static var mcpURL: URL { budDirectory.appendingPathComponent("mcp.json") }
     public static var conversationsURL: URL { budDirectory.appendingPathComponent("conversations.json") }
+    /// The owner-only copy of `config.json` written before the secrets are moved
+    /// out of it — the reversibility of the migration.
+    public static var secretBackupURL: URL { budDirectory.appendingPathComponent("config.pre-keychain.json") }
 
     private static var ompConfigURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".omp/agent/config.yml")
     }
+
+    /// The Keychain accounts the three secret fields live under. `providerKeys`
+    /// holds the whole per-provider dictionary as one JSON blob, so a single
+    /// account covers every provider.
+    enum SecretAccount {
+        static let providerKeys = "providerKeys"
+        static let glamaAPIKey = "glamaAPIKey"
+        static let updateToken = "updateToken"
+    }
+
+    /// The store the secrets live in. Typed as the protocol so the migration can
+    /// be exercised against an in-memory fake instead of the real Keychain.
+    private static let keychainStoreLock = NSLock()
+    private nonisolated(unsafe) static var _keychainStore: any KeychainStoring = KeychainStore()
+    /// The store the loader reads and writes. Swapped for an in-memory fake by
+    /// the headless modes, so a scratch run can neither block on the consent
+    /// prompt nor leave items behind. The lock is what makes the swap safe: the
+    /// value is only ever read or written under it.
+    public static var keychainStore: any KeychainStoring {
+        get { keychainStoreLock.withLock { _keychainStore } }
+        set { keychainStoreLock.withLock { _keychainStore = newValue } }
+    }
+
+    /// Whether this process is the installed app, which is the only context that
+    /// touches the real Keychain.
+    ///
+    /// A Keychain item's access is bound to the identity of the binary that
+    /// created it, and a freshly built ad-hoc binary is a different identity than
+    /// the one that wrote the item. Reading across that boundary blocks on the
+    /// securityd consent prompt, which a headless process can never answer — so
+    /// the self-test and the verification binaries skip the Keychain (and never
+    /// migrate the real config). The exact identifier is the gate rather than
+    /// "has a bundle": a binary that happens to report *some* identifier still
+    /// must not migrate the real file or block on the consent prompt, both of
+    /// which have happened with a looser check. The installed app is the one
+    /// place the Keychain is used.
+    static var usesKeychain: Bool { Bundle.main.bundleIdentifier == "com.mriver15.bud" }
 
     public static func ensureDirectory() {
         createOwnerOnlyDirectory(budDirectory)
@@ -562,6 +605,129 @@ public enum BudConfigLoader {
         return config
     }
 
+    // MARK: Secrets & migration
+
+    /// The outcome of moving the file's secret fields into the Keychain.
+    struct SecretMigration {
+        /// The stored config to persist: secret fields nil only when `complete`.
+        var stored: StoredConfig
+        /// Every present secret field was moved, or was already in the Keychain.
+        var complete: Bool
+    }
+
+    /// Writes each present secret field to the Keychain — only when the account
+    /// is empty — and verifies every write by reading it back. Pure over the
+    /// protocol, so it is exercised against an in-memory fake and never the real
+    /// Keychain.
+    ///
+    /// A partial move is never committed: on any failure the whole of the input
+    /// is returned unchanged, so the file keeps every secret and the caller keeps
+    /// running on the file values.
+    static func moveSecrets(from stored: StoredConfig, to keychain: any KeychainStoring) -> SecretMigration {
+        var result = stored
+        var complete = true
+
+        if let providerKeys = stored.providerKeys {
+            if storeSecret(encodeProviderKeys(providerKeys) ?? "", account: SecretAccount.providerKeys, in: keychain) {
+                result.providerKeys = nil
+            } else {
+                complete = false
+            }
+        }
+        if let glama = stored.glamaAPIKey {
+            if storeSecret(glama, account: SecretAccount.glamaAPIKey, in: keychain) {
+                result.glamaAPIKey = nil
+            } else {
+                complete = false
+            }
+        }
+        if let token = stored.updateToken {
+            if storeSecret(token, account: SecretAccount.updateToken, in: keychain) {
+                result.updateToken = nil
+            } else {
+                complete = false
+            }
+        }
+
+        return SecretMigration(stored: complete ? result : stored, complete: complete)
+    }
+
+    /// Puts `value` in `account` only when the account is empty, and verifies the
+    /// write by reading it back. Returns true when the account now holds `value`
+    /// — whether it was already there or was written intact.
+    private static func storeSecret(_ value: String, account: String, in keychain: any KeychainStoring) -> Bool {
+        // Already present: the Keychain wins, whatever it holds.
+        if keychain.get(account) != nil {
+            return true
+        }
+        guard keychain.set(account, value: value) else { return false }
+        return keychain.get(account) == value
+    }
+
+    /// Moves the three secret fields out of the stored config file and into the
+    /// Keychain, once.
+    ///
+    /// The order is the safety: the previous config is backed up to
+    /// `config.pre-keychain.json` (owner-only) before anything is touched, and
+    /// each secret is written to the Keychain and read back before its field is
+    /// dropped. On any failure the file keeps every secret and the run continues
+    /// on the file values, so the next load simply retries. A completed migration
+    /// is a no-op — the file no longer holds any of the three fields, and nothing
+    /// here writes them again.
+    static func migrateSecretsToKeychain(
+        data: Data,
+        stored: StoredConfig,
+        keychain: any KeychainStoring
+    ) -> StoredConfig {
+        // Nothing to move: the file no longer holds a secret field.
+        guard stored.providerKeys != nil || stored.glamaAPIKey != nil || stored.updateToken != nil else {
+            return stored
+        }
+
+        // The backup is the reversibility, so it is written first. If it cannot
+        // be, the file keeps every secret and the run continues on them.
+        guard (try? writeOwnerOnly(data, to: secretBackupURL)) != nil else {
+            return stored
+        }
+
+        let result = moveSecrets(from: stored, to: keychain)
+        guard result.complete else { return stored }
+
+        // Re-persist the file with the secret fields gone. A failure here leaves
+        // the original on disk (the write is atomic), so the run continues on the
+        // file values and the next load retries; the Keychain already holds
+        // verified copies, so nothing is lost either way.
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let strippedData = try? encoder.encode(result.stored),
+              (try? writeOwnerOnly(strippedData, to: configURL)) != nil else {
+            return stored
+        }
+
+        return result.stored
+    }
+
+    /// Writes the three secret fields to the Keychain. Every save goes here, so
+    /// the file never holds a secret again after migration.
+    static func writeSecrets(_ config: BudConfig, to keychain: any KeychainStoring) {
+        if let json = encodeProviderKeys(config.providerKeys) {
+            keychain.set(SecretAccount.providerKeys, value: json)
+        }
+        keychain.set(SecretAccount.glamaAPIKey, value: config.glamaAPIKey)
+        keychain.set(SecretAccount.updateToken, value: config.updateToken)
+    }
+
+    private static func encodeProviderKeys(_ keys: [String: String]) -> String? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(keys) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func decodeProviderKeys(_ json: String) -> [String: String]? {
+        try? JSONDecoder().decode([String: String].self, from: Data(json.utf8))
+    }
+
     /// Reads and caches. Failure is never fatal — a missing key surfaces in the UI
     /// as a first-run prompt rather than a crash.
     public static func load() -> BudConfig {
@@ -574,10 +740,36 @@ public enum BudConfigLoader {
             config.reasoningEffort = effort
         }
 
-        // 1. Bud-local override wins over everything on disk.
+        // 1. Bud-local override wins over everything on disk. Secrets are moved
+        // into the Keychain on the way in, so the file this reads may already
+        // have had them stripped. A process that is not the installed app skips
+        // the Keychain entirely — it neither migrates the file nor reads the
+        // Keychain, so a headless binary can never block on the consent prompt.
         if let data = try? Data(contentsOf: configURL),
            let stored = try? JSONDecoder().decode(StoredConfig.self, from: data) {
-            config = apply(stored, to: config)
+            if usesKeychain {
+                let migrated = migrateSecretsToKeychain(data: data, stored: stored, keychain: keychainStore)
+                config = apply(migrated, to: config)
+
+                // The Keychain wins over whatever the file still held. Reading it
+                // after the migration (which verified every write) means an
+                // install that has already migrated loads its secrets from the
+                // Keychain, and one that has not falls back to the file values
+                // `apply` just folded in — a Keychain read that fails therefore
+                // never empties a key.
+                if let json = keychainStore.get(SecretAccount.providerKeys),
+                   let keys = decodeProviderKeys(json) {
+                    config.providerKeys = keys
+                }
+                if let glama = keychainStore.get(SecretAccount.glamaAPIKey) {
+                    config.glamaAPIKey = glama
+                }
+                if let token = keychainStore.get(SecretAccount.updateToken) {
+                    config.updateToken = token
+                }
+            } else {
+                config = apply(stored, to: config)
+            }
         }
 
         // A Finder launch inherits no environment, so the profile search is what
@@ -592,8 +784,12 @@ public enum BudConfigLoader {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(stored) else { return }
-        // The file holds a credential; the helper keeps it owner-only.
+        // The secrets live in the Keychain, so the file holds none of them and
+        // the owner-only mode just keeps the rest of it private.
         try? writeOwnerOnly(data, to: configURL)
+        if usesKeychain {
+            writeSecrets(config, to: keychainStore)
+        }
     }
 
     /// Writes only the API key without disturbing anything else.
@@ -734,6 +930,11 @@ public enum BudConfigLoader {
         /// Every field is optional so a config written by an older build still
         /// decodes, and a config written by this build can be read by one that
         /// only knows some of it.
+        ///
+        /// The three secret fields — `providerKeys`, `glamaAPIKey` and
+        /// `updateToken` — are read-only here: they are decoded from installs
+        /// that predate the Keychain, moved into it on load, and never written
+        /// back by `init(from:)`.
         public var provider: String?
         public var model: String?
         public var providerModels: [String: String]?
@@ -766,23 +967,25 @@ public enum BudConfigLoader {
 
         /// Projects a live config onto the persisted shape.
         ///
-        /// The legacy single-provider fields are deliberately left nil: they are
-        /// read once for migration and never written again, so a saved file has
-        /// exactly one representation of where a credential lives.
+        /// The secret fields and the legacy single-provider fields are
+        /// deliberately left nil: they are read once for migration (or fallback)
+        /// and never written again, so a saved file has exactly one
+        /// representation of where a credential lives — the Keychain.
         public init(from config: BudConfig) {
             self.provider = config.provider
             self.model = nil
             self.providerModels = config.providerModels
-            self.providerKeys = config.providerKeys
+            // Secrets are not written to the file: they live in the Keychain.
+            self.providerKeys = nil
             self.providerBaseURLs = config.providerBaseURLs
             self.providerRegions = config.providerRegions
             self.updateRepo = config.updateRepo
             self.updateFeedURL = config.updateFeedURL
-            self.updateToken = config.updateToken
+            self.updateToken = nil
             self.updateChannel = config.updateChannel
             self.autoCheckUpdates = config.autoCheckUpdates
             self.conversationTokenBudget = config.conversationTokenBudget
-            self.glamaAPIKey = config.glamaAPIKey
+            self.glamaAPIKey = nil
             self.reasoningEffort = config.reasoningEffort
             self.reasoningVisibility = config.reasoningVisibility
             self.temperature = config.temperature

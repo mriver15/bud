@@ -12,6 +12,56 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.6.0
+
+### Secrets move to the Keychain
+
+API keys, the Glama key, and the update token now live in the macOS Keychain —
+one generic-password item per field, readable after the first unlock. On first
+run, they migrate from `~/.bud/config.json`, which is backed up to
+`config.pre-keychain.json` (0600) and then re-written without them. The move is
+verified write-then-read per field, and a failure keeps the file values and
+retries next launch — a key cannot be lost by the move. The environment and the
+shell profile remain fallbacks. Settings copy, the onboarding note, SECURITY.md
+and the README all now say the same thing.
+
+### A gate that was too loose, and the two defences that replaced it
+
+The first version of the migration gate asked only whether the process *has a
+bundle*, and during this development it let a headless check binary run the
+migration against the real config — stripping the keys from the owner's live
+file and writing them from an unsigned process. The keys were recovered from the
+backup the migration itself had written, which is what the backup is for, and
+the wrong items were deleted.
+
+The gate is now exact — **only the installed app, by its real bundle
+identifier** — and the headless modes swap in an in-memory keychain, so a
+scratch process can neither read the real Keychain (the consent prompt is a
+hang) nor migrate the real file (a throwaway store would be a key's last stop).
+The self-test proves it: the migration runs against a fake, never the real
+Keychain, and every run ends with the real config untouched.
+
+### Cancellation, proven in every place a turn can be stopped
+
+The verification suites now cancel a turn in each of its four phases and assert
+what is released: a live provider stream (finalised turn, Stopped status, no
+error), an outstanding MCP call (the `delay` tool — the call is recorded failed,
+not succeeded), two concurrent slow tools (both settle, neither succeeded), and
+a page load in the browser (the engine is usable afterwards, a second load
+succeeds). A leaked continuation would hang the whole suite, and the explicit
+state checks are the deliverable on top of that.
+
+### Verification
+
+```
+--self-test       1058/1058   (+14: the migration contract against an
+                              in-memory fake — full move, keychain-wins,
+                              partial moves never committed, no-op when bare)
+--verify-ui         25/25     --verify-browser   43/43    --verify-live   149/149
+```
+
+---
+
 ## Bud 2.5.0
 
 ### The prefix cache is measured, not hoped for

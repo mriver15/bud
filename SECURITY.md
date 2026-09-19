@@ -78,19 +78,30 @@ token, if you have configured one, is only ever sent to `github.com`.
 
 ## Where your credentials are
 
-API keys, the Glama key, and any update token live in `~/.bud/config.json`, which
-is written `0600` — owner-only, **in plain text, not in the Keychain**. MCP server
-environment variables and headers are stored the same way in `~/.bud/mcp.json`,
-also `0600`. The directory itself is `0700`, and the three places Bud writes
-derived data that can contain secrets — spilled tool results, page screenshots, and
-images returned by servers — are `0600` as well.
+API keys, the Glama key, and any update token live in the **macOS Keychain**, one
+generic-password item per field under the app's bundle identifier, readable after
+the first unlock (a menu-bar app must work before you unlock). On the first run of
+the version that introduced this, they are moved there from `~/.bud/config.json`,
+which is backed up to `config.pre-keychain.json` (`0600`) first and then re-written
+without them — a failed step keeps the file values and retries next launch, so a
+key is never lost by the move. The environment and the shell profile remain
+fallbacks for keys the Keychain and the file do not hold.
 
-This means two things worth stating plainly:
+MCP server environment variables and headers are stored in `~/.bud/mcp.json`,
+written `0600` — owner-only, in plain text. The directory itself is `0700`, and
+the three places Bud writes derived data that can contain secrets — spilled tool
+results, page screenshots, and images returned by servers — are `0600` as well.
 
-- Anything running as you on this machine can read those files. Bud does not
-  protect them from your own account, and does not claim to.
+This means three things worth stating plainly:
+
+- Keychain items are readable by processes with the same bundle identifier, so
+  the protection is against other apps and other accounts, not against your own
+  account. Bud does not claim otherwise.
 - A key in your environment is visible to every process you launch. Bud prefers
-  its own config file over the environment for that reason.
+  the Keychain over the environment for that reason.
+- The `config.pre-keychain.json` backup is a plaintext file of the pre-migration
+  config. Delete it once you have confirmed everything works — Bud never reads
+  it, it is purely a rollback path.
 
 The **update signing key** is different and is the one secret that really matters:
 it lives at `~/.bud/keys/update-signing.key`, mode `0600`, outside this repository,

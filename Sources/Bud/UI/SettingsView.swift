@@ -282,7 +282,7 @@ private struct GeneralSettingsTab: View {
         if let variable = environmentVariableName(for: provider) {
             return "\(variable) (environment or shell profile)"
         }
-        return "saved in Bud"
+        return "saved in the Keychain"
     }
 
     // MARK: Credentials
@@ -291,7 +291,7 @@ private struct GeneralSettingsTab: View {
         VStack(alignment: .leading, spacing: Bud.Space.sm) {
             SectionHeader(
                 "\(model.config.activeProvider.name) credentials",
-                subtitle: "Kept in ~/.bud/config.json with owner-only permissions.",
+                subtitle: "Kept in the Keychain.",
                 systemImage: "key"
             )
             GlassCard {

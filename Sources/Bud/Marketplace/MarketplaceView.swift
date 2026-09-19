@@ -157,7 +157,7 @@ public struct MarketplaceView: View {
             EmptyStateView(
                 systemImage: "key",
                 title: "Glama needs an API key",
-                message: "Browsing Glama's catalogue requires an API key. Add one in Settings → General and come back — Bud keeps it in ~/.bud/config.json with owner-only permissions.",
+                message: "Browsing Glama's catalogue requires an API key. Add one in Settings → General and come back — Bud keeps it in the Keychain.",
                 fills: false
             )
             Button {

@@ -299,13 +299,15 @@ Bud reads configuration in this order, highest priority first:
 | `~/.omp/agent/config.yml` | If you also run oh-my-pi, its `modelRoles.default` is picked up as a model choice |
 | built-in defaults | `deepseek-v4-flash` |
 
-The API key is resolved from `~/.bud/config.json`, then the environment, then
-your shell profile (`~/.zshrc`, `~/.zprofile`, …). The shell fallback exists
-because an app launched from Finder inherits no shell environment — without it,
-a first launch would appear to have no key even though your terminal does.
+The API key is resolved from the macOS Keychain, then `~/.bud/config.json` (for
+installs that have not yet migrated), then the environment, then your shell
+profile (`~/.zshrc`, `~/.zprofile`, …). The shell fallback exists because an app
+launched from Finder inherits no shell environment — without it, a first launch
+would appear to have no key even though your terminal does. Keys entered in
+Settings are written to the Keychain; the config file no longer holds them.
 
-MCP servers persist to `~/.bud/mcp.json`. Both files are written with `0600`
-permissions since they can hold credentials.
+MCP servers persist to `~/.bud/mcp.json`, written with `0600` permissions since
+they can hold credentials.
 
 The Glama source needs an API key from `glama.ai/settings/api-keys`, resolved
 from the stored config, then `GLAMA_API_KEY`, then your shell profile. Without

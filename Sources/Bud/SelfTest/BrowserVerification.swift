@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Foundation
+import Network
 
 /// Drives the real browser against a local fixture, with no network.
 ///
@@ -250,7 +251,86 @@ public enum BudBrowserVerification {
             c.check("the browser completed without throwing (\(error.localizedDescription))", false)
         }
 
+        // MARK: Cancelling a page load
+
+        // A load that is cancelled has to release the waiter waiting on it: a
+        // `pendingLoad` continuation nobody resumed would leave every later tool
+        // call queued behind it, which is a hang nobody sees until the next click.
+        guard let (stallURL, stopStalling) = try? await Self.startStallingEndpoint() else {
+            c.check("cancel: a stalling endpoint could be started", false)
+            return c.report()
+        }
+        defer { stopStalling() }
+
+        let loadTask = Task { try await engine.open(stallURL.absoluteString) }
+        // Wait for WebKit to report itself loading, so the stop lands on a
+        // genuinely in-flight navigation rather than one that was only queued.
+        let inFlight = await Self.waitUntil(timeout: 10) { engine.webView.isLoading }
+        c.check("cancel: the slow load was in flight when stopped", inFlight)
+        engine.webView.stopLoading()
+
+        // The cancelled load must settle: reaching the await at all is the proof
+        // that the continuation was resumed rather than leaked.
+        var cancelledCleanly = false
+        do {
+            try await loadTask.value
+        } catch {
+            cancelledCleanly = true
+        }
+        c.check("cancel: a cancelled load throws rather than hangs", cancelledCleanly)
+        c.check("cancel: ...and the engine is no longer loading", !engine.webView.isLoading)
+
+        // The engine must still be usable afterwards: a second load succeeds.
+        do {
+            try await engine.open(page.path)
+            c.check("cancel: a second load succeeds after a cancelled one",
+                    engine.state.url.hasSuffix("fixture.html"))
+        } catch {
+            c.check("cancel: a second load succeeds after a cancelled one", false)
+        }
+
         return c.report()
+    }
+
+    /// Polls a condition until it holds or the deadline passes. WebKit reports
+    /// navigation back through the main queue, and there is no update cycle to
+    /// observe it from inside a verification run.
+    private static func waitUntil(
+        timeout: TimeInterval,
+        _ condition: @MainActor () -> Bool
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return condition()
+    }
+
+    /// A local HTTP endpoint that accepts the connection and then stays silent.
+    ///
+    /// The value is a load that is genuinely pending: a page that loads instantly
+    /// could never prove that cancelling releases the waiter. Loopback is exempt
+    /// from App Transport Security, so plain `http://127.0.0.1` is reachable with
+    /// no configuration.
+    private static func startStallingEndpoint() async throws -> (url: URL, stop: () -> Void) {
+        let listener = try NWListener(using: .tcp, on: .any)
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: .global())
+        }
+        listener.start(queue: .global())
+        // The OS assigns an ephemeral port once the listener is ready; poll for it
+        // rather than observing the state handler, so nothing hops between queues
+        // while the verification stays on the main actor. The port reads zero until
+        // the bind has completed, so only a non-zero one is accepted.
+        for _ in 0..<200 {
+            if let port = listener.port?.rawValue, port > 0 {
+                return (URL(string: "http://127.0.0.1:\(port)/slow")!, { listener.cancel() })
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        listener.cancel()
+        throw BrowserError.script("the stalling endpoint never bound a port")
     }
 
     /// The ref an outline line carries, matched on its start so a ref is never

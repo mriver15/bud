@@ -165,7 +165,7 @@ struct OnboardingView: View {
                             ? "\(provider.name) credentials"
                             : provider.name,
                         subtitle: state.needsKey
-                            ? "Kept in ~/.bud/config.json with owner-only permissions."
+                            ? "Kept in the Keychain."
                             : "Running on this Mac. No key needed.",
                         systemImage: state.needsKey ? "key" : "desktopcomputer"
                     )
@@ -217,10 +217,11 @@ struct OnboardingView: View {
     /// cannot see it" different.
     private var missingKeyNote: some View {
         Text(
-            "Bud looked in ~/.bud/config.json, then the process environment, then your "
-                + "shell profile (~/.zshrc, ~/.zprofile, ~/.bash_profile, ~/.profile). "
-                + "A Finder launch inherits none of a terminal's environment, so a key "
-                + "you exported in a shell only shows up if it's in one of those."
+            "Bud looked in the Keychain, then ~/.bud/config.json, then the process "
+                + "environment, then your shell profile (~/.zshrc, ~/.zprofile, "
+                + "~/.bash_profile, ~/.profile). A Finder launch inherits none of a "
+                + "terminal's environment, so a key you exported in a shell only shows "
+                + "up if it's in one of those."
         )
         .font(Bud.Font.caption)
         .foregroundStyle(.tertiary)

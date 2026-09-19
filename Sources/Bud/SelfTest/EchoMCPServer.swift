@@ -98,6 +98,17 @@ public enum EchoMCPServer {
                             "required": .array([.string("a"), .string("b")]),
                         ]),
                     ]),
+                    .object([
+                        "name": .string("delay"),
+                        "description": .string("Wait the given number of milliseconds before answering. Used to verify cancellation."),
+                        "inputSchema": .object([
+                            "type": .string("object"),
+                            "properties": .object([
+                                "milliseconds": .object(["type": .string("integer")]),
+                            ]),
+                            "required": .array([.string("milliseconds")]),
+                        ]),
+                    ]),
                 ]),
             ]))
 
@@ -117,6 +128,14 @@ public enum EchoMCPServer {
                 let rendered = sum == sum.rounded()
                     ? String(Int64(sum)) : String(sum)
                 return .value(textResult(rendered))
+            case "delay":
+                // A blocking sleep on purpose: a test server that answers
+                // instantly cannot prove that cancelling a turn stops the tools
+                // it was waiting on. Capped so a broken cancellation cannot
+                // hang a suite forever.
+                let milliseconds = min(arguments["milliseconds"]?.doubleValue ?? 2_000, 30_000)
+                Thread.sleep(forTimeInterval: milliseconds / 1_000)
+                return .value(textResult("done after \(Int(milliseconds))ms"))
             case "fail":
                 // Lets the caller prove that an error result is surfaced as an
                 // error rather than as an empty success.

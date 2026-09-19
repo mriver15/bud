@@ -104,6 +104,7 @@ public enum BudSelfTest {
             toolProvenance,
             budLinks,
             toolConfirmation,
+            keychainMigration,
             prefixStability,
             subagentHandoff,
             onboarding,
@@ -1111,6 +1112,67 @@ public enum BudSelfTest {
         for section in ["Answer", "Evidence", "Unresolved", "Handles"] {
             c.check("the dispatch contract names \(section)", prompt.contains(section))
         }
+
+        return c.report()
+    }
+
+    // MARK: Phase 4 — secrets leave the file
+
+    /// SEC-001's contract, exercised against an in-memory fake so no test ever
+    /// touches the real Keychain: the move is verified, never partially
+    /// committed, and a value already in the Keychain wins.
+    static func keychainMigration() -> SelfTestReport {
+        let c = Checker(suite: "keychain")
+
+        final class FailingStore: KeychainStoring, @unchecked Sendable {
+            func get(_ account: String) -> String? { nil }
+            func set(_ account: String, value: String) -> Bool { false }
+            func delete(_ account: String) -> Bool { true }
+        }
+
+        var stored = BudConfigLoader.StoredConfig(from: BudConfig())
+        stored.providerKeys = ["deepseek": "sk-from-file"]
+        stored.glamaAPIKey = "glm-from-file"
+        stored.updateToken = "tok-from-file"
+
+        let fake = InMemoryKeychain()
+        let moved = BudConfigLoader.moveSecrets(from: stored, to: fake)
+        c.check("a full move completes", moved.complete)
+        c.nilValue("...and the file form loses the provider keys", moved.stored.providerKeys)
+        c.nilValue("...and the marketplace key", moved.stored.glamaAPIKey)
+        c.nilValue("...and the update token", moved.stored.updateToken)
+        c.check("...and the store holds the provider keys",
+                fake.get("providerKeys")?.contains("sk-from-file") == true)
+        c.equal("...and the plain secrets", fake.get("glamaAPIKey"), "glm-from-file")
+        c.equal("...and the token", fake.get("updateToken"), "tok-from-file")
+
+        // The Keychain wins: an occupied account is not overwritten, and the file
+        // field is still dropped, because the value now lives there either way.
+        let occupied = InMemoryKeychain()
+        _ = occupied.set("glamaAPIKey", value: "the-keychain-value")
+        let contested = BudConfigLoader.moveSecrets(from: stored, to: occupied)
+        c.equal("a value already in the Keychain wins",
+                occupied.get("glamaAPIKey"), "the-keychain-value")
+        c.nilValue("...and the file field is still dropped", contested.stored.glamaAPIKey)
+
+        // A partial move is never committed: the whole input comes back, so the
+        // file keeps every secret and the caller keeps running on them.
+        let failing = BudConfigLoader.moveSecrets(from: stored, to: FailingStore())
+        c.check("a failing store fails the move", !failing.complete)
+        c.equal("...and every secret field comes back unchanged",
+                failing.stored.providerKeys, stored.providerKeys)
+        c.equal("...the marketplace key too",
+                failing.stored.glamaAPIKey, stored.glamaAPIKey)
+        c.equal("...and the token", failing.stored.updateToken, stored.updateToken)
+
+        // Nothing to move is a no-op, not a failure.
+        var bare = BudConfigLoader.StoredConfig(from: BudConfig())
+        bare.providerKeys = nil
+        bare.glamaAPIKey = nil
+        bare.updateToken = nil
+        let idle = BudConfigLoader.moveSecrets(from: bare, to: fake)
+        c.check("a file with no secrets migrates to completion without touching the store",
+                idle.complete)
 
         return c.report()
     }
@@ -2587,11 +2649,14 @@ public enum BudSelfTest {
         }
         let restored = BudConfigLoader.apply(decoded, to: BudConfig())
         c.equal("round trip: provider", restored.provider, "anthropic")
-        c.equal("round trip: keys", restored.providerKeys, saved.providerKeys)
+        // Secrets no longer ride the file: the stored form omits them, so a
+        // decode-and-apply of a saved config carries none of them. They travel
+        // through the Keychain instead, which is what the migration checks cover.
+        c.equal("round trip: keys stay out of the file", restored.providerKeys, [:])
         c.equal("round trip: base URLs", restored.providerBaseURLs, saved.providerBaseURLs)
         c.equal("round trip: regions", restored.providerRegions, saved.providerRegions)
         c.equal("round trip: models", restored.providerModels, saved.providerModels)
-        c.equal("round trip: glama key", restored.glamaAPIKey, "glm-x")
+        c.equal("round trip: glama key stays out of the file", restored.glamaAPIKey, "")
         c.equal("round trip: active model", restored.model, "claude-sonnet-4-6")
         c.equal("round trip: reasoning effort", restored.reasoningEffort, "high")
         c.equal("round trip: temperature", restored.temperature, 0.4)

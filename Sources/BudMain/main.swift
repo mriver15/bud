@@ -19,6 +19,11 @@ func useScratchStore() {
     try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     BudDatabase.shared = BudDatabase(url: directory.appendingPathComponent("bud.sqlite"))
     StoredResults.overrideDirectory = directory.appendingPathComponent("store", isDirectory: true)
+    // The same isolation for secrets: a headless run must never read the real
+    // Keychain — the consent prompt is a hang, and a migration into a throwaway
+    // store would be a key's last stop. The exact-identifier gate in BudConfig
+    // is the primary defence; this is the second.
+    BudConfigLoader.keychainStore = InMemoryKeychain()
 }
 
 let runsHeadless = arguments.contains("--self-test")

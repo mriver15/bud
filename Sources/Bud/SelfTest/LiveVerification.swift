@@ -232,13 +232,13 @@ public enum BudLiveVerification {
             "mcp: server reached ready (\(status?.error ?? "no error reported"))",
             status?.state == .ready
         )
-        c.equal("mcp: discovered both tools", status?.toolCount, 2)
+        c.equal("mcp: discovered all three tools", status?.toolCount, 3)
 
         let tools = mcp.serverTools(id: echoID).map(\.name).sorted()
         c.equal(
             "mcp: tools are namespaced",
             tools,
-            ["echo__add", "echo__echo"]
+            ["echo__add", "echo__delay", "echo__echo"]
         )
 
         // MARK: Tool registry routing
@@ -286,9 +286,9 @@ public enum BudLiveVerification {
         let served = await registryTools.descriptors().map(\.name).sorted()
         c.equal("selection: only the chosen tool is offered", served, ["echo__echo"])
         c.equal(
-            "selection: the server still discovered both",
+            "selection: the server still discovered all three",
             mcp.discoveredTools(id: echoID).count,
-            2
+            3
         )
 
         let withheld = await registryTools.invoke(
@@ -311,7 +311,7 @@ public enum BudLiveVerification {
 
         await mcp.setEnabledTools(nil, for: echoID)
         let restored = await registryTools.descriptors().map(\.name).sorted()
-        c.equal("selection: clearing offers every tool again", restored, ["echo__add", "echo__echo"])
+        c.equal("selection: clearing offers every tool again", restored, ["echo__add", "echo__delay", "echo__echo"])
 
         // MARK: Handing a server's tools to its agent
 
@@ -698,6 +698,132 @@ public enum BudLiveVerification {
             "subagent: produced output",
             (runs.first?.output.lowercased().contains("verified") ?? false)
         )
+
+        // MARK: Cancellation
+
+        // Cancellation is the one behaviour a happy-path suite never touches. A
+        // stopped turn has to release everything it started — the provider stream,
+        // the tools, the continuation a tool is suspended on — or the next send
+        // queues behind a task that never finishes. Each case starts work, stops it
+        // mid-flight, and then asserts both that the runtime settled and that the
+        // turn records what happened rather than a success.
+
+        // MARK: Cancellation — provider stream
+
+        // A runtime with no tools registered: the request is pure prose, so the
+        // stop lands in the middle of the model's stream rather than between tool
+        // rounds. Stopping once text is visibly streaming proves the stop happened
+        // mid-stream, not before the first token or after the last.
+        let streamEnv = AppEnvironment(config: config)
+        let streamRuntime = AgentRuntime(env: streamEnv)
+        var streamSettled = false
+        streamRuntime.onTurnFinished = { streamSettled = true }
+        streamRuntime.send(
+            "Write a long, detailed essay on the history of the postal service, "
+                + "covering at least ten distinct periods with examples."
+        )
+        let caughtMidStream = await waitUntil(timeout: 90) {
+            streamRuntime.isStreaming
+                && (streamRuntime.turns.last(where: { $0.role == .assistant })?.segments.isEmpty == false)
+        }
+        c.check("cancel: the provider stream was running when stopped", caughtMidStream)
+        streamRuntime.stop()
+        let streamStopped = await waitUntil(timeout: 60) { streamSettled }
+        c.check("cancel: stopping a stream settles the runtime", streamStopped)
+        c.check("cancel: the runtime says it stopped rather than answered",
+                streamRuntime.statusText == "Stopped")
+        if let stoppedTurn = streamRuntime.turns.last(where: { $0.role == .assistant }) {
+            c.check("cancel: the stopped turn is finalised, not left streaming",
+                    stoppedTurn.isStreaming == false && stoppedTurn.duration != nil)
+            // A stopped stream is not an error and not a finished answer: the
+            // runtime has no `cancelled` flag on a turn, so "stopped without an
+            // error" is all a turn can honestly record, and the panel's status
+            // (checked above) is where the stop is visible. No segment assertion:
+            // a stop during the thinking phase legitimately leaves none, since a
+            // reasoning model streams thought before any content exists.
+            c.check("cancel: a stop is not an error",
+                    stoppedTurn.error == nil)
+        } else {
+            c.check("cancel: a stopped assistant turn exists to inspect", false)
+        }
+
+        // MARK: Cancellation — MCP call
+
+        // A fresh runtime over the already-connected echo server, so the model can
+        // call echo__delay and the stop lands while the call is genuinely in flight.
+        let cancelEnv = AppEnvironment(config: config)
+        await cancelEnv.registry.register(mcp)
+
+        let mcpCancelRuntime = AgentRuntime(env: cancelEnv)
+        var mcpSettled = false
+        mcpCancelRuntime.onTurnFinished = { mcpSettled = true }
+        mcpCancelRuntime.send(
+            "Use the echo__delay tool with milliseconds 30000, then tell me it is done."
+        )
+        let delayRunning = await waitUntil(timeout: 90) {
+            mcpCancelRuntime.turns.contains { turn in
+                turn.segments.contains { segment in
+                    if case .tool(_, let call, _, let state, _, _) = segment {
+                        return call.name.contains("delay") && state == .running
+                    }
+                    return false
+                }
+            }
+        }
+        c.check("cancel: the delay call was in flight when stopped", delayRunning)
+        mcpCancelRuntime.stop()
+        let mcpStopped = await waitUntil(timeout: 60) { mcpSettled }
+        c.check("cancel: stopping an MCP call settles the runtime", mcpStopped)
+        // The delay call must not be recorded as a success: cancellation turns it
+        // into a failure that names the cancellation, never a completed tool.
+        let delaySegment = mcpCancelRuntime.turns.flatMap(\.segments).first { segment in
+            if case .tool(_, let call, _, _, _, _) = segment { return call.name.contains("delay") }
+            return false
+        }
+        if case .tool(_, _, _, let state, let result, _)? = delaySegment {
+            c.check("cancel: the delay call was not recorded as a success", state != .succeeded)
+            c.check("cancel: the delay call is recorded as cancelled",
+                    state == .failed && (result?.lowercased().contains("cancel") ?? false))
+        } else {
+            c.check("cancel: a delay call exists to inspect its state", false)
+        }
+
+        // MARK: Cancellation — concurrent tools
+
+        // Two delay calls in one round: the point is that stopping has to release
+        // both, not just the first to finish. A leaked continuation on either hangs
+        // the whole suite at its task group.
+        let concurrentRuntime = AgentRuntime(env: cancelEnv)
+        var concurrentSettled = false
+        concurrentRuntime.onTurnFinished = { concurrentSettled = true }
+        concurrentRuntime.send(
+            "Call the echo__delay tool twice, once with milliseconds 20000 and once "
+                + "with milliseconds 25000."
+        )
+        let bothRunning = await waitUntil(timeout: 90) {
+            let running = concurrentRuntime.turns.flatMap(\.segments).filter { segment in
+                if case .tool(_, let call, _, let state, _, _) = segment {
+                    return call.name.contains("delay") && state == .running
+                }
+                return false
+            }
+            return running.count >= 2
+        }
+        c.check("cancel: both delay calls were in flight when stopped", bothRunning)
+        concurrentRuntime.stop()
+        let concurrentStopped = await waitUntil(timeout: 60) { concurrentSettled }
+        c.check("cancel: stopping concurrent tools settles the runtime", concurrentStopped)
+        let delaySegments = concurrentRuntime.turns.flatMap(\.segments).compactMap {
+            segment -> (ToolRunState, String?)? in
+            if case .tool(_, let call, _, let state, let result, _) = segment,
+               call.name.contains("delay") {
+                return (state, result)
+            }
+            return nil
+        }
+        c.check("cancel: both delay calls are recorded", delaySegments.count >= 2)
+        c.check("cancel: neither delay call is recorded as a success",
+                delaySegments.allSatisfy { $0.0 != .succeeded })
 
         // MARK: Skills (live)
 
