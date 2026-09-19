@@ -12,6 +12,69 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 1.4.0
+
+### Images and grids, checked rather than assumed
+
+The plan for the getcompetitive server is that it returns artwork URLs and a
+generated surface lays them out as a team. That rests on two things the source
+cannot answer — whether a remote PNG loads and draws at all, and whether a grid of
+them looks deliberate — so both were rendered.
+
+Six official artworks from `raw.githubusercontent.com`, at the panel's real
+content width and at its own minimum:
+
+| | |
+|---|---|
+| sprites fetched | **6 of 6** |
+| 3 columns, 700pt | neat, equal cards, nothing clipped |
+| 4 columns | neat, partial last row left-aligned rather than stretched |
+| 2 columns, 5 cards | neat |
+| 3 columns, **520pt** — the panel's minimum | neat, sprites fully visible, nothing cut |
+
+The image component is confirmed as it was built in 0.3.1: `width`, `height`,
+`fit` and `radius` do what they say, a 96-point sprite in a flexible card is
+uniform and centred, and the grid holds its shape down to the narrowest the panel
+goes. `--render-ui` writes all four.
+
+One thing worth knowing: `grid` takes an exact column count, while the separate
+`columns` layout adapts to the width. For a team that is the right way round — six
+creatures want three across, not two because the window is narrow.
+
+### `find_image` stays, and got fixed
+
+It looked like a tool with no purpose: over three real sessions, 18 queries for
+competitive Pokémon, **zero usable images**, 34 rejected by the model. But that
+was an unfair test. Pokémon has no articles to draw on, so every query took the
+fallback path — the mechanism was never exercised.
+
+Asked what it was built for, it does well. Twenty queries a general assistant
+would actually be given:
+
+```
+red panda · Mount Fuji · sourdough · Titanium · Golden Gate Bridge
+Ada Lovelace · Humpback whale · Espresso · Saffron · Nikola Tesla
+Kombucha · Basilica of Saint-Denis · Morse code · Lisbon · Permafrost …
+```
+
+**17 of 20 returned the article's own lead image** — a red panda, a titanium
+crystal, Ada Lovelace's daguerreotype, a breaching humpback whale. That is a
+working tool, so it stays.
+
+What did get fixed is the path that produced the baseball player:
+
+- **A file has to be a picture.** A "Lucario Voice Line.ogg" was offering the
+  icon Commons keeps for audio — `fileicon-ogg.png` — which passed the old check
+  because that check read the *address*, which ends in `.png`. It now reads the
+  file.
+- **A file has to be named for what was asked.** Commons matches page text, so an
+  uncommon name returns whatever mentions it — three photographs of Mankey for
+  "Annihilape", including a 1948 baseball player and a Second World War
+  enlistment record. A match on the name is a match; a match on the prose is a
+  guess, and guesses are now dropped.
+
+---
+
 ## Bud 1.3.0
 
 ### The model's thinking is on screen

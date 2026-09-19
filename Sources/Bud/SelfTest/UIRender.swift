@@ -612,6 +612,97 @@ public enum UIRender {
             )
         }
 
+        // MARK: Sprites from a URL
+
+        // The shape the getcompetitive server is being asked to feed: six species
+        // resolved to artwork URLs, laid out as a team. Two things are being
+        // checked and neither can be answered from the source — that a remote PNG
+        // actually loads and draws, and that a grid of them looks deliberate at
+        // more than one count.
+        let spriteURLs: [(String, String, Int)] = [
+            ("Sneasler", "Poison / Fighting", 903),
+            ("Annihilape", "Fighting / Ghost", 979),
+            ("Lucario-Mega", "Fighting / Steel", 10059),
+            ("Corviknight", "Steel / Flying", 823),
+            ("Basculegion", "Water / Ghost", 902),
+            ("Kingambit", "Dark / Steel", 983),
+        ]
+
+        // Fetched once up front so the cache is warm. `AsyncImage` shares
+        // `URLSession.shared`, so the render below reads them from memory rather
+        // than waiting on six sockets inside a layout pass.
+        let warmed = Deferred<Int>()
+        Task {
+            var loaded = 0
+            for (_, _, number) in spriteURLs {
+                let address = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/\(number).png"
+                if let url = URL(string: address),
+                   let (data, _) = try? await URLSession.shared.data(from: url),
+                   !data.isEmpty {
+                    loaded += 1
+                }
+            }
+            warmed.value = loaded
+        }
+        runLoop(30.0)
+        print("  sprites fetched: \(warmed.value ?? 0) of \(spriteURLs.count)")
+
+        func spriteTiles(_ species: [(String, String, Int)]) -> [JSONValue] {
+            species.map { name, types, number in
+                .object([
+                    "type": .string("card"),
+                    "title": .string(name),
+                    "subtitle": .string(types),
+                    "children": .array([
+                        .object([
+                            "type": .string("image"),
+                            "url": .string(
+                                "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/\(number).png"
+                            ),
+                            "alt": .string(name),
+                            "width": .number(96),
+                            "height": .number(96),
+                            "fit": .string("fit"),
+                            "radius": .number(10),
+                        ]),
+                    ]),
+                ])
+            }
+        }
+
+        for (label, columns, slice) in [
+            ("sprites-narrow", 3, spriteURLs),
+            ("sprites-4col", 4, Array(spriteURLs.prefix(8))),
+            ("sprites-2col", 2, Array(spriteURLs.prefix(5))),
+        ] {
+            let spec: JSONValue = .object([
+                "title": .string("Team"),
+                "components": .array([
+                    .object([
+                        "type": .string("grid"),
+                        "columns": .number(Double(columns)),
+                        "children": .array(spriteTiles(slice)),
+                    ]),
+                ]),
+            ])
+            // The narrow one is rendered at the panel's own minimum width, which is
+            // the only size where a three-column grid has to hold a 96-point sprite
+            // in a cell barely wider than it. The frame has to match the window or
+            // the capture is a clipped wide layout rather than a narrow one.
+            let measure: CGFloat = label == "sprites-narrow" ? 520 : Bud.contentMeasure
+            emit(
+                label,
+                GenerativeUIView(spec: spec, onAction: { _ in }, onPrompt: { _ in })
+                    .padding(Bud.Space.md)
+                    .frame(width: measure)
+                    .background(Color.black.opacity(0.30)),
+                width: measure,
+                height: 700,
+                directory: directory,
+                into: &written
+            )
+        }
+
         // MARK: Delegation
 
         // Two real delegations through the real path: the agent registry names a

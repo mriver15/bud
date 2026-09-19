@@ -3122,6 +3122,51 @@ public enum BudSelfTest {
                  "originalimage": {"source": "https://upload.wikimedia.org/t.png"}}
                 """), query: "Thing") != nil)
 
+        // MARK: What counts as a picture, and a match
+
+        // A fixture shaped like the response that produced the actual failure:
+        // asked for "Annihilape", Commons answered with photographs of Mankey
+        // because they *mention* it, and with a file icon because an audio file's
+        // thumbnail is a `.png` at a `.png` address.
+        let hostile = json("""
+        {
+          "query": {"pages": {
+            "1": {"index": 1, "title": "File:Mankey in place.jpg",
+                  "imageinfo": [{"thumburl": "https://upload.wikimedia.org/a.jpg", "url": "https://upload.wikimedia.org/a.jpg"}]},
+            "2": {"index": 2, "title": "File:Tom Mankey Klamath Falls Gems 1948.jpeg",
+                  "imageinfo": [{"thumburl": "https://upload.wikimedia.org/b.jpeg", "url": "https://upload.wikimedia.org/b.jpeg"}]},
+            "3": {"index": 3, "title": "File:Lucario Voice Line.ogg",
+                  "imageinfo": [{"thumburl": "https://commons.wikimedia.org/w/resources/assets/file-type-icons/fileicon-ogg.png",
+                                 "url": "https://upload.wikimedia.org/File:Lucario_Voice_Line.ogg"}]},
+            "4": {"index": 4, "title": "File:Annihilape plush.jpg",
+                  "imageinfo": [{"thumburl": "https://upload.wikimedia.org/d.jpg", "url": "https://upload.wikimedia.org/d.jpg"}]}
+          }}
+        }
+        """)
+        let surviving = ImageSearch.images(from: hostile, query: "Annihilape")
+        c.equal("only the file actually named after the query survives", surviving.count, 1)
+        c.equal("...which is the one that mentions it", surviving.first?.title, "Annihilape plush.jpg")
+
+        // The two filters, apart from each other.
+        c.check("an audio file is not a picture however it is served",
+                !ImageSearch.isImageFile("Lucario Voice Line.ogg"))
+        c.check("...and its icon is not either, even at a .png address",
+                !surviving.contains { $0.url.contains("fileicon") })
+        c.check("a jpeg is a picture", ImageSearch.isImageFile("Red Panda.JPG"))
+        c.check("a webp is a picture", ImageSearch.isImageFile("a.webp"))
+
+        // A match on the name is a match; a match on the prose is a guess.
+        c.check("a file named for something else is not a match",
+                !ImageSearch.nameMentions("Mankey in place.jpg", "Annihilape"))
+        c.check("a file named for the thing is", ImageSearch.nameMentions("Red Panda.JPG", "red panda"))
+        c.check("...whatever order the words are in",
+                ImageSearch.nameMentions("Panda, red.jpg", "red panda"))
+        c.check("one word of a phrase is enough",
+                ImageSearch.nameMentions("Sunset over the hills.jpg", "sunset over mountains"))
+        c.check("a description with nothing to match keeps everything",
+                ImageSearch.nameMentions("anything.jpg", "of a"))
+        c.check("case does not matter", ImageSearch.nameMentions("titanium.jpg", "Titanium"))
+
         // MARK: Files from a search
 
         let search = json("""
@@ -3144,7 +3189,7 @@ public enum BudSelfTest {
             },
             "3": {
               "index": 3,
-              "title": "File:No licence.png",
+              "title": "File:Red Panda without a licence.png",
               "imageinfo": [{"url": "https://upload.wikimedia.org/b.png"}]
             },
             "4": {"index": 4, "title": "File:Not an image at all"}
@@ -3170,9 +3215,10 @@ public enum BudSelfTest {
         // A tile that silently fails to decode is worse than the next result.
         c.check("an SVG is left out", !files.contains { $0.url.hasSuffix(".svg") })
         // A file with no stated licence is still usable; the source is the credit.
-        c.check("a file with no licence is still offered", files.contains { $0.title == "No licence.png" })
+        c.check("a file with no licence is still offered",
+                files.contains { $0.title == "Red Panda without a licence.png" })
         c.equal("...with no licence claimed for it",
-                files.first { $0.title == "No licence.png" }?.credit, nil)
+                files.first { $0.title == "Red Panda without a licence.png" }?.credit, nil)
         c.check("a page with no image on it is skipped", !files.contains { $0.title == "Not an image at all" })
 
         // MARK: Shapes that would crash a looser reader
