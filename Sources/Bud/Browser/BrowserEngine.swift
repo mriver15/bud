@@ -264,7 +264,11 @@ public final class BrowserEngine: NSObject {
     /// This is the tool that makes the rest usable. A model handed raw HTML picks
     /// selectors out of a document it cannot see; handed an outline with refs, it
     /// does what a person does — reads the labels and clicks the thing.
-    public func snapshot(maxLines: Int = 220) async throws -> String {
+    ///
+    /// `snapshot(maxLines:)` renders this to text; keeping the structure is what
+    /// lets a delta compare refs and regions without re-parsing prose it just
+    /// built.
+    public func outline() async throws -> PageOutline {
         // The outline comes back as JSON text, which `unwrap` may already have
         // turned into a dictionary — so both shapes are accepted rather than
         // assuming the one that happens to arrive.
@@ -281,13 +285,27 @@ public final class BrowserEngine: NSObject {
 
         knownRefs = Set(refs)
         let title = (parsed?["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? state.title
-        let header = "\(title)\n\(state.url)\n"
-        let shown = lines.prefix(maxLines)
-        var out = header + "\n" + shown.joined(separator: "\n")
-        if lines.count > shown.count {
-            out += "\n…[\(lines.count - shown.count) more lines]"
-        }
-        return out
+        // Each line is matched to its ref by the marker the script wrote into the
+        // text, not by position in the list: headings and images carry none, so
+        // an index into the lines would drift past the first of either.
+        let outlined = lines.map { OutlineLine(text: $0, ref: Self.refMarker(in: $0)) }
+        return PageOutline(url: state.url, title: title, lines: outlined)
+    }
+
+    /// The snapshot text: the structured outline rendered with a length cap.
+    public func snapshot(maxLines: Int = 220) async throws -> String {
+        try await outline().render(maxLines: maxLines)
+    }
+
+    /// The ref a rendered line carries, if it carries one.
+    ///
+    /// The script appends `[ref=N]` just after the label — before any `(checked)`,
+    /// `(value: …)` or `-> href` it adds later — so it is read back here rather
+    /// than guessed from the line's place in the list.
+    private static func refMarker(in line: String) -> Int? {
+        guard let open = line.range(of: "[ref=") else { return nil }
+        let digits = line[open.upperBound...].prefix { $0.isNumber }
+        return Int(digits)
     }
 
     // MARK: - Acting

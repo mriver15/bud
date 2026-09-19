@@ -179,8 +179,13 @@ public struct TranscriptRow: View {
                 StreamingIndicator("Thinking…")
             }
 
-            ForEach(turn.segments) { segment in
-                segmentView(segment)
+            ForEach(segmentRows) { row in
+                switch row {
+                case .single(let segment):
+                    segmentView(segment)
+                case .toolGroup(let segments):
+                    ToolRoundGroup(segments: segments, model: model, isTail: { isTail($0) })
+                }
             }
 
             if let error = turn.error, !error.isEmpty {
@@ -192,6 +197,35 @@ public struct TranscriptRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The segment stream, with each round's concurrent tool calls folded into
+    /// one group. Tool segments are the only ones that can run together, so a
+    /// run of two or more is exactly one round; a lone tool renders as itself,
+    /// because there is nothing to fold it into and nothing concurrent to count.
+    private var segmentRows: [SegmentRow] {
+        var rows: [SegmentRow] = []
+        var toolRun: [Segment] = []
+
+        func flush() {
+            if toolRun.count > 1 {
+                rows.append(.toolGroup(toolRun))
+            } else if let single = toolRun.first {
+                rows.append(.single(single))
+            }
+            toolRun = []
+        }
+
+        for segment in turn.segments {
+            if case .tool = segment {
+                toolRun.append(segment)
+            } else {
+                flush()
+                rows.append(.single(segment))
+            }
+        }
+        flush()
+        return rows
     }
 
     @ViewBuilder
@@ -272,6 +306,21 @@ public struct TranscriptRow: View {
             .foregroundStyle(.secondary)
             .monospacedDigit()
             .padding(.top, Bud.Space.xs)
+    }
+}
+
+/// One row of the assistant's segment stream: a single segment (a lone tool, or
+/// any non-tool segment), or a run of two or more tool segments that were asked
+/// for together and ran concurrently.
+private enum SegmentRow: Identifiable {
+    case single(Segment)
+    case toolGroup([Segment])
+
+    var id: String {
+        switch self {
+        case .single(let segment): return segment.id
+        case .toolGroup(let segments): return segments[0].id
+        }
     }
 }
 
@@ -557,6 +606,72 @@ private struct ToolActivityRow: View {
     private func flatten(_ text: String, limit: Int) -> String {
         let single = text.replacingOccurrences(of: "\n", with: " ")
         return single.count <= limit ? single : String(single.prefix(limit)) + "…"
+    }
+}
+
+/// A round of concurrent tool calls: one compact header (how many, how long)
+/// above the individual tool rows, which stay one-line summaries that expand to
+/// their result. Nothing is hidden by the header — it only names what the block
+/// below it already was.
+private struct ToolRoundGroup: View {
+    let segments: [Segment]
+    let model: AppModel
+    let isTail: (String) -> Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Bud.Space.xs) {
+            roundHeader
+            ForEach(segments) { segment in
+                if case .tool(let id, let call, let providerName, let state, let resultText, let ui) = segment {
+                    ToolActivityRow(
+                        call: call,
+                        providerName: providerName,
+                        state: state,
+                        resultText: resultText,
+                        ui: ui,
+                        model: model,
+                        isTail: isTail(id)
+                    )
+                }
+            }
+        }
+    }
+
+    /// "3 tools · 2.4s", the duration dropped when the round's clock was not
+    /// recorded — a restored turn predates the instrumentation, and a missing
+    /// span is a missing fact, not a zero.
+    private var roundHeader: some View {
+        Text(headerText)
+            .font(Bud.Font.caption)
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+            .padding(.leading, Bud.Space.xs)
+    }
+
+    private var headerText: String {
+        let count = segments.count
+        let tools = count == 1 ? "1 tool" : "\(count) tools"
+        guard let duration = roundDuration else { return tools }
+        return "\(tools) · \(BudFormat.duration(duration))"
+    }
+
+    /// The wall-clock span of the round, from the first call starting to the last
+    /// result landing. Calls in a round run concurrently, so summing their
+    /// individual times would over-count; the span is the time the round took.
+    private var roundDuration: TimeInterval? {
+        var firstStart: Date?
+        var lastEnd: Date?
+        for segment in segments {
+            guard case .tool(_, let call, _, _, _, _) = segment else { continue }
+            if let started = call.startedAt {
+                firstStart = min(firstStart ?? started, started)
+            }
+            if let ended = call.endedAt {
+                lastEnd = max(lastEnd ?? ended, ended)
+            }
+        }
+        guard let firstStart, let lastEnd else { return nil }
+        return lastEnd.timeIntervalSince(firstStart)
     }
 }
 

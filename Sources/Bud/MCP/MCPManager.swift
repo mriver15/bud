@@ -13,6 +13,13 @@ public final class MCPManager: MCPManaging, ToolProvider {
     public let providerID = "mcp"
     public let providerName = "MCP"
 
+    /// Bumped whenever `toolDescriptors()` would return a different surface — a
+    /// server connecting, disconnecting, or a tool being switched off — so the
+    /// registry's descriptor cache knows to re-walk this provider. Kept out of
+    /// observation: it moves exactly when `allTools` does, and nothing renders
+    /// from it.
+    @ObservationIgnored public private(set) var descriptorRevision = 0
+
     /// Asked before an external mutation, and answered by whatever is holding the
     /// panel. `nil` means there is nobody to ask — the measurement CLIs, and
     /// checks that are exercising the tool rather than the gate — and the tool
@@ -235,6 +242,9 @@ public final class MCPManager: MCPManaging, ToolProvider {
         }
         toolsByServer = [:]
         allTools = []
+        // The surface just emptied without a `refreshTools` pass; tell the
+        // registry's cache so a late descriptors read cannot serve dead tools.
+        descriptorRevision &+= 1
     }
 
     // MARK: ToolProvider
@@ -325,7 +335,10 @@ public final class MCPManager: MCPManaging, ToolProvider {
     /// re-lists over the wire, so it is cheap enough to call after any mutation.
     public func refreshTools() async {
         let collected = await collect()
-        if allTools != collected.flat { allTools = collected.flat }
+        if allTools != collected.flat {
+            allTools = collected.flat
+            descriptorRevision &+= 1
+        }
         if toolsByServer != collected.byServer { toolsByServer = collected.byServer }
         if discoveredByServer != collected.discovered { discoveredByServer = collected.discovered }
     }

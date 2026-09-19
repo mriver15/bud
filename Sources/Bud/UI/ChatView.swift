@@ -134,7 +134,7 @@ public struct ChatView: View {
                 DropAffordance()
             }
         }
-        .animation(.snappy(duration: 0.14), value: isDropTargeted)
+        .animation(Bud.motionReduced ? nil : .snappy(duration: 0.14), value: isDropTargeted)
     }
 
     // MARK: - Transcript
@@ -201,7 +201,7 @@ public struct ChatView: View {
                 // A new turn only ever follows the reader's own send, so this
                 // one re-engages following even if history was being read.
                 isNearBottom = true
-                withAnimation(.snappy(duration: 0.2)) {
+                Bud.animate(.snappy(duration: 0.2)) {
                     proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
                 }
             }
@@ -308,7 +308,7 @@ public struct ChatView: View {
 
     private func scrollToCurrentMatch(_ proxy: ScrollViewProxy) {
         guard let index = currentMatchIndex else { return }
-        withAnimation(.snappy(duration: 0.2)) {
+        Bud.animate(.snappy(duration: 0.2)) {
             proxy.scrollTo(matches[index], anchor: .center)
         }
     }

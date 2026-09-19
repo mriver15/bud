@@ -12,6 +12,8 @@ struct RootView: View {
     /// The first-run flow, created once the panel's start-up work has finished
     /// and presented only when a fresh install has nothing to talk to.
     @BudState private var onboarding: OnboardingState?
+    /// The ⌘K command palette, over whatever surface is showing.
+    @BudState private var showsPalette = false
 
     init(model: AppModel) {
         self.model = model
@@ -38,7 +40,16 @@ struct RootView: View {
                 .transition(.opacity)
             }
         }
-        .animation(.easeOut(duration: 0.15), value: model.pendingConfirmation?.id)
+        .animation(Bud.motionReduced ? nil : .easeOut(duration: 0.15), value: model.pendingConfirmation?.id)
+        // The command palette, over everything including a pending confirmation:
+        // a command is how the user gets somewhere, and it must be reachable
+        // whatever state the panel is in.
+        .overlay {
+            if showsPalette {
+                CommandPaletteView(model: model) { showsPalette = false }
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: showsPalette)
         // The first-run flow, over everything: a fresh install with no provider
         // and no local runtime has to get from zero to a first response, and the
         // panel's own empty state does not explain how.
@@ -53,6 +64,9 @@ struct RootView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .budShowChat)) { _ in
             select(.chat)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .budCommandPalette)) { _ in
+            showPalette()
         }
         .task {
             model.onPresentSettings = { [openWindow] _ in
@@ -322,7 +336,15 @@ struct RootView: View {
     /// One place that changes the surface, so the animation is the same whether
     /// the switch came from the picker or from outside the panel.
     private func select(_ next: Surface) {
-        withAnimation(.snappy(duration: 0.18)) { model.surface = next }
+        Bud.animate(.snappy(duration: 0.18)) { model.surface = next }
+    }
+
+    /// Presents the command palette, gated exactly like onboarding: scratch and
+    /// headless runs have no panel for it to float over, and neither do the
+    /// helper binaries that happen to report some bundle identifier.
+    private func showPalette() {
+        guard CommandPaletteView.isAvailable else { return }
+        showsPalette = true
     }
 
     @ViewBuilder

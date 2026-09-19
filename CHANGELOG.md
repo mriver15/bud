@@ -12,6 +12,63 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.7.0
+
+### The last phase: polish
+
+This is the final phase of the roadmap. What it adds:
+
+**The ⌘K palette.** One searchable surface over everything: the ten commands —
+New chat, Search history, Open browser, Connections, Marketplace, Agents, Tools,
+Toggle reasoning, Compact context, Diagnostics — plus connected MCP servers and
+installed skills. Choosing a skill stages a hint in the composer; it never
+executes. Fuzzy matching reuses the same ranking every other search in the app
+uses, with a prefix bonus so "bro" reaches "Open browser". Keyboard-first:
+arrows, Return, Escape.
+
+**A descriptor cache.** The registry no longer re-walks and re-serialises every
+provider on every request. Each provider carries a revision — static built-ins
+are cached for the process lifetime; the MCP manager and the agent roster bump
+theirs exactly when their surface changes. The routing table and the descriptor
+array are rebuilt together, so the pairing that keeps a tool call valid is
+preserved, and a rebuild counter makes the cache observable in checks.
+
+**Browser deltas.** `browser_snapshot` and `browser_read` take `delta: true` and
+return only what changed since the last outline the model saw — URL and title,
+new, changed and invalidated refs, changed text regions. The first delta arms
+the mode; an unchanged page says so in one line. The comparison is a pure
+deterministic function, so it is checked without a web view.
+
+**Retry works on restored chats.** The archive already carried everything a
+rewind needs; the exchange boundaries are now derived from the turns and
+messages it stores, so Retry and Delete-from-here appear on exactly the same
+turns after a reopen as during the live chat — with zero new persisted bytes,
+so every existing archive decodes untouched.
+
+**Concurrent tools group under one header.** A round's parallel tool calls
+render under a compact line — count and wall-clock span — with each row still
+expanding to its detail. Nothing visible was removed, only regrouped.
+
+**Reduce Motion is respected.** Every animation in the panel — the confirmation
+overlay, surface switches, hover and drop feedback — skips its transition when
+the system asks for stillness, and the outcomes still apply. The icon-only
+controls were audited: every one carries a help label or a text label.
+
+### Verification
+
+```
+--self-test       1077/1077   (+19: palette matching, delta comparison,
+                              cache rebuilds, exchange boundaries)
+--verify-ui         25/25     --verify-browser   43/43    --verify-live   149/149
+```
+
+One honest note: the palette cannot be captured by the render harness — its
+full-screen scrim defeats the offscreen renderer, producing misleading crops —
+so it is verified by its pure matcher checks, the UI suite, and a look at the
+live panel (⌘K) rather than by a review image that lies.
+
+---
+
 ## Bud 2.6.0
 
 ### Secrets move to the Keychain

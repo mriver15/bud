@@ -528,20 +528,31 @@ public final class AppModel {
 
     /// Whether this turn can be retried or dropped.
     ///
-    /// Only turns from an exchange this session ran qualify. A conversation
-    /// loaded from the archive was saved as turns, and neither the exchange
-    /// boundaries nor the model-facing history were — so its rows offer Copy and
-    /// nothing else, rather than a Retry that would quietly do the wrong thing.
+    /// A turn from an exchange this session ran has a checkpoint, which carries
+    /// the exact history snapshot. A restored conversation has none, so its
+    /// boundaries are re-derived from the archive: user turns delimit exchanges,
+    /// and each pairs with the user message that started it. Both paths answer
+    /// the same question — is this turn in a completed exchange — and the
+    /// checkpoint is only preferred because it holds the exact pre-exchange
+    /// history rather than a prefix reconstructed from what was saved.
     public func canRewind(from turn: Turn) -> Bool {
         guard let index = turns.firstIndex(where: { $0.id == turn.id }) else { return false }
-        return runtime.canRewind(toTurnAt: index)
+        if runtime.canRewind(toTurnAt: index) { return true }
+        return boundary(forTurnAt: index) != nil
     }
 
     /// Asks the same question again, discarding the answer being looked at.
     public func retry(_ turn: Turn) {
         guard let index = turns.firstIndex(where: { $0.id == turn.id }) else { return }
+        if runtime.canRewind(toTurnAt: index) {
+            turnStarted()
+            runtime.retry(turnAt: index)
+            return
+        }
+        guard !runtime.isStreaming, let boundary = boundary(forTurnAt: index) else { return }
         turnStarted()
-        runtime.retry(turnAt: index)
+        apply(boundary)
+        runtime.send(boundary.prompt)
     }
 
     /// Drops this turn and everything after it from the conversation. The
@@ -550,8 +561,35 @@ public final class AppModel {
     /// relaunch.
     public func deleteFrom(_ turn: Turn) {
         guard let index = turns.firstIndex(where: { $0.id == turn.id }) else { return }
-        guard runtime.deleteFrom(turnAt: index) else { return }
+        if runtime.canRewind(toTurnAt: index) {
+            guard runtime.deleteFrom(turnAt: index) else { return }
+            persistConversations()
+            return
+        }
+        guard !runtime.isStreaming, let boundary = boundary(forTurnAt: index) else { return }
+        apply(boundary)
         persistConversations()
+    }
+
+    /// The exchange boundary a turn belongs to, re-derived from the archive when
+    /// the runtime holds no checkpoint for it. The last boundary at or before the
+    /// turn is the exchange that produced it.
+    private func boundary(forTurnAt index: Int) -> ExchangeBoundary? {
+        Conversation.exchangeBoundaries(turns: runtime.turns, messages: runtime.modelHistory)
+            .last { $0.turnCount <= index }
+    }
+
+    /// Puts the conversation back to how it stood before an exchange began.
+    ///
+    /// `restore` is the same truncation the runtime's own checkpoint apply
+    /// performs, reached through its public surface rather than a checkpoint:
+    /// both projections are cut to the boundary's prefixes, and the runtime's
+    /// state (streaming, summary) is reset with them.
+    private func apply(_ boundary: ExchangeBoundary) {
+        runtime.restore(
+            turns: Array(runtime.turns.prefix(boundary.turnCount)),
+            history: Array(runtime.modelHistory.prefix(boundary.historyCount))
+        )
     }
 
     /// Starts a fresh conversation.

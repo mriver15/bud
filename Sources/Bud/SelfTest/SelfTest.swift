@@ -104,6 +104,10 @@ public enum BudSelfTest {
             toolProvenance,
             budLinks,
             toolConfirmation,
+            paletteRanking,
+            outlineDelta,
+            descriptorCache,
+            exchangeBoundaries,
             keychainMigration,
             prefixStability,
             subagentHandoff,
@@ -1173,6 +1177,157 @@ public enum BudSelfTest {
         let idle = BudConfigLoader.moveSecrets(from: bare, to: fake)
         c.check("a file with no secrets migrates to completion without touching the store",
                 idle.complete)
+
+        return c.report()
+    }
+
+    // MARK: Phase 5 — the polish phase's contracts
+
+    /// The palette's matcher: a prefix finds its entry, an empty query keeps the
+    /// given order, and a query with no overlap drops nothing by accident.
+    static func paletteRanking() -> SelfTestReport {
+        let c = Checker(suite: "palette")
+
+        func entry(_ id: String, _ title: String, keywords: String = "") -> PaletteEntry {
+            PaletteEntry(
+                id: id,
+                title: title,
+                detail: "",
+                symbol: "circle",
+                shortcut: nil,
+                kind: .command,
+                keywords: keywords,
+                action: {}
+            )
+        }
+
+        let entries = [
+            entry("browser", "Open browser", keywords: "browse web go look up"),
+            entry("history", "Search history"),
+            entry("chat", "New chat"),
+        ]
+
+        let bro = PaletteRanking.rank(query: "bro", entries: entries)
+        c.equal("a partial word reaches its entry", bro.first?.id, "browser")
+
+        let empty = PaletteRanking.rank(query: "  ", entries: entries)
+        c.equal("an empty query keeps the given order", empty.map(\.id), entries.map(\.id))
+
+        let exact = PaletteRanking.rank(query: "history", entries: entries)
+        c.equal("an exact word finds its entry first", exact.first?.id, "history")
+
+        return c.report()
+    }
+
+    /// The browser delta: an unchanged page reports nothing, a change reports
+    /// exactly the categories that changed, and identity is deterministic.
+    static func outlineDelta() -> SelfTestReport {
+        let c = Checker(suite: "delta")
+
+        func line(_ text: String, _ ref: Int?) -> OutlineLine {
+            OutlineLine(text: text, ref: ref)
+        }
+        let before = PageOutline(
+            url: "https://example.com/a",
+            title: "Page",
+            lines: [line("Welcome", nil), line("Go", 1), line("Old label", 2), line("Old heading", nil)]
+        )
+        let same = PageOutline(url: before.url, title: before.title, lines: before.lines)
+        c.check("an unchanged page reports nothing", OutlineDelta.compare(previous: before, current: same).isEmpty)
+
+        let after = PageOutline(
+            url: "https://example.com/b",
+            title: "Page",
+            lines: [line("Welcome", nil), line("New label", 2), line("Added", 3)]
+        )
+        let delta = OutlineDelta.compare(previous: before, current: after)
+        c.check("a URL change is reported", delta.urlChanged)
+        c.check("a changed ref is reported", delta.changedRefs.contains { $0.ref == 2 })
+        c.check("a new ref is reported", delta.newRefs.contains { $0.ref == 3 })
+        c.check("a vanished ref is invalidated", delta.invalidatedRefs.contains { $0.ref == 1 })
+        c.check("a vanished plain line is reported as removed text",
+                delta.removedText.contains { $0 == "Old heading" })
+        c.check("the whole of the change is not empty", !delta.isEmpty)
+
+        return c.report()
+    }
+
+    /// The descriptor cache: repeated reads do not rebuild, a moved revision
+    /// rebuilds once, and the rebuild serves the new surface.
+    @MainActor
+    static func descriptorCache() async -> SelfTestReport {
+        let c = Checker(suite: "cache")
+
+        final class MutableProvider: ToolProvider, @unchecked Sendable {
+            let providerID = "mutable"
+            let providerName = "Mutable"
+            private let lock = NSLock()
+            private var offered = 1
+            var descriptorRevision: Int {
+                get { lock.withLock { offered } }
+                set { lock.withLock { offered = newValue } }
+            }
+            func toolDescriptors() async -> [ToolDescriptor] {
+                let count = lock.withLock { offered }
+                return (0..<count).map {
+                    ToolDescriptor(
+                        name: "mutable_\($0)",
+                        description: "Tool \($0).",
+                        schema: .object(["type": .string("object")]),
+                        providerID: "mutable",
+                        providerName: "Mutable"
+                    )
+                }
+            }
+            func invoke(tool: String, arguments: JSONValue, callID: String) async -> ToolResult {
+                .error("not implemented")
+            }
+        }
+
+        let provider = MutableProvider()
+        let registry = ToolRegistry()
+        await registry.register(provider)
+        _ = await registry.descriptors()
+        let first = await registry.rebuildCount
+        _ = await registry.descriptors()
+        let second = await registry.rebuildCount
+        c.equal("an unchanged registry is not re-walked", second, first)
+
+        provider.descriptorRevision = 2
+        let offered = await registry.descriptors()
+        c.equal("a moved revision rebuilds once", await registry.rebuildCount, first + 1)
+        c.equal("...and serves the new surface", offered.count, 2)
+
+        return c.report()
+    }
+
+    /// Restored-chat rewind: the exchange boundaries are derived from the archive
+    /// the conversation already carries, pairing each user turn with its message.
+    static func exchangeBoundaries() -> SelfTestReport {
+        let c = Checker(suite: "boundaries")
+
+        func userTurn(_ text: String) -> Turn {
+            Turn(role: .user, segments: [.text(id: UUID().uuidString, text: text)])
+        }
+        func assistantTurn() -> Turn {
+            Turn(role: .assistant, segments: [.text(id: UUID().uuidString, text: "done")])
+        }
+        func userMessage(_ text: String) -> ChatMessage { ChatMessage(role: .user, content: text) }
+        func assistantMessage() -> ChatMessage { ChatMessage(role: .assistant, content: "done") }
+
+        let turns = [userTurn("first"), assistantTurn(), userTurn("second"), assistantTurn()]
+        let messages = [userMessage("first"), assistantMessage(), userMessage("second"), assistantMessage()]
+        let boundaries = Conversation.exchangeBoundaries(turns: turns, messages: messages)
+        c.equal("a two-exchange conversation has two boundaries", boundaries.count, 2)
+        c.equal("...the first names its question", boundaries.first?.prompt, "first")
+        c.equal("...and the second", boundaries.last?.prompt, "second")
+        c.equal("...with the second starting after the first exchange",
+                boundaries.last?.turnCount, 2)
+        c.equal("...and its history pointing at the paired message",
+                boundaries.last?.historyCount, 2)
+
+        c.equal("nothing in the archive produces no boundaries",
+                Conversation.exchangeBoundaries(turns: [], messages: []).count, 0)
 
         return c.report()
     }

@@ -17,6 +17,13 @@ public final class BrowserToolProvider: ToolProvider {
 
     private let engine: BrowserEngine
 
+    /// The outline the model has most recently been shown, and the text it most
+    /// recently read. Both are session state on the provider — what has been
+    /// shown — not page state, so a fresh provider (a warm-up, a cost estimate)
+    /// starts with no delta baseline.
+    private var lastOutline: PageOutline?
+    private var lastRead: LastRead?
+
     public init(engine: BrowserEngine) {
         self.engine = engine
     }
@@ -59,14 +66,29 @@ public final class BrowserToolProvider: ToolProvider {
                 "The page as an outline: headings, and every link, button, field and checkbox, each "
                     + "action carrying a ref. Refs come from here and from the outline every action "
                     + "returns, so call this only when the page has changed without you — one that "
-                    + "loads its own content, or one you have been waiting on.",
-                object([:])
+                    + "loads its own content, or one you have been waiting on. With delta true you "
+                    + "receive only what changed since the last outline you saw — a new or different "
+                    + "URL or title, new, changed or invalidated refs, and changed text regions. The "
+                    + "first delta in a session returns the full outline and arms delta mode.",
+                object([
+                    "delta": [
+                        "type": "boolean",
+                        "description": "Return only what changed since the last outline. Default false.",
+                    ],
+                ])
             ),
             tool(
                 "browser_read",
-                "The page's readable text, for when the outline is not enough and you need the prose.",
+                "The page's readable text, for when the outline is not enough and you need the prose. "
+                    + "With delta true you receive only the text regions that changed since the last "
+                    + "read, plus any URL or title change; the first delta returns the full text and "
+                    + "arms delta mode.",
                 object([
                     "max_chars": ["type": "integer", "description": "Default 40000."],
+                    "delta": [
+                        "type": "boolean",
+                        "description": "Return only what changed since the last read. Default false.",
+                    ],
                 ])
             ),
             tool(
@@ -171,15 +193,33 @@ public final class BrowserToolProvider: ToolProvider {
                     return .error("browser_open needs a url.")
                 }
                 try await engine.open(raw)
-                let outline = try await engine.snapshot()
-                return await showing("Opened \(engine.state.url)\n\n\(outline)", page: engine.state.title)
+                let outline = try await rememberOutline()
+                return await showing("Opened \(engine.state.url)\n\n\(outline.render())", page: engine.state.title)
 
             case "browser_snapshot":
-                return .ok(try await engine.snapshot())
+                let delta = bool(arguments, "delta") ?? false
+                let outline = try await engine.outline()
+                defer { lastOutline = outline }
+                guard delta else { return .ok(outline.render()) }
+                guard let previous = lastOutline else {
+                    return .ok(
+                        outline.render()
+                            + "\n\nDelta mode is now active — the next snapshot reports only what changed."
+                    )
+                }
+                return .ok(OutlineDelta.compare(previous: previous, current: outline).render(current: outline))
 
             case "browser_read":
                 let limit = int(arguments, "max_chars") ?? 40_000
-                return .ok(try await engine.readableText(limit: limit))
+                let delta = bool(arguments, "delta") ?? false
+                let text = try await engine.readableText(limit: limit)
+                let read = LastRead(url: engine.state.url, title: engine.state.title, text: text)
+                defer { lastRead = read }
+                guard delta else { return .ok(text) }
+                guard let previous = lastRead else {
+                    return .ok(text + "\n\nDelta mode is now active — the next read reports only what changed.")
+                }
+                return .ok(Self.readDelta(previous: previous, current: read))
 
             case "browser_click":
                 guard let ref = int(arguments, "ref") else {
@@ -190,7 +230,7 @@ public final class BrowserToolProvider: ToolProvider {
                     return await showing("Clicked ref \(ref).", page: engine.state.title)
                 }
                 return await showing(
-                    "Clicked ref \(ref).\n\n\(try await engine.snapshot())",
+                    "Clicked ref \(ref).\n\n\(try await rememberOutline().render())",
                     page: engine.state.title
                 )
 
@@ -222,7 +262,7 @@ public final class BrowserToolProvider: ToolProvider {
                     label: string(arguments, "label")
                 )
                 return await showing(
-                    "Chose an option in ref \(ref).\n\n\(try await engine.snapshot())",
+                    "Chose an option in ref \(ref).\n\n\(try await rememberOutline().render())",
                     page: engine.state.title
                 )
 
@@ -267,7 +307,7 @@ public final class BrowserToolProvider: ToolProvider {
             case "browser_back":
                 try await engine.goBack()
                 return await showing(
-                    "Went back to \(engine.state.url).\n\n\(try await engine.snapshot())",
+                    "Went back to \(engine.state.url).\n\n\(try await rememberOutline().render())",
                     page: engine.state.title
                 )
 
@@ -360,6 +400,71 @@ public final class BrowserToolProvider: ToolProvider {
         for (url, _) in dated.dropFirst(keeping) {
             try? manager.removeItem(at: url)
         }
+    }
+
+    // MARK: - Delta
+
+    /// The page outline, remembered as what the model has now seen.
+    ///
+    /// Every outline the model receives is the baseline for the next delta, so
+    /// the comparison is always against the most recent thing shown rather than
+    /// the first.
+    private func rememberOutline() async throws -> PageOutline {
+        let outline = try await engine.outline()
+        lastOutline = outline
+        return outline
+    }
+
+    /// The text the model last read, with the identity that went with it, so a
+    /// delta read can say the page moved on before diffing the prose.
+    private struct LastRead {
+        var url: String
+        var title: String
+        var text: String
+
+        /// The prose as diffable lines; blank lines are layout, not content, so
+        /// they are not compared.
+        var lines: [String] {
+            text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+        }
+    }
+
+    /// The delta of a read: identity changes first, then the prose lines that
+    /// appeared or vanished. Pure and deterministic, so it is reproducible.
+    private static func readDelta(previous: LastRead, current: LastRead) -> String {
+        let added = removedLines(from: current.lines, in: previous.lines)
+        let removed = removedLines(from: previous.lines, in: current.lines)
+        var sections: [String] = ["\(current.title)\n\(current.url)\n"]
+        if previous.url != current.url { sections.append("URL changed: \(current.url)") }
+        if previous.title != current.title { sections.append("Title changed: \(current.title)") }
+        if added.isEmpty && removed.isEmpty {
+            if previous.url == current.url && previous.title == current.title {
+                return "\(current.title)\n\(current.url)\n\nNothing changed since the last read."
+            }
+            return sections.joined(separator: "\n")
+        }
+        sections.append("Text changed:")
+        for line in added { sections.append("  + \(line)") }
+        for line in removed { sections.append("  - \(line)") }
+        return sections.joined(separator: "\n")
+    }
+
+    /// The lines of `a` not accounted for in `b`, counting duplicates, in `a`'s
+    /// order. Prose has no refs to identify lines by, so identity is the text
+    /// itself and a multiset difference is the honest report.
+    private static func removedLines(from a: [String], in b: [String]) -> [String] {
+        var remaining = b.reduce(into: [String: Int]()) { counts, line in
+            counts[line, default: 0] += 1
+        }
+        var out: [String] = []
+        for line in a {
+            if let count = remaining[line], count > 0 {
+                remaining[line] = count - 1
+            } else {
+                out.append(line)
+            }
+        }
+        return out
     }
 
     // MARK: - Arguments

@@ -41,9 +41,6 @@ public struct Composer: View {
             }
         }
         .onAppear { isFocused = true }
-        .onReceive(NotificationCenter.default.publisher(for: .budCommandPalette)) { _ in
-            openCommandMenu()
-        }
         .onChange(of: model.composerFocusToken) { _, _ in
             // Text staged from outside the panel, or the panel ordered back on
             // screen: either way the caret has to be placed rather than assumed.

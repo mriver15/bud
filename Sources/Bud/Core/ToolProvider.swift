@@ -18,6 +18,13 @@ import Foundation
 public protocol ToolProvider: Sendable {
     var providerID: String { get }
     var providerName: String { get }
+    /// A monotonically increasing revision for the descriptors this provider
+    /// offers. The registry caches the combined tool list and its routing table,
+    /// and only re-walks a provider whose revision has moved — so a provider
+    /// bumps it exactly when `toolDescriptors()` would return something
+    /// different. Static providers (the built-ins) leave the default of zero and
+    /// are cached for the life of the process.
+    var descriptorRevision: Int { get }
     func toolDescriptors() async -> [ToolDescriptor]
     func invoke(tool: String, arguments: JSONValue, callID: String) async -> ToolResult
     /// Why this provider knows the name but will not answer to it — a tool it has
@@ -30,6 +37,7 @@ public protocol ToolProvider: Sendable {
 }
 
 public extension ToolProvider {
+    var descriptorRevision: Int { 0 }
     func withheldReason(for tool: String) async -> String? { nil }
 }
 
@@ -50,8 +58,20 @@ public protocol LifecycleToolProvider: ToolProvider {
 public actor ToolRegistry {
     private var providers: [String: any ToolProvider] = [:]
     private var order: [String] = []
-    /// Tool name -> owning provider id, rebuilt whenever providers change.
+    /// Tool name -> owning provider id. Built in the same pass as the cached
+    /// list, so the table can never route a name the list did not offer.
     private var routing: [String: String] = [:]
+
+    /// The combined descriptor list, valid while `signature` matches the live
+    /// revisions. Rebuilt only when a provider's revision has moved.
+    private var cachedDescriptors: [ToolDescriptor] = []
+    /// The revision each provider last contributed under, keyed by provider id.
+    /// A provider that bumps its revision changes this and forces a rebuild.
+    private var signature: [String: Int] = [:]
+
+    /// How many times the combined list has been rebuilt. Public so a check can
+    /// observe that an unchanged registry serves from cache without re-walking.
+    public private(set) var rebuildCount: Int = 0
 
     public init() {}
 
@@ -61,13 +81,18 @@ public actor ToolRegistry {
         let id = await provider.providerID
         providers[id] = provider
         if !order.contains(id) { order.append(id) }
-        await rebuildRouting()
+        // A new provider has no revision recorded yet, so the signature can no
+        // longer describe the world. Rebuild now so routing is ready before the
+        // next request, matching the pre-cache behaviour.
+        signature = [:]
+        await rebuildIfNeeded()
     }
 
     public func unregister(providerID: String) async {
         providers.removeValue(forKey: providerID)
         order.removeAll { $0 == providerID }
-        await rebuildRouting()
+        signature = [:]
+        await rebuildIfNeeded()
     }
 
     public func provider(for id: String) -> (any ToolProvider)? { providers[id] }
@@ -78,33 +103,14 @@ public actor ToolRegistry {
     /// keeps its original name and the earlier one is re-suffixed, so an MCP
     /// server never silently shadows a native tool.
     ///
-    /// Routing is rebuilt here, as a side effect of the same pass that produces
-    /// the list, rather than only when a provider is registered. A provider's
-    /// tools are not fixed at registration — an MCP server connects later and
-    /// brings its own — so a table built once described a world where that
-    /// server had no tools. The model was offered them and every call to one came
-    /// back "Unknown tool", because the only thing that decides whether a tool
-    /// can be called was built before the tool existed.
+    /// The list is cached: a request that asks for the tools it was given a
+    /// moment ago gets the cached array back without re-walking or re-serialising
+    /// any provider. The revision each provider publishes is what decides whether
+    /// the cache is still true — an MCP server connects later and bumps its
+    /// revision, and only then is the combined list walked again.
     public func descriptors() async -> [ToolDescriptor] {
-        var seen: Set<String> = []
-        var out: [ToolDescriptor] = []
-        var table: [String: String] = [:]
-        for pid in order {
-            guard let p = providers[pid] else { continue }
-            for var d in await p.toolDescriptors() {
-                if seen.contains(d.name) {
-                    var n = 2
-                    while seen.contains("\(d.name)_\(n)") { n += 1 }
-                    d.name = "\(d.name)_\(n)"
-                    d.id = d.name
-                }
-                seen.insert(d.name)
-                table[d.name] = d.providerID
-                out.append(d)
-            }
-        }
-        if routing != table { routing = table }
-        return out
+        await rebuildIfNeeded()
+        return cachedDescriptors
     }
 
     public func invoke(name: String, arguments: JSONValue, callID: String) async -> ToolResult {
@@ -125,11 +131,39 @@ public actor ToolRegistry {
         return await p.providerName
     }
 
-    /// Routing is built by `descriptors`, in the same pass that builds the list
-    /// the model is offered. This only exists to force that pass to run now, so a
-    /// registration is reflected before the next request.
-    private func rebuildRouting() async {
-        _ = await descriptors()
+    /// Walks the providers only when one of their revisions has moved. The list
+    /// and the routing table are committed together, so the routing a call uses
+    /// was offered by the same pass's list — the safety property the cache must
+    /// not loosen.
+    private func rebuildIfNeeded() async {
+        var live: [String: Int] = [:]
+        for pid in order {
+            guard let p = providers[pid] else { continue }
+            live[pid] = await p.descriptorRevision
+        }
+        guard live != signature else { return }
+
+        var seen: Set<String> = []
+        var out: [ToolDescriptor] = []
+        var table: [String: String] = [:]
+        for pid in order {
+            guard let p = providers[pid] else { continue }
+            for var d in await p.toolDescriptors() {
+                if seen.contains(d.name) {
+                    var n = 2
+                    while seen.contains("\(d.name)_\(n)") { n += 1 }
+                    d.name = "\(d.name)_\(n)"
+                    d.id = d.name
+                }
+                seen.insert(d.name)
+                table[d.name] = d.providerID
+                out.append(d)
+            }
+        }
+        cachedDescriptors = out
+        routing = table
+        signature = live
+        rebuildCount += 1
     }
 }
 

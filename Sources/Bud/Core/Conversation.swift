@@ -76,6 +76,78 @@ public struct Conversation: Sendable, Identifiable, Codable {
     }
 }
 
+/// One exchange's rewind boundary: where it began in the transcript and in the
+/// model-facing history, plus the question that started it.
+///
+/// An exchange is one user message and everything it produced. Retrying it, or
+/// deleting from it, puts both projections back to how they stood before the
+/// question was asked — the visible turns as a prefix of `turns`, the
+/// model-facing history as a prefix of `messages`. Neither prefix is derivable
+/// from the other, but both are already carried by the archive: user turns
+/// delimit exchanges, and `send` appends one user turn and one user message
+/// together, so the k-th user turn pairs with the k-th user message. This type
+/// is the minimal record of that pairing, reconstructed at restore time rather
+/// than stored as a separate field — the archive needs nothing it does not
+/// already have, and older archives that predate this reasoning decode as
+/// before.
+public struct ExchangeBoundary: Sendable, Hashable {
+    /// Turns before this exchange began; the exchange's user turn sits at this
+    /// index, so the transcript prefix is `turns[..<turnCount]`.
+    public var turnCount: Int
+    /// Model-facing messages before this exchange began; the history prefix is
+    /// `messages[..<historyCount]`.
+    public var historyCount: Int
+    /// The question that started the exchange, echoed back verbatim on retry.
+    public var prompt: String
+
+    public init(turnCount: Int, historyCount: Int, prompt: String) {
+        self.turnCount = turnCount
+        self.historyCount = historyCount
+        self.prompt = prompt
+    }
+}
+
+extension Conversation {
+    /// Reconstructs the exchange boundaries a conversation's transcript implies.
+    ///
+    /// User turns delimit exchanges, and each pairs with the user message `send`
+    /// appended in the same act. A compaction summary is also a `.user` message
+    /// but stands for no turn, so it is skipped; a user turn whose message was
+    /// folded into that summary has no surviving boundary of its own, and the
+    /// summary is the whole of what preceded it.
+    public static func exchangeBoundaries(
+        turns: [Turn],
+        messages: [ChatMessage]
+    ) -> [ExchangeBoundary] {
+        let userMessageIndices = messages.indices.filter {
+            messages[$0].role == .user
+                && !messages[$0].content.hasPrefix(HistoryCompactor.summaryPrefix)
+        }
+        // Everything before the first exchange whose message was compacted away
+        // is the summary message itself, so its boundary is the summary's end.
+        let summaryEnd = messages.indices.first {
+            messages[$0].role == .user && messages[$0].content.hasPrefix(HistoryCompactor.summaryPrefix)
+        }.map { $0 + 1 } ?? 0
+
+        var boundaries: [ExchangeBoundary] = []
+        var userTurnOrdinal = 0
+        for (index, turn) in turns.enumerated() where turn.role == .user {
+            let historyCount = userTurnOrdinal < userMessageIndices.count
+                ? userMessageIndices[userTurnOrdinal]
+                : summaryEnd
+            boundaries.append(
+                ExchangeBoundary(
+                    turnCount: index,
+                    historyCount: historyCount,
+                    prompt: turn.plainText
+                )
+            )
+            userTurnOrdinal += 1
+        }
+        return boundaries
+    }
+}
+
 /// The shape of the pre-SQLite JSON archive.
 ///
 /// Kept only so the import can read a file written by an older build. Nothing

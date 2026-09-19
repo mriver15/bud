@@ -14,6 +14,22 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
     public let providerID = "subagents"
     public let providerName = "Subagents"
 
+    /// The registry reads this on every descriptors pass as its cache key, so it
+    /// must answer "did the delegation description change" without this type
+    /// owning the roster — the agent registry holds it, and the app rebuilds it
+    /// directly, so a counter kept here could not see the app's own
+    /// `agents.refresh()`. Fold the names and summaries the description is built
+    /// from into one deterministic value: cheap for a handful of agents, and it
+    /// changes exactly when `spawnDescription(roster:)` would.
+    public var descriptorRevision: Int {
+        var hash = 5381
+        for agent in agents.agents {
+            for byte in agent.name.utf8 { hash = (hash &* 33) &+ Int(byte) }
+            for byte in agent.summary.utf8 { hash = (hash &* 33) &+ Int(byte) }
+        }
+        return hash
+    }
+
     /// Newest first: the roster is a live activity feed, and past sessions' runs
     /// are appended behind it by `loadRecentRuns` rather than interleaved.
     public private(set) var runs: [SubagentRun] = []

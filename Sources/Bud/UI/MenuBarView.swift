@@ -221,6 +221,6 @@ extension Notification.Name {
     static let budShowChat = Notification.Name("bud.showChat")
     /// Open the find bar over the transcript.
     static let budFindInChat = Notification.Name("bud.findInChat")
-    /// Open the composer's command palette.
+    /// Open the ⌘K command palette.
     static let budCommandPalette = Notification.Name("bud.commandPalette")
 }

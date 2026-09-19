@@ -5,6 +5,18 @@ import SwiftUI
 /// Spacing, radii and type tokens shared by every surface so the panel reads as
 /// one object rather than a stack of independently-styled views.
 public enum Bud {
+    /// Whether the user has asked for reduced motion. State still changes
+    /// instantly — only transitions are skipped, never outcomes.
+    public static var motionReduced: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
+    /// `withAnimation` that respects Reduce Motion: the block runs either way,
+    /// animated only when the user has not asked for stillness.
+    public static func animate<Result>(_ animation: Animation?, _ body: () -> Result) -> Result {
+        motionReduced ? body() : withAnimation(animation, body)
+    }
+
     public enum Radius {
         /// The floating panel itself.
         public static let panel: CGFloat = 26
@@ -291,7 +303,7 @@ public struct GlassIconButton: View {
         .foregroundStyle(tint ?? .primary)
         .glassEffect(.regular.tint(tint?.opacity(0.3)).interactive(), in: .circle)
         .scaleEffect(isHovering ? 1.05 : 1)
-        .animation(.snappy(duration: 0.14), value: isHovering)
+        .animation(Bud.motionReduced ? nil : .snappy(duration: 0.14), value: isHovering)
         .onHover { isHovering = $0 }
         .help(help)
     }
