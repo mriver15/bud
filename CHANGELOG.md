@@ -12,6 +12,25 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.0.1
+
+### A source fix, so every toolchain can build this
+
+`MarketplaceStore.startNpmProbes` closed over `resolver` at the top of the
+function while a `let resolver = self.resolver` further down shadowed the property
+for the whole scope. The closure was therefore capturing a name that had not been
+declared yet. Some Swift versions accept that; the one GitHub's runners use
+rejects it outright, so **2.0.0's source did not compile there** even though the
+released binary was fine.
+
+The snapshot is declared before its first use now. The value is the same either
+way — this was never a behavioural bug, only an illegal one.
+
+Nothing else changes. If you are running 2.0.0 there is no reason to rush: the
+binary you have behaves identically.
+
+---
+
 ## Bud 2.0.0
 
 ### Bud is open source
