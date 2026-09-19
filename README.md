@@ -417,7 +417,7 @@ nobody asked for — but a check the user asked for always reports.
 | Park it in a corner as a bubble | The collapse control in the panel header |
 | Move the bubble to another corner | Drag it and release |
 | Send | `Enter` |
-| Newline | `⇧``Return` |
+| Newline | `⇧Return` |
 | Stop generating | The stop button that appears while a reply streams |
 | Switch model | Header model chip |
 | Slash commands | Type `/` in the composer |
