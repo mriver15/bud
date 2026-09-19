@@ -495,9 +495,19 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
             reach its own server — so naming it is how a task gets the right shape \
             without the task description having to ask for it. Leave 'agent' out and \
             the task runs unnamed: every tool, the session model, and nothing but the \
-            prompt you wrote. Split the work before you write the prompts: say what each \
-            agent gets and what it must come back with, and make sure no two of them are \
-            doing the same thing.
+            prompt you wrote.
+
+            Several tasks may name the same agent, and often should. An agent is a way \
+            of working, not a thing that can only run once: two tasks both naming a \
+            server agent, each asking it about a different half of the question, run at \
+            the same time and come back separately. Split a wide question that way — \
+            three creatures to one task and three to another, rather than one task \
+            listing all six — and it is answered as quickly as a narrow one. What to \
+            avoid is two tasks given the same job, not two tasks given the same agent.
+
+            So: split the work first, then write each prompt. Say what that task gets, \
+            what it must establish, and what it must return, and give no two of them \
+            the same job.
             """
         return text
     }

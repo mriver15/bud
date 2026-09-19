@@ -575,6 +575,43 @@ public enum BudLiveVerification {
         c.check("store: the far end of it is readable", !beyondHead.isError)
         c.check("store: ...and is not empty", !(beyondHead.text ?? "").isEmpty)
 
+        // MARK: Two tasks, one agent
+
+        // The question this answers: can a wide question be split across two runs
+        // of the *same* agent? It could always be described that way — nothing
+        // refuses a repeated name — but the description told the model not to let
+        // two tasks "do the same thing", which with one agent per server reads as
+        // "do not use this agent twice". So it was never offered.
+        let repeated = AgentRegistry()
+        repeated.rebuild(skills: [], servers: mcp.servers)
+        let parallel = SubagentSupervisor(env: runtimeEnv, agents: repeated)
+
+        let pair = await parallel.spawn([
+            SubagentSpec(
+                title: "Half one",
+                prompt: "Use the echo tool to echo the word 'alpha', then reply with what it returned.",
+                agent: "echo"
+            ),
+            SubagentSpec(
+                title: "Half two",
+                prompt: "Use the echo tool to echo the word 'beta', then reply with what it returned.",
+                agent: "echo"
+            ),
+        ])
+        c.equal("two tasks may name the same agent", pair.count, 2)
+        c.equal("...and both ran as it", pair.map(\.agent), ["echo", "echo"])
+        c.check("...and both finished", pair.allSatisfy { $0.state == .done })
+        c.check("...and both used the agent's own tools", pair.allSatisfy { $0.toolCallCount > 0 })
+        c.check(
+            "each answered its own half (\(pair.map { $0.output.lowercased().contains("alpha") ? "alpha" : ($0.output.lowercased().contains("beta") ? "beta" : "?") }.joined(separator: ", ")))",
+            pair[0].output.lowercased().contains("alpha") && pair[1].output.lowercased().contains("beta")
+        )
+        // Started together rather than one after the other: a serial pair would
+        // differ by the length of a whole run.
+        let started = pair.map(\.startedAt).sorted()
+        let apart = started.count == 2 ? started[1].timeIntervalSince(started[0]) : 99
+        c.check("...and they began together, not in sequence (\(String(format: "%.2f", apart))s apart)", apart < 2.0)
+
         // MARK: Rendering from the stripped schema
 
         // The schema is the model's whole vocabulary for the DSL, and it just lost

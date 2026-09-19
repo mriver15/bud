@@ -148,7 +148,14 @@ public enum RequestMeasureCLI {
         let config = BudConfigLoader.load()
         let env = AppEnvironment(config: config)
         let mcp = MCPManager()
-        let subagents = SubagentSupervisor(env: env, agents: AgentRegistry())
+        // A roster, not an empty one. The delegation description is *generated*
+        // from what can be delegated to — the agents the installed skills and
+        // connected servers contribute, and the guidance that names them — so
+        // measuring with an empty registry reports a description nobody is ever
+        // sent, and leaves out the part that grows with every install.
+        let agents = AgentRegistry()
+        agents.source = { (SkillStore.installed(), mcp.servers) }
+        let subagents = SubagentSupervisor(env: env, agents: agents)
 
         let providers: [any ToolProvider] = [
             NativeToolsProvider(),
@@ -164,6 +171,8 @@ public enum RequestMeasureCLI {
         }
         await mcp.connectAllAutoStart()
         await mcp.refreshTools()
+        // After the servers are up, because the roster is built from them.
+        agents.refresh()
 
         // Filtered exactly as a request is, and for the same reason this file
         // exists: a measurement of the registry rather than of what the model is
