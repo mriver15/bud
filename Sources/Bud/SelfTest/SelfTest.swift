@@ -82,7 +82,8 @@ public enum BudSelfTest {
             jsonValue,
             toolNaming,
             providers,
-        conversations,
+            conversations,
+            memoryContext,
             selfUpdate,
             mcpConfigMapping,
             fileReading,
@@ -103,6 +104,8 @@ public enum BudSelfTest {
             toolProvenance,
             budLinks,
             toolConfirmation,
+            greeting,
+            promptDefaults,
         ]
         var total = SelfTestReport()
         for suite in suites {
@@ -339,6 +342,109 @@ public enum BudSelfTest {
         stopped.stop()
         c.equal("stopping a turn denies what it was waiting on", await pending.value, .deny)
         c.nilValue("...and clears the screen", stopped.pendingConfirmation)
+
+        return c.report()
+    }
+
+    // MARK: Greeting
+
+    /// What the panel says before anyone has typed.
+    ///
+    /// The decision worth testing is which conversation gets named: the newest
+    /// one may be a chat somebody opened and abandoned, and quoting its empty
+    /// title would produce a sentence with nothing in the middle.
+    static func greeting() -> SelfTestReport {
+        let c = Checker(suite: "greeting")
+        let now = Date()
+
+        func conversation(_ id: String, _ title: String, minutesAgo: Int) -> ConversationSummary {
+            ConversationSummary(
+                id: id,
+                title: title,
+                updatedAt: now.addingTimeInterval(-Double(minutesAgo) * 60),
+                turnCount: 4,
+                preview: "…"
+            )
+        }
+
+        c.equal("a panel with nothing in it introduces itself",
+                ChatGreeting.make(from: []), ChatGreeting.introduction)
+        c.check("...and says what it will not pretend to",
+                ChatGreeting.introduction.message.contains("guessing"))
+
+        let used = ChatGreeting.make(from: [conversation("a", "Fix the release script", minutesAgo: 90)])
+        c.equal("...but one that has been used says where you left off", used.title, "Where you left off")
+        c.check("...naming the conversation", used.message.contains("Fix the release script"))
+        c.check("...so the panel is not a blank page every time", !used.message.contains("Ask me something"))
+
+        // A chat that was opened and never spoken in has no title to quote.
+        let abandoned = ChatGreeting.make(from: [
+            conversation("new", "", minutesAgo: 1),
+            conversation("old", "Fix the release script", minutesAgo: 90),
+        ])
+        c.check("an abandoned chat is skipped rather than quoted as nothing",
+                abandoned.message.contains("Fix the release script"))
+        c.check("...and does not produce an empty pair of quotes",
+                !abandoned.message.contains("\u{201C}\u{201D}"))
+
+        let onlyBlank = ChatGreeting.make(from: [conversation("new", "   ", minutesAgo: 1)])
+        c.equal("a panel with nothing but abandoned chats introduces itself",
+                onlyBlank, ChatGreeting.introduction)
+
+        return c.report()
+    }
+
+    // MARK: The prompt a build ships
+
+    /// A stored prompt that is a copy of an old default must not outlive it, or
+    /// the shipped prompt could never change for anyone who once pressed Save.
+    static func promptDefaults() -> SelfTestReport {
+        let c = Checker(suite: "prompt")
+
+        c.check("the shipped default is recognised as a default",
+                BudConfig.isShippedDefaultPrompt(BudConfig.defaultSystemPrompt))
+        c.check("...and the previous one it replaced is recognised too",
+                BudConfig.isShippedDefaultPrompt(BudConfig.supersededSystemPrompts[0]))
+        c.check("...even having lost the trailing newline a save would drop",
+                BudConfig.isShippedDefaultPrompt(BudConfig.supersededSystemPrompts[0] + "\n"))
+        c.check("something the user wrote is not a default",
+                !BudConfig.isShippedDefaultPrompt("You are Bud. Answer in haiku."))
+        c.check("...and neither is an empty prompt, which is an absence rather than a choice",
+                !BudConfig.isShippedDefaultPrompt("   "))
+
+        // The behaviour that matters: an install carrying the old default follows
+        // the new one, so a personality change reaches people who never edited it.
+        let carriedOver = BudConfigLoader.StoredConfig(
+            systemPrompt: BudConfig.supersededSystemPrompts[0]
+        )
+        let migrated = BudConfigLoader.apply(carriedOver, to: BudConfig())
+        c.equal("an install carrying the old default follows the new one",
+                migrated.systemPrompt, BudConfig.defaultSystemPrompt)
+
+        let edited = BudConfigLoader.StoredConfig(systemPrompt: "Answer in haiku.")
+        c.equal("...but one that was actually edited keeps it",
+                BudConfigLoader.apply(edited, to: BudConfig()).systemPrompt, "Answer in haiku.")
+
+        // And the copy stops being written back, so the file shrinks rather than
+        // carrying a kilobyte the binary already has.
+        let stored = BudConfigLoader.StoredConfig(from: BudConfig())
+        c.nilValue("...and saving a default does not write the prose out again",
+                   stored.systemPrompt)
+        var custom = BudConfig()
+        custom.systemPrompt = "Answer in haiku."
+        c.equal("...while a customisation still is written",
+                BudConfigLoader.StoredConfig(from: custom).systemPrompt, "Answer in haiku.")
+
+        // Round trip, because the two halves have to agree: what a save omits must
+        // be what a load is willing to fill in.
+        if let data = try? JSONEncoder().encode(BudConfigLoader.StoredConfig(from: BudConfig())),
+           let decoded = try? JSONDecoder().decode(BudConfigLoader.StoredConfig.self, from: data) {
+            c.equal("...and the round trip lands back on the shipped default",
+                    BudConfigLoader.apply(decoded, to: BudConfig()).systemPrompt,
+                    BudConfig.defaultSystemPrompt)
+        } else {
+            c.check("the config round-trips through its stored form", false)
+        }
 
         return c.report()
     }
@@ -2695,6 +2801,17 @@ public enum BudSelfTest {
         )
         c.equal("nothing installed costs nothing", without.skillChars, 0)
 
+        // The other half of the prefix, and the one part of it a person writes.
+        // The character brief landed in it at 1,507 characters, from 1,079 —
+        // see `BudConfig.defaultSystemPrompt`. A ceiling rather than a target:
+        // when this fails, the question is not how to raise it.
+        let promptCap = 1_600
+        c.check(
+            "the character brief stays under \(BudFormat.count(promptCap)) characters "
+                + "(\(BudFormat.count(BudConfig.defaultSystemPrompt.count)))",
+            BudConfig.defaultSystemPrompt.count <= promptCap
+        )
+
         // MARK: The catalogue
 
         // The other half of what a request carries, and the half that grows on its
@@ -4368,6 +4485,183 @@ public enum BudSelfTest {
         c.check("what was typed before is untouched", staged.3.contains("look at these"))
         c.check("the other file is still staged", staged.3.contains("shot.png"))
         c.equal("sending clears what was attached", staged.4, 0)
+
+        return c.report()
+    }
+
+    // MARK: What the model is reminded of
+
+    /// The block of notes that rides in the system prompt on every request.
+    ///
+    /// It used to be the newest twelve, whatever the conversation was about. A
+    /// note about how someone wants commits written is more use during a commit
+    /// than the twelve most recent trivia, so the block ranks — and what is worth
+    /// pinning is what a recency cut got wrong: the person's own notes always
+    /// present and never shortened, the note the conversation is about ahead of a
+    /// newer one it is not, and nothing dropped merely for scoring nothing.
+    static func memoryContext() -> SelfTestReport {
+        let c = Checker(suite: "memory")
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bud-memory-\(UUID().uuidString)", isDirectory: true)
+        let previous = BudDatabase.shared
+        BudDatabase.shared = BudDatabase(url: directory.appendingPathComponent("test.sqlite"))
+        defer {
+            BudDatabase.shared = previous
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        /// The note lines in a block. The headings and the framing sentence are
+        /// not notes and are not what the bound is on.
+        func noteLines(_ block: String) -> [String] {
+            block.split(separator: "\n").filter { $0.hasPrefix("- ") }.map(String.init)
+        }
+
+        // MARK: What scope means
+
+        // Long enough that a shortened line would lose the end of it: the claim
+        // is not only that a note about the person appears, but that it appears
+        // whole. These are the notes that describe who they are, and being asked
+        // about the weather is no reason to forget them.
+        BudStore.remember(
+            "Prefers answers without preamble: the conclusion first, then the shortest "
+                + "honest version of why, and no restating of the question just asked.",
+            scope: "user"
+        )
+
+        // MARK: Ranking
+
+        // The relevant note is the older of the two. Under a recency cut it came
+        // second; the ordering is the whole of the change, so it is asserted as an
+        // ordering rather than as presence.
+        BudStore.remember(
+            "Commit messages are written in the imperative mood, keep the subject under "
+                + "seventy-two characters, and say what changed rather than which files "
+                + "were touched."
+        )
+        BudStore.remember(
+            "Keeps a vinyl collection catalogued in a spreadsheet, working through the "
+                + "Blue Note reissues from the late fifties one payday at a time, and says "
+                + "the originals sound warmer than any remaster."
+        )
+
+        let weather = BudStore.lessonContext("What is the weather in Lisbon tomorrow?")
+        c.check("a note about who they are rides in whatever the conversation is about",
+                weather.contains("Prefers answers without preamble"))
+        c.check("...and always in full",
+                weather.contains("no restating of the question just asked"))
+
+        // Nothing in the table says anything about the weather, so nothing scores —
+        // and every note still has to be listed.
+        c.check("where nothing matches, the notes are all still there",
+                weather.contains("vinyl") && weather.contains("imperative"))
+
+        let commit = BudStore.lessonContext("Help me write the commit message for this change.")
+        let about = commit.range(of: "imperative")?.lowerBound
+        let unrelated = commit.range(of: "vinyl")?.lowerBound
+        c.check("both notes are in the block", about != nil && unrelated != nil)
+        if let about, let unrelated {
+            c.check("the note the conversation is about outranks the newer one it is not",
+                    about < unrelated)
+        }
+        c.check("...and gets its whole text", commit.contains("which files were touched"))
+
+        // Ranked, not filtered. One note matched and one scored nothing, which is
+        // the case that matters: term matching knows nothing about the note that
+        // reads "keeps a vinyl collection" while the work in hand is a commit, so a
+        // block that dropped what scored zero would slowly stop showing the model
+        // the things it cannot guess. Shortened, never absent.
+        c.check("...while the one that scored nothing is still listed",
+                commit.contains("Keeps a vinyl collection"))
+        c.check("...one line of it, not the whole note",
+                !commit.contains("originals sound warmer"))
+
+        // MARK: Saying the same thing twice
+
+        c.check("a note is recorded", BudStore.remember("Answers are given in British spelling."))
+        c.check("...and saying it again reports nothing new",
+                !BudStore.remember("Answers are given in British spelling."))
+        c.equal("...and is not kept twice",
+                BudStore.lessons().filter { $0.text == "Answers are given in British spelling." }.count, 1)
+        c.equal("...nor listed twice in the block",
+                noteLines(BudStore.lessonContext("Check the spelling in this paragraph."))
+                    .filter { $0.contains("British spelling") }.count,
+                1)
+
+        // MARK: The bound
+
+        // Far more notes than the block can hold. A memory block that grows with
+        // the table is paid for on every request, in every conversation, for as
+        // long as the app runs — so the bound is on the notes it carries and the
+        // tail it would like to list does not get to exceed it.
+        for index in 0..<40 {
+            BudStore.remember("Note \(index): the standing desk is set to 104 centimetres.")
+        }
+        let crowded = BudStore.lessonContext("What is the weather in Lisbon tomorrow?")
+        c.check("the block stays inside its bound (\(noteLines(crowded).count) of "
+                    + "\(BudStore.lessonContextLimit) notes)",
+                noteLines(crowded).count <= BudStore.lessonContextLimit)
+        c.check("...and says how much it left out",
+                crowded.contains("more notes are not listed here"))
+        c.check("...and what it left out is never the person",
+                crowded.contains("no restating of the question just asked"))
+
+        // The one note in the table that this conversation is about, against forty
+        // it is not. Under a recency cut it is the first thing thrown away, which
+        // is the failure the ranking exists to prevent.
+        c.check("...and the note about the work at hand survives the crowd",
+                BudStore.lessonContext("Help me write the commit message for this change.")
+                    .contains("imperative"))
+
+        let narrow = BudStore.lessonContext("What is the weather in Lisbon tomorrow?", limit: 3)
+        c.check("a smaller bound is honoured too (\(noteLines(narrow).count) notes)",
+                noteLines(narrow).count <= 3)
+
+        // The callers that measure rather than talk pass no conversation at all.
+        // Nothing can be ranked, so the newest notes ride — and the block is still
+        // the bounded one rather than the whole table.
+        let unranked = BudStore.lessonContext()
+        c.check("asking with no conversation at all still lists the newest notes",
+                unranked.contains("Note 39"))
+        c.check("...and is still bounded (\(noteLines(unranked).count) notes)",
+                noteLines(unranked).count <= BudStore.lessonContextLimit)
+
+        // MARK: What the ranking is asked about
+
+        // The ranking is only as good as its question. The whole history is the
+        // wrong question: the subject is in the tail, tool output is the largest
+        // thing in the history and the least like a note, and the instructions are
+        // not conversation at all.
+        let tail = AgentRuntime.conversationTail(of: [
+            ChatMessage(role: .system, content: "the standing instructions"),
+            ChatMessage(role: .user, content: "the first thing said"),
+            ChatMessage(role: .tool, content: String(repeating: "tool output ", count: 400)),
+            ChatMessage(role: .assistant, content: "an answer"),
+            ChatMessage(role: .user, content: "what the conversation is about now"),
+        ])
+        c.check("the tail carries what was just said", tail.contains("about now"))
+        c.check("...and not the tool output, however much of it there is",
+                !tail.contains("tool output"))
+        c.check("...nor the instructions", !tail.contains("standing instructions"))
+
+        let window = AgentRuntime.conversationTail(
+            of: (1...8).map { ChatMessage(role: .user, content: "turn \($0)") }
+        )
+        c.check("only the last few turns are looked at",
+                window.contains("turn 8") && !window.contains("turn 2"))
+        let third = window.range(of: "turn 3")?.lowerBound
+        let last = window.range(of: "turn 8")?.lowerBound
+        if let third, let last {
+            c.check("...and they are put back in the order they were said", third < last)
+        } else {
+            c.check("both turns are in the window", false)
+        }
+
+        c.equal("a single enormous message cannot become the query",
+                AgentRuntime.conversationTail(
+                    of: [ChatMessage(role: .user, content: String(repeating: "w", count: 5_000))]
+                ).count,
+                1_500)
 
         return c.report()
     }

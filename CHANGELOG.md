@@ -12,6 +12,100 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.1.0
+
+### It has a voice now
+
+Until this release Bud shipped a system prompt that was a specification: who it
+was, how it talked, and what it did with what it knew about you were all left
+implicit. It said "You are Bud, a native macOS assistant living in a floating
+Liquid Glass panel", and then listed tools.
+
+It is now written as the character it was always meant to be — a colleague rather
+than an assistant. Peer-level, dry, quick. It leads with the answer and does not
+flatter you first. It is wry when that is free and never at your expense. It says
+what it does not know plainly, and it never performs feeling it does not have:
+**the regard shows as usefulness and memory, never as a pet name or the word
+"friend".**
+
+The line that does the most work is about the memory:
+
+> Notes are things you picked up, not a list to recite: never open with "I remember
+> that you…" — just be someone who knows.
+
+That is the whole difference between a colleague and a database.
+
+### The memory had the wrong twelve
+
+`lessonContext` returned the twelve most recent notes, whatever the conversation
+was about. So a note about how you like commits written was buried under whatever
+had been recorded most recently — the memory was getting in the way of itself.
+
+Notes are now ranked against what you are actually talking about, following the
+argument the skill catalogue already makes: **rank, do not filter.** A note that
+shares no words with your message may still be the one that matters — "Prefers
+answers without preamble" scores nothing against "be shorter", and only the model
+knows those are the same request. So the ones that score are shown in full, the
+rest are still listed a line each, and nothing is silently dropped.
+
+Two things decide how a note travels:
+
+- **`user` notes always ride.** They are who you are and what you care about, and
+  a colleague does not forget that between sentences.
+- **`project` and `general` notes are ranked** against the recent turns.
+
+`remember` itself was rewritten for what the owner asked of it — memory focused on
+making the assistant more useful rather than a hoard of trivia: how you like to be
+answered, what you are working on, what you have already rejected and why. It
+keeps the occasional note on its own initiative when it notices something that
+would change how it helps, and says nothing about it.
+
+### You can see it
+
+Settings → Memory, second in the rail, because it is about you rather than about a
+connection. Everything Bud keeps, grouped by what the scope actually means — *Who
+you are*, *Your project*, *Everything else* — with the age of each note, and a
+delete that asks first. The footer says what it costs and where it lives.
+
+Memory you cannot inspect is indistinguishable from memory that is wrong, and this
+is the screen that decides whether it is trustworthy.
+
+### The panel remembers where you were
+
+The empty state used to introduce the product to somebody who had already installed
+it, listing capabilities nobody reads. It now says where you left off — naming the
+last conversation and how long ago — and falls back to a short introduction on a
+fresh install. A chat that was opened and never spoken in is skipped rather than
+quoted as an empty title.
+
+The four starter prompts were capability demonstrations: *"What tools do you have
+right now?"* asks you to admire the machinery. They are now things worth asking —
+what is eating your disk, what this folder is for, which of two options to pick.
+
+### The prompt a build ships now reaches you
+
+A saved `systemPrompt` in `~/.bud/config.json` overrode the default, so anyone who
+had ever pressed Save was carrying a copy of the prompt *as it was that day* —
+including the owner's machine, which would have quietly ignored this entire
+release.
+
+A stored prompt that matches a default Bud shipped is no longer treated as a
+customisation; it follows the current default. Anything you actually edited still
+wins. And the default is no longer written to disk at all, because the binary
+already has it.
+
+### Also
+
+`BUD_SCRATCH_STORE=1` runs the app against a throwaway store, the same one the
+check modes use. It is how you open a panel that shows nobody's conversations —
+for a screenshot, a bug report, or a look at a fresh install.
+
+The screenshot has been removed from this README rather than left in place: it
+showed the previous empty state, and a picture of copy that no longer exists is the
+same defect as a sentence about a feature that no longer exists.
+
+---
+
 ## Bud 2.0.1
 
 ### A source fix, so every toolchain can build this

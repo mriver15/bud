@@ -83,6 +83,8 @@ public struct SettingsView: View {
             switch model.settingsTab {
             case .general:
                 GeneralSettingsTab(model: model)
+            case .memory:
+                MemorySettingsView()
             case .mcp:
                 MCPSettingsView(
                     mcp: model.mcp,

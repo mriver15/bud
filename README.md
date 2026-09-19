@@ -7,8 +7,6 @@ draw its own interface when prose is the wrong shape.
 
 Built for macOS 26 with Swift 6 strict concurrency. No third-party packages.
 
-![Bud's panel in its new-chat state: a floating glass window with a sparkle-marked header, Chat / Agents / Browser / History tabs, a body offering four example questions, and a composer showing the active model, reasoning effort and tool count](docs/panel.png)
-
 ---
 
 ## Contents
@@ -149,13 +147,20 @@ and handles are validated as handles — `store_` and eight hex characters — b
 one arrives from a model and becomes a path. The transcript still shows the whole
 result; only the model is bounded.
 
-**Memory that outlives the chat.** `remember` writes a fact worth carrying out of
-a conversation; `recall` reads the notes back. Notes are stored under one of
-three scopes — `general`, `user`, `project` — and recall is bounded by count and
-characters, cut on a line boundary so the last note shown is never half a
-sentence. The tool descriptions name the situations that justify a call and the
-ones that do not, because a memory tool described vaguely is either called every
-turn or never called at all.
+**Memory that outlives the chat.** `remember` writes something worth carrying out
+of a conversation — a preference, a convention, a fact you are tired of repeating —
+and `recall` reads it back. The scope decides how a note travels: `user` notes are
+who you are and what you care about, and they ride in every request, because a
+colleague does not forget that between sentences. `project` and `general` notes are
+ranked against what you are currently talking about.
+
+Ranked rather than filtered, which is the same argument the skill catalogue makes: a
+note sharing no words with your message may still be the one that matters, and term
+matching cannot know that. So the notes that score are shown in full, and the rest
+are still listed one line each — `recall` reads any of them whole.
+
+Everything it keeps is visible and deletable in Settings → Memory. Memory you
+cannot inspect is indistinguishable from memory that is wrong.
 
 **Pictures, without a picture source.** A surface that needs an image asks
 `find_image` for one — one thing or a whole set in a single call. Wikipedia

@@ -228,22 +228,24 @@ public nonisolated struct MemoryToolsProvider: ToolProvider {
 /// or never called at all.
 extension MemoryToolsProvider {
     static let rememberDescription = """
-    Save a fact that should outlive this conversation. Use it when the user says \
-    something that will still be true tomorrow: how they want to be answered, \
-    what they are working on, a convention their project follows, or a correction \
-    to a mistake you keep making. Do not use it for anything that only matters \
-    now — the task in hand, a file you are editing, this turn's output — for \
-    facts you can read from the code or the transcript, or as a log of what you \
-    did. Record it once, without announcing it, and carry on. A fact already in \
-    your notes comes back as already known rather than being saved again.
+    Save what would change how you help next time. The bar is usefulness rather \
+    than interest: how they like to be answered, what they are working on and how \
+    long they have been at it, what they already know so you do not explain it \
+    again, and what they have already turned down, with the reason, so you do not \
+    offer it twice. Notice these on your own initiative and keep them without \
+    saying so — nobody has to ask, and nobody needs telling. Do not keep a log of \
+    trivia or of anything that only matters now: the task in hand, a file you are \
+    editing, this turn's output, or anything you could read again from the code or \
+    the transcript. A fact already in your notes comes back as already known \
+    rather than being saved again.
     """
 
     static let recallDescription = """
-    Read back the notes you saved with 'remember', newest first. The most recent \
-    notes are already shown to you with every request, so reach for this when you \
-    need the older ones or the exact wording, before asking the user to repeat a \
-    preference they have already given you, or when they refer to something they \
-    told you in an earlier conversation. It is a short list of your own notes, \
-    not a search of past conversations, so it is cheap enough to call when in doubt.
+    Read back the notes you saved with 'remember', newest first. The ones that bear \
+    on what you are doing are already in front of you on every request, so reach for \
+    this when you need the rest of them or the exact wording: before asking the user \
+    to repeat a preference they have already given you, or when they refer to \
+    something from an earlier conversation. It is a short list of your own notes, not \
+    a search of past conversations, so it is cheap enough to call when in doubt.
     """
 }

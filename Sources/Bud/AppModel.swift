@@ -1,14 +1,19 @@
 import Foundation
 import Observation
 
+/// Memory sits straight after General. Both tabs are about Bud rather than about
+/// something Bud connects to, and it is the first place somebody looks for what
+/// it knows. Further down the rail it would read as a property of the servers or
+/// the tool inventory instead of as the assistant's own.
 public enum SettingsTab: String, CaseIterable, Sendable, Identifiable {
-    case general, mcp, marketplace, skills, subagents, tools, about
+    case general, memory, mcp, marketplace, skills, subagents, tools, about
 
     public var id: String { rawValue }
 
     public var label: String {
         switch self {
         case .general: return "General"
+        case .memory: return "Memory"
         case .mcp: return "Connections"
         case .marketplace: return "Marketplace"
         case .skills: return "Skills"
@@ -21,6 +26,7 @@ public enum SettingsTab: String, CaseIterable, Sendable, Identifiable {
     public var symbol: String {
         switch self {
         case .general: return "slider.horizontal.3"
+        case .memory: return "brain"
         case .mcp: return "point.3.connected.trianglepath.dotted"
         case .marketplace: return "square.grid.2x2"
         case .skills: return "sparkles.rectangle.stack"

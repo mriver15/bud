@@ -33,6 +33,14 @@ Run `--self-test` before you open a pull request. It is fast and offline, and it
 is what CI runs. CI runs `--verify-ui` and `--verify-browser` too; `--verify-live`
 deliberately is not in CI, because it needs secrets a fork will not have.
 
+## Looking at it
+
+`BUD_SCRATCH_STORE=1 open -a build/Bud.app --env BUD_SCRATCH_STORE=1` runs the real
+panel against a throwaway store — the same one the check modes use. Nothing you do
+in it touches `~/.bud`, and it opens showing nobody's conversations, which is what a
+screenshot or a bug report needs. Without it the only way to photograph the app is
+to publish the last thing you asked it.
+
 ## What belongs in a check
 
 A check earns its place by failing when the code is wrong. The suite is full of

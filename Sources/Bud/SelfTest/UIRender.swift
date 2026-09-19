@@ -557,8 +557,44 @@ public enum UIRender {
             into: &written
         )
 
+        // MARK: Memory
+
+        // The empty state first. The scratch store this mode opens has had
+        // nothing remembered into it, which is exactly what a fresh install
+        // looks like — and seeding first would mean never seeing it at all.
+        emit(
+            "memory-empty",
+            MemorySettingsView()
+                .padding(Bud.Space.lg)
+                .frame(width: 900, height: 660, alignment: .topLeading)
+                .background(Color.black.opacity(0.30)),
+            width: 900,
+            height: 660,
+            directory: directory,
+            into: &written
+        )
+
+        // Then the same surface with notes in it, written through the store
+        // rather than inserted into the table, so the picture is of the real
+        // write path. Taller than the pane on purpose: the pane scrolls, and the
+        // point of the picture is all three groups at once.
+        Self.seedMemory()
+        emit(
+            "memory",
+            MemorySettingsView()
+                .padding(Bud.Space.lg)
+                .frame(width: 900, height: 1_200, alignment: .topLeading)
+                .background(Color.black.opacity(0.30)),
+            width: 900,
+            height: 1_200,
+            directory: directory,
+            into: &written
+        )
+
         // MARK: Settings tabs
 
+        // Seeded above, so `settings-memory` shows the same notes in the pane the
+        // rail actually draws — the tab is only real if it is reachable from it.
         for tab in SettingsTab.allCases {
             // Taller than the window on purpose. These panes scroll, and a capture
             // that stops at the fold is a picture of the settings nobody looked at
@@ -1090,6 +1126,96 @@ public enum UIRender {
             ("turn-tool-running", running),
             ("turn-notice", notice),
         ]
+    }
+
+    // MARK: - Memory fixture
+
+    /// One note for the memory render: what it says, the scope it is filed under,
+    /// and how long before the render it was written.
+    private struct MemoryNote {
+        let text: String
+        let scope: String
+        /// Seconds before now.
+        ///
+        /// `BudStore.remember` stamps the moment it is called, so a fixture of
+        /// nine notes written in the same millisecond would render nine copies of
+        /// "now" — and the ordering and the relative ages are two of the things
+        /// this surface has to get right, so a picture that cannot show them is
+        /// not evidence of anything.
+        let ago: TimeInterval
+    }
+
+    /// Nine notes across the three scopes, in the voice the model writes them in:
+    /// one self-contained sentence each, with no conversation around it.
+    private static let memoryNotes: [MemoryNote] = [
+        MemoryNote(
+            text: "Keeps the shell in ~/Projects/bud and reads build output there.",
+            scope: "general",
+            ago: 8 * 60
+        ),
+        MemoryNote(
+            text: "Bud's prose uses British spelling: recognise, behaviour, colour — comments, copy and commit messages alike.",
+            scope: "project",
+            ago: 31 * 60
+        ),
+        MemoryNote(
+            text: "Comments explain why. One that restates the code is treated as a defect.",
+            scope: "project",
+            ago: 5 * 3_600
+        ),
+        MemoryNote(
+            text: "Wants a failing build fixed before it is asked to review anything.",
+            scope: "general",
+            ago: 86_400
+        ),
+        MemoryNote(
+            text: "Wants the answer first and the reasoning after; says so when a reply warms up instead.",
+            scope: "user",
+            ago: 2 * 86_400
+        ),
+        MemoryNote(
+            text: "No third-party packages. Anything new comes from the standard library or does not get added.",
+            scope: "project",
+            ago: 4 * 86_400
+        ),
+        MemoryNote(
+            text: "Works in Swift 6 with strict concurrency. Objects to @unchecked Sendable used to quiet the compiler.",
+            scope: "user",
+            ago: 6 * 86_400
+        ),
+        MemoryNote(
+            text: "Prefers a short answer to a complete one — say what is missing rather than padding the list.",
+            scope: "user",
+            ago: 13 * 86_400
+        ),
+        MemoryNote(
+            text: "Dislikes being asked to confirm what the code can answer.",
+            scope: "general",
+            ago: 21 * 86_400
+        ),
+    ]
+
+    /// Writes the fixture through the store, then moves the timestamps back.
+    ///
+    /// `remember` rather than an insert of its own, so the render exercises the
+    /// write the app actually performs. The backdating is the one thing the store
+    /// cannot be asked for — nothing in the app writes a note in the past — and
+    /// it is safe here because the only caller is `--render-ui`, which opens a
+    /// scratch database that is thrown away when the process exits.
+    private static func seedMemory() {
+        for note in memoryNotes {
+            BudStore.remember(note.text, scope: note.scope, source: "render")
+        }
+        BudDatabase.shared.transaction { handle in
+            for note in memoryNotes {
+                guard let statement = Statement(handle, "UPDATE lessons SET created_at = ? WHERE text = ?;")
+                else { continue }
+                statement
+                    .bind(1, Date().addingTimeInterval(-note.ago))
+                    .bind(2, note.text)
+                    .run()
+            }
+        }
     }
 }
 

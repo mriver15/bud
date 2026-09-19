@@ -33,6 +33,30 @@ public final class AgentRuntime {
         history.last { $0.role == .user }?.content ?? ""
     }
 
+    /// The tail of the conversation, for ranking what is worth remembering.
+    ///
+    /// The subject of a conversation is mostly in its tail: what was said a dozen
+    /// turns ago is a weaker guess at what a note would be used for than what was
+    /// said in the last exchange. Tool results are skipped — they are the largest
+    /// thing in the history and the least like something a note is about — and
+    /// every message is capped, because this is a query to rank against rather
+    /// than context to send.
+    ///
+    /// Apart from the runtime so it can be exercised without one, like `bounded`:
+    /// what makes the cut is the whole of the behaviour.
+    nonisolated static func conversationTail(
+        of history: [ChatMessage],
+        messages: Int = 6,
+        perMessage: Int = 1_500
+    ) -> String {
+        var tail: [String] = []
+        for message in history.reversed() where message.role == .user || message.role == .assistant {
+            tail.append(String(message.content.prefix(perMessage)))
+            if tail.count == messages { break }
+        }
+        return tail.reversed().joined(separator: "\n")
+    }
+
     /// What the model is currently being sent, before the budget trims it. Shown
     /// against the budget in Settings, because a limit nobody can see the distance
     /// to is a limit nobody can set.
@@ -535,11 +559,15 @@ public final class AgentRuntime {
         // to say, and an empty "things you remember" heading would cost a
         // paragraph of context to tell the model it knows nothing.
         //
+        // Ranked against the tail of the conversation, because which notes are
+        // worth their full text depends on what is being discussed, and what is
+        // being discussed is in the last thing said rather than the first.
+        //
         // Fenced, because this is the system prompt: a note is written from
         // whatever the model was told, including a sentence that arrived in a
         // fetched page or an MCP result, and here it sits in the most-trusted
         // part of the request with nothing to say it is data.
-        let notes = BudStore.lessonContext()
+        let notes = BudStore.lessonContext(Self.conversationTail(of: history))
         if !notes.isEmpty { text += "\n\n" + ToolProvenance.rememberedNotes(notes) }
 
         // Read on every request for the same reason the notes are: a skill

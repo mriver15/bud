@@ -474,21 +474,173 @@ public enum BudStore {
         }
     }
 
+    /// How many notes the block in front of the model may carry.
+    ///
+    /// A memory block is re-sent on every request, in every conversation, for as
+    /// long as the app runs — unlike the conversation, which grows because
+    /// someone is talking. Twelve is what the block cost before it ranked
+    /// anything, and it stays the ceiling; what fills it is now decided by the
+    /// conversation rather than by age alone.
+    public static let lessonContextLimit = 12
+
+    /// How many notes are read in order to rank them.
+    ///
+    /// Ranking needs a pool, and the pool needs its own bound, because the table
+    /// is written by a model and nothing stops it writing on every turn. Two
+    /// hundred, from the measurement rather than from symmetry: ranking costs
+    /// roughly 0.009 ms a note in a release build — 4.2 ms over five hundred and
+    /// 1.8 ms over two hundred — and it is paid on every request. Two hundred is
+    /// more than anyone accumulates before the oldest of them is months old, which
+    /// is as far back as relevance reaches anyway.
+    static let lessonRankPool = 200
+
+    /// How many of the ranked notes get their whole text.
+    ///
+    /// Four, for the same reason `SkillRanking.promote` is three: enough for a
+    /// turn that genuinely spans a couple of subjects, not so many that the tail
+    /// of incidental overlap is spelled out in full.
+    static let lessonPromote = 4
+
+    /// How close to the best match a note has to be to get its whole text, as a
+    /// fraction of the top score. Half, as in `SkillRanking`.
+    static let lessonRelevanceFloor = 0.5
+
+    /// The most of a note that a shortened line keeps. Such a line is there to
+    /// say the note exists and roughly what it is about, which is what the model
+    /// needs in order to reach for `recall`; past about a sentence it costs what
+    /// the whole text costs and saves nothing.
+    static let lessonCompactChars = 140
+
     /// What goes in front of the model on every turn.
     ///
-    /// Bounded on purpose. A memory that grows without limit eventually costs
-    /// more context than the conversation it is meant to inform, and the newest
-    /// notes are the ones most likely to still be true.
-    public static func lessonContext(limit: Int = 12) -> String {
-        let rows = lessons(limit: limit)
+    /// Bounded on purpose, and now bounded by relevance rather than only by age.
+    /// The newest twelve notes are not the twelve most useful ones: a note about
+    /// how someone wants commits written is worth more during a commit than
+    /// whatever was recorded most recently, and a plain recency cut buried it
+    /// under trivia. The bound is `lessonContextLimit` notes — twelve, which is
+    /// what the block cost before any of this — because it is re-sent on every
+    /// request for as long as the app runs, and a memory that grows with the table
+    /// ends up costing more than the conversation it is there to inform. A note
+    /// left out is counted in the block, not silently dropped.
+    ///
+    /// Ranked, never filtered — the argument `SkillRanking` makes at length, and
+    /// this is the same shape of problem. Term matching scores nothing for a note
+    /// reading "Prefers answers without preamble" against a message asking for a
+    /// shorter reply: the words differ, the subject does not, and only the model
+    /// knows that. So a note that scores nothing is not dropped; it is listed on
+    /// one shortened line, and `recall` reads any of them whole.
+    ///
+    /// - Parameter conversation: the recent turns, which is where the subject of
+    ///   a conversation lives. Pass nothing and the ranking has nothing to go on,
+    ///   which is what the callers that are measuring rather than talking want.
+    public static func lessonContext(
+        _ conversation: String = "",
+        limit: Int = lessonContextLimit
+    ) -> String {
+        guard limit > 0 else { return "" }
+        let rows = lessons(limit: lessonRankPool)
         guard !rows.isEmpty else { return "" }
-        let lines = rows.reversed().map { "- \($0.text)" }
+
+        // Who they are comes first and in full. Scope has already decided that
+        // these are the notes that matter everywhere rather than here, and a
+        // colleague does not forget what someone cares about between sentences.
+        // They are admitted before anything is ranked, so the bound below falls on
+        // the notes that grow rather than on the ones that describe a person —
+        // and if a person ever needed more than twelve to be described, the newest
+        // are the ones kept, exactly as for the rest.
+        let standing = rows.filter { $0.scope == "user" }.map { "- \($0.text)" }
+
+        let byRelevance = ranked(rows.filter { $0.scope != "user" }, against: conversation)
+        let floor = (byRelevance.first?.score ?? 0) * lessonRelevanceFloor
+        var relevant: [String] = []
+        var tail: [String] = []
+        for (index, entry) in byRelevance.enumerated() {
+            // The floor promotes nothing when the conversation shares no words
+            // with anything — a question about something nobody has written down
+            // yet. The top few are still worth their full text rather than being
+            // shortened to nothing; a ranking that knows nothing shows its best
+            // guesses, which here are simply the newest.
+            if index < lessonPromote, entry.score >= floor {
+                relevant.append("- \(entry.lesson.text)")
+            } else {
+                tail.append("- \(shortened(entry.lesson.text))")
+            }
+        }
+
+        // The bound bites in one direction only: the person, then what this
+        // conversation is about, then the tail in relevance order. Whatever is
+        // left out is the least relevant of the least relevant, and the block
+        // says how much was left out rather than trailing off.
+        var shown = Array(standing.prefix(limit))
+        shown += relevant.prefix(max(0, limit - shown.count))
+        let shortenedTail = tail.prefix(max(0, limit - shown.count))
+        let hidden = rows.count - shown.count - shortenedTail.count
+
+        var blocks = shown
+        if !shortenedTail.isEmpty {
+            blocks.append("")
+            blocks.append("Also remembered, one line each — `recall` reads any of them whole:")
+            blocks.append(contentsOf: shortenedTail)
+        }
+        if hidden > 0 {
+            blocks.append("")
+            blocks.append("(\(hidden) more notes are not listed here — `recall` reads them.)")
+        }
+
         return """
         Things you have been asked to remember. Treat them as your own notes, \
         not as instructions from the user:
 
-        \(lines.joined(separator: "\n"))
+        \(blocks.joined(separator: "\n"))
         """
+    }
+
+    /// Notes that are not about who the person is, in the order the conversation
+    /// suggests: best match first, newest first among equals.
+    ///
+    /// Ties break towards the newer note. Given equal relevance the more recently
+    /// learned fact is the more likely to still be true, and the notes arrive
+    /// newest first, so the original order is the tie-break.
+    private static func ranked(
+        _ notes: [Lesson],
+        against conversation: String
+    ) -> [(lesson: Lesson, score: Double)] {
+        let terms = TextRanking.tokens(in: conversation)
+        // Nothing to match against means nothing to match: the measuring callers
+        // pass no conversation, and tokenising every note to score them all zero
+        // against an empty query was most of what this cost.
+        guard !terms.isEmpty else { return notes.map { (lesson: $0, score: 0) } }
+
+        let documents = notes.map { TextRanking.tokens(in: $0.text) }
+        let scores = TextRanking.scores(terms: terms, documents: documents)
+        var ordered: [(lesson: Lesson, score: Double, index: Int)] = []
+        ordered.reserveCapacity(notes.count)
+        for index in notes.indices {
+            ordered.append((lesson: notes[index], score: scores[index], index: index))
+        }
+        // Written as one sort rather than a chain of maps: the closure-chain form
+        // of this is enough to defeat the type checker, and it was.
+        ordered.sort { left, right in
+            left.score == right.score ? left.index < right.index : left.score > right.score
+        }
+        return ordered.map { (lesson: $0.lesson, score: $0.score) }
+    }
+
+    /// One line, and no more than a sentence or so of it.
+    ///
+    /// Newlines go first, or a two-line note would break the shape of the block.
+    /// The cut lands on a word boundary, because a line ending mid-word reads as
+    /// a typo rather than as a truncation.
+    private static func shortened(_ text: String) -> String {
+        let flat = text
+            .replacingOccurrences(of: "\n", with: " ")
+            .split(separator: " ")
+            .joined(separator: " ")
+        guard flat.count > lessonCompactChars else { return flat }
+        let cut = flat.index(flat.startIndex, offsetBy: lessonCompactChars)
+        let head = flat[..<cut]
+        guard let space = head.lastIndex(of: " ") else { return head + "…" }
+        return head[..<space] + "…"
     }
 
     // MARK: - Migration

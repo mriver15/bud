@@ -140,26 +140,75 @@ public struct BudConfig: Sendable, Codable, Hashable {
     /// would be the app deciding when to stop working.
     public var conversationTokenBudget: Int
 
-    public static let defaultSystemPrompt = """
-    You are Bud, a native macOS assistant living in a floating Liquid Glass panel.
+    /// The defaults shipped before this one, verbatim.
+    ///
+    /// A stored prompt that matches one of these was never a decision — it is a
+    /// copy of a default somebody saved a version ago, and letting it win would
+    /// mean the shipped prompt could never change for anyone who ever pressed
+    /// Save. Matching is on the trimmed text, so a lost trailing newline does not
+    /// defeat it. **A change to `defaultSystemPrompt` adds its predecessor here**,
+    /// because this list is the whole of what distinguishes "never customised"
+    /// from "deliberately changed".
+    public static let supersededSystemPrompts: [String] = [
+        """
+        You are Bud, a native macOS assistant living in a floating Liquid Glass panel.
 
-    You have tools. Use them without asking permission and without narrating that \
-    you are about to use them — just call them and report what you found.
+        You have tools. Use them without asking permission and without narrating that you are about to use them — just call them and report what you found.
+
+        Tool families:
+        - `mcp__<server>__<tool>` — tools from connected MCP servers. Their names tell you which server owns them; prefer the most specific server for the job.
+        - `render_ui` — emit a rich surface (cards, metrics, tables, charts, buttons) when a visual answer beats prose. Use it for comparisons, dashboards, status reports, and anything the user will want to scan rather than read.
+        - `spawn_subagents` — run independent slices of work concurrently, each in a fresh context. Use it when a request has genuinely separable parts; do not use it to do one thing in parallel with itself.
+        - `web_fetch`, `read_file`, `list_files`, `run_shell` — local capabilities.
+
+        Style: lead with the answer. Short paragraphs. No preamble, no filler, no summarising what you just did. If a tool failed, say what failed and what you tried. Never invent tool output.
+        """,
+    ]
+
+    /// Whether this text is a default Bud shipped rather than something somebody
+    /// wrote.
+    ///
+    /// Compared trimmed: a prompt that has been through a save and a load can lose
+    /// a trailing newline, and that is not a decision anybody made.
+    public static func isShippedDefaultPrompt(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if trimmed == defaultSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines) {
+            return true
+        }
+        return supersededSystemPrompts.contains {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed
+        }
+    }
+
+    public static let defaultSystemPrompt = """
+    You are Bud, a collaborator in a floating Liquid Glass panel on this Mac: \
+    beside someone competent, on what they care about, never explaining what they \
+    clearly know. The regard is real, and it shows as usefulness and memory rather \
+    than performed feeling: no pet name, no "friend".
+
+    You have tools. Use them without asking and without narrating that you are \
+    about to: call them, and report what you found.
 
     Tool families:
-    - `<server>__<tool>` — tools from connected MCP servers. Their names tell \
-    you which server owns them; prefer the most specific server for the job.
+    - `<server>__<tool>` — tools from connected MCP servers. The name says \
+    which server owns it; prefer the most specific server for the job.
     - `render_ui` — emit a rich surface (cards, metrics, tables, charts, buttons) \
-    when a visual answer beats prose. Use it for comparisons, dashboards, status \
-    reports, and anything the user will want to scan rather than read.
+    when a visual answer beats prose: comparisons, dashboards, status reports, \
+    anything they will scan rather than read.
     - `spawn_subagents` — run independent slices of work concurrently, each in a \
-    fresh context. Use it when a request has genuinely separable parts; do not \
-    use it to do one thing in parallel with itself.
+    fresh context. Use it when a request has genuinely separable parts; never to \
+    do one thing in parallel with itself.
     - `web_fetch`, `read_file`, `list_files`, `run_shell` — local capabilities.
 
-    Style: lead with the answer. Short paragraphs. No preamble, no filler, no \
-    summarising what you just did. If a tool failed, say what failed and what \
-    you tried. Never invent tool output.
+    How you talk. Lead with the answer. Short sentences, plain words, \
+    contractions. Wry when it's free, never at their expense. No preamble, no \
+    flattery, no summarising what you just did. Say what you don't know plainly. \
+    If a tool failed, say what failed and what you tried; never invent its output.
+
+    What you know. Notes are things you picked up, not a list to recite: never \
+    open with "I remember that you…" — just be someone who knows. Keep what's \
+    worth keeping, and say nothing about it.
     """
 
     public init(
@@ -463,7 +512,12 @@ public enum BudConfigLoader {
         if let v = stored.reasoningVisibility { config.reasoningVisibility = v }
         if let v = stored.temperature { config.temperature = v }
         if let v = stored.maxTokens { config.maxTokens = v }
-        if let v = stored.systemPrompt, !v.isEmpty { config.systemPrompt = v }
+        // A prompt that matches a default Bud itself shipped was never a decision,
+        // so it does not get to outlive the default it was copied from. Anything
+        // else is a real customisation and still wins.
+        if let v = stored.systemPrompt, !v.isEmpty, !BudConfig.isShippedDefaultPrompt(v) {
+            config.systemPrompt = v
+        }
         if let v = stored.maxToolRounds { config.maxToolRounds = v }
         if let v = stored.allowParallelSubagents { config.allowParallelSubagents = v }
         if let v = stored.confirmDangerousTools { config.confirmDangerousTools = v }
@@ -694,7 +748,12 @@ public enum BudConfigLoader {
             self.reasoningVisibility = config.reasoningVisibility
             self.temperature = config.temperature
             self.maxTokens = config.maxTokens
-            self.systemPrompt = config.systemPrompt
+            // Left out when it is the default rather than written out again: a
+            // kilobyte of prose the binary already contains, that would then have
+            // to be recognised as a copy on the next load.
+            self.systemPrompt = BudConfig.isShippedDefaultPrompt(config.systemPrompt)
+                ? nil
+                : config.systemPrompt
             self.maxToolRounds = config.maxToolRounds
             self.allowParallelSubagents = config.allowParallelSubagents
             self.confirmDangerousTools = config.confirmDangerousTools

@@ -30,6 +30,15 @@ let runsHeadless = arguments.contains("--self-test")
     || arguments.contains("--profile")
 if runsHeadless { useScratchStore() }
 
+// The app takes a scratch store only when asked, by environment.
+//
+// It is how the panel gets opened somewhere that shows nobody's conversations:
+// a screenshot, a bug report, or a look at how a fresh install behaves. Without
+// it the only way to photograph this app is to publish the last thing its owner
+// asked — which is not a trade worth making, and it is the reason the panel's
+// empty state could not be documented before.
+if ProcessInfo.processInfo.environment["BUD_SCRATCH_STORE"] == "1" { useScratchStore() }
+
 // Acts as a real MCP server over stdio. Used by `--verify-live` to exercise the
 // whole client stack without depending on npx, uvx or the network.
 if arguments.contains("--mcp-echo-server") {

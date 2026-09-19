@@ -37,25 +37,16 @@ public enum SkillRanking {
     /// Skill names, most relevant first. Only those that scored at all, and only
     /// those near the best.
     public static func rank(_ query: String, skills: [Skill], limit: Int = promote) -> [String] {
-        let terms = tokens(in: query)
+        let terms = TextRanking.tokens(in: query)
         guard !terms.isEmpty, !skills.isEmpty else { return [] }
 
         let documents = skills.map { document(for: $0) }
-        var frequency: [String: Int] = [:]
-        for document in documents {
-            for term in Set(document) { frequency[term, default: 0] += 1 }
-        }
-        let total = Double(documents.count)
+        let base = TextRanking.scores(terms: terms, documents: documents)
 
         let message = query.lowercased()
         var scored: [(name: String, score: Double)] = []
         for (index, skill) in skills.enumerated() {
-            let document = documents[index]
-            var score = 0.0
-            for term in Set(terms) where document.contains(term) {
-                let df = Double(frequency[term] ?? 1)
-                score += log(1 + total / df) * (1 + log(Double(document.count { $0 == term })))
-            }
+            var score = base[index]
             // A word the author said users would use, actually used. Worth more than
             // any amount of overlap, because it is the one signal here that is not a
             // guess: the author knows what this skill is called by the people who
@@ -85,7 +76,7 @@ public enum SkillRanking {
     /// The text a skill is matched on: its name, what it says it is for, and the
     /// words its author says people use for it.
     private static func document(for skill: Skill) -> [String] {
-        tokens(in: skill.name.replacingOccurrences(of: "-", with: " ")
+        TextRanking.tokens(in: skill.name.replacingOccurrences(of: "-", with: " ")
             + " " + skill.summary
             + " " + skill.triggers)
     }
@@ -97,8 +88,46 @@ public enum SkillRanking {
             .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
             .filter { !$0.isEmpty }
     }
+}
 
-    private static func tokens(in text: String) -> [String] {
+// MARK: - Text matching
+
+/// The text matching that both rankings are built on.
+///
+/// `SkillRanking` scores installed skills against a message; `BudStore` scores
+/// saved notes against the conversation they sit in front of. That is the same
+/// problem twice — a short query against a small catalogue, where the answer is
+/// an order rather than a selection — so the token split and the weighting live
+/// here once instead of being written twice and drifting apart.
+enum TextRanking {
+    /// IDF-weighted term overlap, one score per document, in the same order.
+    ///
+    /// A word that appears in nearly every document says nothing about which one
+    /// the query is about, so it is discounted by how many documents carry it; a
+    /// word a document repeats counts for more than one it mentions once. That is
+    /// the whole of the judgement, and it is deliberately crude — the caller
+    /// decides what a score is worth, including discarding it.
+    static func scores(terms: [String], documents: [[String]]) -> [Double] {
+        guard !terms.isEmpty, !documents.isEmpty else { return documents.map { _ in 0 } }
+
+        var frequency: [String: Int] = [:]
+        for document in documents {
+            for term in Set(document) { frequency[term, default: 0] += 1 }
+        }
+        let total = Double(documents.count)
+        let distinct = Set(terms)
+
+        return documents.map { document in
+            var score = 0.0
+            for term in distinct where document.contains(term) {
+                let df = Double(frequency[term] ?? 1)
+                score += log(1 + total / df) * (1 + log(Double(document.count { $0 == term })))
+            }
+            return score
+        }
+    }
+
+    static func tokens(in text: String) -> [String] {
         text
             .lowercased()
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
@@ -106,9 +135,9 @@ public enum SkillRanking {
             .filter { $0.count > 1 && !stopWords.contains($0) }
     }
 
-    /// Words that appear in enough descriptions to carry no signal, plus the ones
+    /// Words that appear in enough documents to carry no signal, plus the ones
     /// every English sentence has. IDF would discount most of these on its own;
-    /// naming them keeps a one-skill catalogue from scoring everything equally.
+    /// naming them keeps a one-document catalogue from scoring everything equally.
     private static let stopWords: Set<String> = [
         "the", "a", "an", "and", "or", "for", "to", "of", "in", "on", "with", "is",
         "it", "this", "that", "these", "those", "i", "me", "my", "you", "your", "we",

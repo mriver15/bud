@@ -16,11 +16,18 @@ public struct ChatView: View {
     @FocusState private var isFindFocused: Bool
 
     private static let bottomAnchor = "bud.chat.bottom"
+    /// What the panel offers before you have thought of anything.
+    ///
+    /// These were capability demonstrations — "What tools do you have right now?"
+    /// asks the user to admire the machinery. A colleague does not open with what
+    /// they are able to do; they offer something worth doing. Each of these is a
+    /// real task that happens to need a different part of the tool set, so the
+    /// range is shown by use rather than by advertisement.
     private static let starterPrompts = [
-        "What tools do you have right now?",
-        "Show me a dashboard of this Mac's health",
-        "List what is in my home directory and summarise it",
-        "Research two options in parallel and compare them",
+        "What's actually eating my disk?",
+        "Read this folder and tell me what it's for",
+        "Compare two options and tell me which to pick",
+        "Make a dashboard of this project",
     ]
 
     public init(model: AppModel) {
@@ -357,8 +364,8 @@ public struct ChatView: View {
             VStack(spacing: Bud.Space.lg) {
                 EmptyStateView(
                     systemImage: "sparkles",
-                    title: "Bud is ready",
-                    message: "Ask anything. Bud can search, call your MCP tools, fan work out to subagents, and render results as a surface instead of prose.",
+                    title: greeting.title,
+                    message: greeting.message,
                     fills: false
                 )
 
@@ -387,6 +394,51 @@ public struct ChatView: View {
         .frame(maxWidth: Bud.contentMeasure)
         .frame(maxWidth: .infinity)
     }
+
+    /// What the panel says before anyone has typed anything.
+    private var greeting: ChatGreeting { ChatGreeting.make(from: model.conversations) }
+}
+
+/// The line above the starter prompts.
+///
+/// Two states, and the interesting one is not the first. An install that has been
+/// used says where you left off, which is the difference between a tool and
+/// someone who was there: you do not have to re-explain yourself to something that
+/// was paying attention. A fresh install has nothing to remember and introduces
+/// itself instead — one sentence about what it can do and one about what it will
+/// not pretend to, rather than a list of features, which nobody reads and which
+/// reads as a boast.
+///
+/// Separate from the view because it is the only part of the empty state with a
+/// decision in it, and the decision has an edge: the newest conversation is not
+/// always one that can be named.
+struct ChatGreeting: Equatable {
+    let title: String
+    let message: String
+
+    static func make(from conversations: [ConversationSummary]) -> ChatGreeting {
+        // The newest conversation may be one nobody said anything in — a chat that
+        // was opened and abandoned has no title to quote, and naming it would
+        // produce "you were on """ rather than a sentence. The next one down is
+        // the most recent thing actually worth resuming.
+        guard let last = conversations.first(where: { !$0.title.trimmingCharacters(in: .whitespaces).isEmpty })
+        else { return introduction }
+
+        return ChatGreeting(
+            title: "Where you left off",
+            message: "You were on \u{201C}\(last.title)\u{201D} "
+                + "\(last.updatedAt.formatted(.relative(presentation: .named))). "
+                + "Carry on in History, or start something new."
+        )
+    }
+
+    /// What a fresh install sees. Not a feature list: what it can do, and the one
+    /// thing about it that is worth knowing before you trust an answer.
+    static let introduction = ChatGreeting(
+        title: "Ask me something",
+        message: "I can run things on this Mac, read your files, and go and find out. "
+            + "I'll say so when I'm guessing."
+    )
 }
 
 // MARK: - Empty-state prompt
