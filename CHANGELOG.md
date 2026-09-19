@@ -12,6 +12,37 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.7.2
+
+### The web tool the model guessed, now resolves
+
+The model started calling `web_search` — a tool that has never existed in Bud,
+and no rename ever happened: it is the name most other agents use, and the
+model reaches for it by habit. Since the planner began holding tools back, a
+query phrased "search the web for …" offered no web tools at all — none of the
+intent signals matched it, and `web_fetch` is not in the recovery core — so the
+model guessed, and the guess hard-failed as an unknown tool.
+
+Two fixes, both in the planner:
+
+- **"search the web" is web intent.** The intent signals now include the
+  phrasings the model's training produces, so the browser group is offered and
+  no guess is needed.
+- **Guessed names resolve.** A small alias table maps the names the model knows
+  from other agents — `web_search`, `search_web`, `web_browse` — to the real
+  `web_fetch`, consulted by the fail-open path before anything is declared
+  unknown. The reason string says what happened, so the retry is visible.
+
+Both are checked, and the check is proven to bite: with the alias table
+disabled, the resolver fails exactly as before.
+
+```
+--self-test      1080/1080   (+3)
+--verify-ui        25/25     --verify-browser   43/43    --verify-live   149/149
+```
+
+---
+
 ## Bud 2.7.1
 
 ### A check that raced, fixed

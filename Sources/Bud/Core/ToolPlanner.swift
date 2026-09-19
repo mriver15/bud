@@ -170,14 +170,26 @@ public enum ToolPlanner {
 
     /// The fail-open step: given a plan and the tool name the model actually
     /// tried, a plan with that tool's provider group added. `nil` when the name
-    /// is unknown to the full inventory, in which case the call is a hallucination
-    /// rather than something the planner held back.
+    /// is unknown to the full inventory — after `toolAliases` — in which case
+    /// the call is a hallucination rather than something the planner held back.
+    ///
+    /// Names the model reaches for by habit from its training in other agents,
+    /// mapped to the tool Bud actually has. The fail-open path consults this
+    /// before deciding a name is unknown: a guessed name that points at a real
+    /// capability should resolve, not hard-fail.
+    public static let toolAliases: [String: String] = [
+        "web_search": "web_fetch",
+        "search_web": "web_fetch",
+        "web_browse": "web_fetch",
+    ]
+
     public static func expanded(
         for plan: ToolPlan,
         requestedTool: String,
         allDescriptors: [ToolDescriptor]
     ) -> ToolPlan? {
-        guard let requested = allDescriptors.first(where: { $0.name == requestedTool }) else {
+        let resolved = toolAliases[requestedTool] ?? requestedTool
+        guard let requested = allDescriptors.first(where: { $0.name == resolved }) else {
             return nil
         }
         let group = requested.providerName
@@ -188,10 +200,11 @@ public enum ToolPlanner {
         let addedNames = Set(additions.map(\.name))
         let stillOmitted = plan.omitted.filter { !addedNames.contains($0.name) }
 
+        let called = resolved == requestedTool ? "'\(requestedTool)'" : "'\(requestedTool)' (as \(resolved))"
         return ToolPlan(
             descriptors: plan.descriptors + additions,
             omitted: stillOmitted,
-            reason: "The model called '\(requestedTool)', which was held back; the "
+            reason: "The model called \(called), which was held back; the "
                 + "'\(group)' group is now offered and the round is retried."
         )
     }
@@ -200,7 +213,11 @@ public enum ToolPlanner {
     static func hasBrowserIntent(query: String, surface: String?) -> Bool {
         if surface == Self.browserSurfaceID { return true }
         if containsURL(query) { return true }
-        for signal in ["browse", "open site", "look up", "lookup"] where query.contains(signal) {
+        // "search the web" and friends are deliberate: the model's training makes
+        // it reach for web tools by the name other agents use, and a query phrased
+        // this way is the one that must offer them. A false positive only promotes
+        // a group the cap still bounds; a false negative leaves the model blind.
+        for signal in ["browse", "open site", "look up", "lookup", "search the web", "web search", "on the web", "the web"] where query.contains(signal) {
             return true
         }
         return false

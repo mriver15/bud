@@ -814,7 +814,8 @@ public enum BudSelfTest {
         }
 
         var inventory = ["skill", "recall", "read_stored", "remember",
-                         "read_file", "list_files", "run_shell", "write_file"].map { tool($0, "native") }
+                         "read_file", "list_files", "run_shell", "write_file",
+                         "search_files", "web_fetch"].map { tool($0, "native") }
         for i in 0..<200 { inventory.append(tool("mock_\(i)", "mockserver")) }
         for i in 0..<13 { inventory.append(tool("browser_\(i)", "Browser")) }
         for i in 0..<8 { inventory.append(tool("acme_\(i)", "acme")) }
@@ -839,6 +840,24 @@ public enum BudSelfTest {
         )
         c.check("a browse intent offers the browser group",
                 browsing.descriptors.contains { $0.providerName == "Browser" })
+
+        // The phrasing the model's training produces: "search the web" is web
+        // intent even though it matches none of the older signal words, and the
+        // guessed tool name resolves through the alias table instead of failing.
+        let searching = ToolPlanner.plan(
+            context: ToolPlanningContext(query: "search the web for the latest swift release notes"),
+            descriptors: inventory
+        )
+        c.check("\"search the web\" is web intent",
+                searching.descriptors.contains { $0.providerName == "Browser" })
+
+        let aliased = ToolPlanner.expanded(for: generic, requestedTool: "web_search", allDescriptors: inventory)
+        c.check("the model's guessed name resolves to the real tool",
+                aliased?.descriptors.contains { $0.name == "web_fetch" } == true)
+        c.check("...and says so in the reason",
+                aliased?.reason.contains("as web_fetch") == true)
+        c.nilValue("...but a name with no real counterpart still fails",
+                   ToolPlanner.expanded(for: generic, requestedTool: "nonsense_tool", allDescriptors: inventory))
 
         let fileTask = ToolPlanner.plan(
             context: ToolPlanningContext(query: "what is this?", attachmentPaths: ["/tmp/notes.txt"]),
