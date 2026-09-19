@@ -60,6 +60,14 @@ public struct MCPServerConfig: Sendable, Codable, Hashable, Identifiable {
     /// question answered by one instant lookup is *slower* this way. It pays for
     /// itself when the server is bulky and its answers are.
     public var delegated: Bool
+    /// Whether this server's schema descriptions are sent in full even when
+    /// schema compaction is on globally.
+    ///
+    /// Some servers write their argument contract in their descriptions; trimming
+    /// those would cost more than it saves. The default (`false`) lets the global
+    /// setting apply, because the point of compaction is a bulky server the user
+    /// never reads, and opting out is a decision made per server.
+    public var compactOptOut: Bool
     /// Registry slug when installed from the marketplace; used to show provenance
     /// and to detect "already installed".
     public var registryName: String?
@@ -78,6 +86,7 @@ public struct MCPServerConfig: Sendable, Codable, Hashable, Identifiable {
         autoStart: Bool = true,
         enabledTools: [String]? = nil,
         delegated: Bool = false,
+        compactOptOut: Bool = false,
         registryName: String? = nil,
         notes: String? = nil
     ) {
@@ -93,6 +102,7 @@ public struct MCPServerConfig: Sendable, Codable, Hashable, Identifiable {
         self.autoStart = autoStart
         self.enabledTools = enabledTools
         self.delegated = delegated
+        self.compactOptOut = compactOptOut
         self.registryName = registryName
         self.notes = notes
     }
@@ -120,6 +130,7 @@ public struct MCPServerConfig: Sendable, Codable, Hashable, Identifiable {
         autoStart = try container.decodeIfPresent(Bool.self, forKey: .autoStart) ?? true
         enabledTools = try container.decodeIfPresent([String].self, forKey: .enabledTools)
         delegated = try container.decodeIfPresent(Bool.self, forKey: .delegated) ?? false
+        compactOptOut = try container.decodeIfPresent(Bool.self, forKey: .compactOptOut) ?? false
         registryName = try container.decodeIfPresent(String.self, forKey: .registryName)
         notes = try container.decodeIfPresent(String.self, forKey: .notes)
     }

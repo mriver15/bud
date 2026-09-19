@@ -511,17 +511,32 @@ public enum BudStore {
     /// the whole text costs and saves nothing.
     static let lessonCompactChars = 140
 
+    /// How many characters the memory block may carry.
+    ///
+    /// The block rides on every request, in every conversation, for as long as
+    /// the app runs, and a memory that grows forever must not grow with it. A
+    /// note count bounds the block only while the notes are short — twelve
+    /// five-hundred-character notes are the whole conversation's worth of context
+    /// charged as twelve lines — so the characters are the bound that actually
+    /// caps the cost. Three thousand is about a page of prompt: room for the
+    /// person's standing notes and the few the conversation is about in full,
+    /// plus a long tail of one-line reminders, and it keeps the block smaller
+    /// than the turn it is there to inform. Whatever it leaves out stays
+    /// reachable through `recall`, which reads the whole table.
+    static let memoryContextBudget = 3_000
+
     /// What goes in front of the model on every turn.
     ///
     /// Bounded on purpose, and now bounded by relevance rather than only by age.
     /// The newest twelve notes are not the twelve most useful ones: a note about
     /// how someone wants commits written is worth more during a commit than
     /// whatever was recorded most recently, and a plain recency cut buried it
-    /// under trivia. The bound is `lessonContextLimit` notes — twelve, which is
-    /// what the block cost before any of this — because it is re-sent on every
-    /// request for as long as the app runs, and a memory that grows with the table
-    /// ends up costing more than the conversation it is there to inform. A note
-    /// left out is counted in the block, not silently dropped.
+    /// under trivia. Two bounds apply: at most `lessonContextLimit` notes, and at
+    /// most `memoryContextBudget` characters — the count because it is re-sent on
+    /// every request for as long as the app runs, and the characters because a
+    /// memory that grows with the table ends up costing more than the
+    /// conversation it is there to inform. A note left out is counted in the
+    /// block, not silently dropped.
     ///
     /// Ranked, never filtered — the argument `SkillRanking` makes at length, and
     /// this is the same shape of problem. Term matching scores nothing for a note
@@ -567,16 +582,34 @@ public enum BudStore {
             }
         }
 
-        // The bound bites in one direction only: the person, then what this
-        // conversation is about, then the tail in relevance order. Whatever is
-        // left out is the least relevant of the least relevant, and the block
-        // says how much was left out rather than trailing off.
-        var shown = Array(standing.prefix(limit))
-        shown += relevant.prefix(max(0, limit - shown.count))
-        let shortenedTail = tail.prefix(max(0, limit - shown.count))
-        let hidden = rows.count - shown.count - shortenedTail.count
+        // The bound is a character budget, spent in priority order: the person
+        // first, then what this conversation is about, then the tail in relevance
+        // order. A note count bounds the block only while the notes are short —
+        // twelve five-hundred-character notes are the whole conversation charged
+        // as twelve lines — so the characters are the bound that caps the cost.
+        // Whatever is left out is the least relevant of the least relevant, and
+        // `recall` still reads any of them whole.
+        var blocks: [String] = []
+        var budget = memoryContextBudget
+        var listed = 0
+        for line in standing where listed < limit && line.count <= budget {
+            blocks.append(line)
+            budget -= line.count
+            listed += 1
+        }
+        for line in relevant where listed < limit && line.count <= budget {
+            blocks.append(line)
+            budget -= line.count
+            listed += 1
+        }
+        var shortenedTail: [String] = []
+        for line in tail where listed < limit && line.count <= budget {
+            shortenedTail.append(line)
+            budget -= line.count
+            listed += 1
+        }
+        let hidden = rows.count - listed
 
-        var blocks = shown
         if !shortenedTail.isEmpty {
             blocks.append("")
             blocks.append("Also remembered, one line each — `recall` reads any of them whole:")
@@ -584,7 +617,7 @@ public enum BudStore {
         }
         if hidden > 0 {
             blocks.append("")
-            blocks.append("(\(hidden) more notes are not listed here — `recall` reads them.)")
+            blocks.append("More available: \(hidden) memories; call recall to search.")
         }
 
         return """

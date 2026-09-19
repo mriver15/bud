@@ -75,24 +75,21 @@ public final class SkillToolProvider: ToolProvider {
 // MARK: - The prompt block
 
 public enum SkillContext {
-    /// The list the model sees before loading anything.
+    /// The list the model sees before loading anything: every installed skill,
+    /// ranked against the message rather than filtered.
     ///
-    /// Capped, and the cap is stated rather than silent. A model told there are
-    /// twelve skills when there are forty will not go looking for the rest; a
-    /// model told the list is truncated knows it may be worth asking.
-    /// The catalogue, with the skills a message looks like it needs spelled out.
+    /// Measured against the real skills, term matching put thirteen of fourteen
+    /// messages on the right skill and scored nothing at all for the fourteenth,
+    /// where the user said "W-9" and the skill says "PDF". A filter would have
+    /// dropped the one that was right, and the model — which knows a W-9 is a PDF
+    /// — would never have seen it. So the scoring promotes rather than selects:
+    /// what it promotes gets its whole description, and everything else gets one
+    /// line — the first sentence plus the aliases its author wrote down, so a
+    /// domain name stays visible.
     ///
-    /// **Every installed skill is listed, always.** That is the design, not an
-    /// oversight: measured against the real skills, term matching put thirteen of
-    /// fourteen messages on the right skill and scored nothing at all for the
-    /// fourteenth, where the user said "W-9" and the skill says "PDF". A filter
-    /// would have dropped the one that was right, and the model — which knows a
-    /// W-9 is a PDF — would never have seen it.
-    ///
-    /// So the scoring promotes rather than selects. What it promotes gets its whole
-    /// description; everything else gets its first sentence. That is 2,037
-    /// characters against 9,389 for the nineteen real skills, with a hand back to
-    /// `skill` for anything that reads as truncated.
+    /// The whole list is capped by a character budget, and the cap is stated
+    /// rather than silent. A model told the list is truncated knows it may be
+    /// worth asking, and whatever was left out stays one `skill` call away.
     ///
     /// Returns the promoted names alongside the text so a caller can tell whether
     /// the catalogue actually changed — rendering it afresh on every message would
@@ -118,30 +115,51 @@ public enum SkillContext {
             "before you start, rather than working it out from scratch.",
         ]
 
-        if !relevant.isEmpty {
-            lines.append("")
-            lines.append("These cover what was just asked:")
-            for skill in relevant {
-                lines.append("- \(skill.name): \(flattened(skill.summary))")
-            }
+        // The budget is spent in priority order: what the message is about in
+        // full first, then the rest one line each. A line that does not fit in
+        // the remaining budget is skipped rather than cut short, and everything
+        // skipped stays one `skill` call away.
+        var budget = skillCatalogueBudget
+        var listed = 0
+
+        var promotedLines: [String] = []
+        for skill in relevant {
+            let line = "- \(skill.name): \(flattened(skill.summary))"
+            guard line.count <= budget else { continue }
+            promotedLines.append(line)
+            budget -= line.count
+            listed += 1
         }
 
-        if !rest.isEmpty {
+        var restLines: [String] = []
+        for skill in rest {
+            let line = "- \(skill.name): \(opening(skill))"
+            guard line.count <= budget else { continue }
+            restLines.append(line)
+            budget -= line.count
+            listed += 1
+        }
+
+        if !promotedLines.isEmpty {
+            lines.append("")
+            lines.append("These cover what was just asked:")
+            lines.append(contentsOf: promotedLines)
+        }
+
+        if !restLines.isEmpty {
             lines.append("")
             lines.append(
-                relevant.isEmpty
+                promotedLines.isEmpty
                     ? "Installed:"
                     : "Also installed — a shortened line each, and `skill` reads the whole thing:"
             )
-            for skill in rest {
-                lines.append("- \(skill.name): \(opening(skill.summary))")
-            }
+            lines.append(contentsOf: restLines)
         }
 
-        if installed.count > shown.count {
+        let unlisted = installed.count - listed
+        if unlisted > 0 {
             lines.append("")
-            lines.append("(\(installed.count - shown.count) more are installed but not listed here;"
-                + " ask if none of the above fits.)")
+            lines.append("More available: \(unlisted) skills; ask Bud to list them.")
         }
 
         return (lines.joined(separator: "\n"), promoted)
@@ -155,6 +173,18 @@ public enum SkillContext {
             .joined(separator: " ")
     }
 
+    /// One line for a skill that is not promoted: its first sentence, plus the
+    /// aliases its author wrote down for it, so a domain name like "W-9" for the
+    /// PDF skill stays visible when the rest of the description does not.
+    private static func opening(_ skill: Skill) -> String {
+        var line = firstSentence(skill.summary)
+        let aliases = triggerAliases(skill.triggers)
+        if !aliases.isEmpty {
+            line += " [also called: \(aliases.joined(separator: ", "))]"
+        }
+        return line
+    }
+
     /// One line, and no more than the first sentence of it.
     ///
     /// The first sentence is what a skill *is*; the ones after it are when to use
@@ -162,7 +192,7 @@ public enum SkillContext {
     /// first sentence of nearly every real skill — 22% of the whole catalogue,
     /// measured — and the name in front of it is what the model actually matches
     /// against.
-    private static func opening(_ summary: String) -> String {
+    private static func firstSentence(_ summary: String) -> String {
         let flat = flattened(summary)
         guard let stop = flat.range(of: ". ") else {
             return flat.count > compactLimit ? String(flat.prefix(compactLimit)) + "…" : flat
@@ -171,6 +201,28 @@ public enum SkillContext {
         guard sentence.count > compactLimit else { return sentence }
         return String(flat.prefix(compactLimit)) + "…"
     }
+
+    /// The aliases a skill's author wrote down as its `triggers`, one per comma
+    /// or newline, kept in their original casing so they read as names rather
+    /// than as matching tokens.
+    private static func triggerAliases(_ raw: String) -> [String] {
+        raw
+            .split(whereSeparator: { $0 == "," || $0 == "\n" })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// How many characters the catalogue may spend spelling out skills.
+    ///
+    /// The catalogue is the largest thing in front of the model that grows on
+    /// its own: every skill installed adds a line, for ever, whether or not it
+    /// is ever used. So it is capped by characters rather than by count, and the
+    /// cap is stated rather than silent. Six thousand is about a page and a half
+    /// of prompt — room for the few skills a message is actually about in full
+    /// and a long list of one-line names and aliases, and no more than the
+    /// catalogue is worth against the rest of the context it shares the request
+    /// with. Whatever it leaves out stays one `skill` call away.
+    static let skillCatalogueBudget = 6_000
 
     private static let compactLimit = 160
 }

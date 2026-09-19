@@ -20,6 +20,10 @@ public struct Conversation: Sendable, Identifiable, Codable {
     public var completionTokens: Int
     /// Kept at the top of the archive regardless of when it was last touched.
     public var isPinned: Bool
+    /// The data-attributed summary this conversation was compacted to, when one
+    /// has been written. Optional so archives written before compaction existed
+    /// still decode, and because a conversation under the watermark has none.
+    public var contextSummary: String?
 
     public var totalTokens: Int { promptTokens + completionTokens }
 
@@ -32,7 +36,8 @@ public struct Conversation: Sendable, Identifiable, Codable {
         messages: [ChatMessage] = [],
         promptTokens: Int = 0,
         completionTokens: Int = 0,
-        isPinned: Bool = false
+        isPinned: Bool = false,
+        contextSummary: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -43,6 +48,7 @@ public struct Conversation: Sendable, Identifiable, Codable {
         self.promptTokens = promptTokens
         self.completionTokens = completionTokens
         self.isPinned = isPinned
+        self.contextSummary = contextSummary
     }
 
     public var isEmpty: Bool { turns.isEmpty }

@@ -12,6 +12,80 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.3.0
+
+### A turn now pays only for the tools it might use
+
+Until now every request carried the whole tool inventory — 19,591 characters of
+schema on this machine, charged every turn whether or not a tool was called. A
+**ToolPlanner** now decides what a turn carries:
+
+- A generic turn offers four recovery primitives — `skill`, `recall`,
+  `read_stored`, `remember` — **3,396 characters instead of 19,591**, an 83%
+  reduction, and names the rest so the model still knows what exists.
+- Intent summons groups: *browse*, *look up*, a URL, or the Browser surface
+  brings the browser tools; an attached file brings the file readers and never a
+  shell; naming a server or a tool brings that server's group.
+- Tools used in the previous two rounds get a sticky boost, so a conversation
+  that is using the browser keeps it without re-earning it.
+- Fail-open: if the model calls a tool that was held back, the group is expanded
+  and the round retried once — visibly, as a notice, not silently.
+- The cap is twelve descriptors however large the inventory, and the checks
+  prove it bites: with the cap removed, a 200-tool turn offered 204 tools and
+  three checks failed.
+
+On the spec's benchmark, a 200-tool inventory plans down to at most twelve
+descriptors — **≥94% of the schema block gone from any single turn**.
+
+### Optional schema compaction, measured before it is trusted
+
+A new compaction pass trims tool descriptions — long prose cut to 240 characters,
+titles dropped, descriptions that repeat the tool's name emptied — while leaving
+every constraint intact: required fields, enums, formats, defaults. Off by
+default, one toggle in Settings → General, per-server opt-out for a server whose
+schema depends on its prose.
+
+Measured on the real registry: **19,591 → 14,448 characters, 26.3% saved**,
+shown live by `--measure --compact` alongside the full figure.
+
+### Long conversations stop growing
+
+When the conversation passes 70% of its history budget, Bud summarises it — one
+internal round, into the fields that matter: user intent, decisions, artifacts
+and `store_` handles, open loops, durable tool facts with provenance. The summary
+replaces everything older than the newest six exchanges, attributed as **recorded
+conversation data, never as an instruction** — the trust rule is the feature: a
+summariser must not let fetched-page text acquire authority by being rewritten.
+Tool calls and their results are removed in whole pairs, so the provider never
+sees an orphan. The summary survives the archive, so a reopened chat does not
+re-summarise, and *Compact context* on the budget banner now does the same on
+demand.
+
+### Memories and skills stop growing linearly too
+
+The memory block and the skill catalogue are now bounded by **characters**, not
+by item count: what matters is promoted in full, the rest becomes one line each,
+and anything beyond the budget is *counted* — `More available: 28 memories; call
+recall to search.` Nothing becomes unreachable; it just stops being spelled out.
+Skill one-liners keep their trigger aliases, so a PDF skill still answers to
+"W-9".
+
+### Verification
+
+```
+--self-test      1010/1010  (+34: planner promises, compaction trust rules,
+                            catalogue budgets, compactor structure)
+--verify-ui       25/25     --verify-browser  39/39    --verify-live  135/135
+```
+
+The live suite still reaches the echo server without a retry — name-match intent
+working against a real provider round. Every load-bearing check was disabled and
+watched fail; two of my own checks turned out vacuous on first writing (a
+no-intent plan is small even without a cap) and were rewritten to test the thing
+the cap actually protects.
+
+---
+
 ## Bud 2.2.0
 
 ### The first slice of the roadmap

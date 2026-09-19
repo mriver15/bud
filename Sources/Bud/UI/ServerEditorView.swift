@@ -33,6 +33,8 @@ public struct ServerEditorView: View {
     @BudState private var headers: [HeaderRow]
     @BudState private var enabled: Bool
     @BudState private var autoStart: Bool
+    @BudState private var compactOptOut: Bool
+    @BudState private var hasTrimmableSchemas = false
     @BudState private var didConnect = false
     @BudState private var isConnecting = false
 
@@ -69,6 +71,7 @@ public struct ServerEditorView: View {
             .map { HeaderRow(key: $0.key, value: $0.value) })
         _enabled = BudState(initialValue: config?.enabled ?? true)
         _autoStart = BudState(initialValue: config?.autoStart ?? true)
+        _compactOptOut = BudState(initialValue: config?.compactOptOut ?? false)
     }
 
     public var body: some View {
@@ -86,6 +89,7 @@ public struct ServerEditorView: View {
                     identitySection
                     transportSection
                     behaviourSection
+                    advancedSection
                     if didConnect { connectionBanner }
                 }
                 .padding(Bud.Space.lg)
@@ -94,6 +98,8 @@ public struct ServerEditorView: View {
         }
         .frame(width: 560, height: 520)
         .background(.regularMaterial)
+        .onAppear { refreshTrimmableSchemas() }
+        .onChange(of: mcp?.statuses[id]?.state) { _, _ in refreshTrimmableSchemas() }
     }
 
     // MARK: - Sections
@@ -242,6 +248,51 @@ public struct ServerEditorView: View {
                 }
             }
         }
+    }
+
+    private var advancedSection: some View {
+        VStack(alignment: .leading, spacing: Bud.Space.sm) {
+            SectionHeader("Advanced", systemImage: "slider.horizontal.3")
+            GlassCard {
+                VStack(alignment: .leading, spacing: Bud.Space.sm) {
+                    Toggle("Keep full schema descriptions", isOn: $compactOptOut)
+                        .toggleStyle(.switch)
+                        .disabled(schemaOptOutDisabled)
+                    Text(schemaOptOutCaption)
+                        .font(Bud.Font.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+
+    /// Whether this server has any tool whose schema would change under
+    /// compaction — a description over 240 characters, a `title` key, or a
+    /// description that repeats the tool name. Recomputed by
+    /// `refreshTrimmableSchemas`, not on every render.
+    /// The opt-out is disabled only when the server is known to have nothing to
+    /// trim. An unknown surface — a new or not-yet-connected server — stays
+    /// enabled so the choice can be made in advance.
+    private var schemaOptOutDisabled: Bool {
+        let tools = mcp?.discoveredTools(id: id) ?? []
+        return !tools.isEmpty && !hasTrimmableSchemas
+    }
+
+    private var schemaOptOutCaption: String {
+        if schemaOptOutDisabled {
+            return "This server's schemas are already as short as the compactor would make them, so there is nothing to keep."
+        }
+        return "When “Compact tool schemas” is on in General, Bud trims descriptions over 240 characters "
+            + "and drops title keys. Ticking this keeps this server's descriptions at full length."
+    }
+
+    /// Recomputes whether this server has anything the compactor would trim.
+    /// Done on appear and when the connection state changes, not per keystroke:
+    /// walking every discovered schema on each keypress would be the one
+    /// expensive thing this form does.
+    private func refreshTrimmableSchemas() {
+        let tools = mcp?.discoveredTools(id: id) ?? []
+        hasTrimmableSchemas = tools.contains { DescriptorCompactor.compact($0) != $0 }
     }
 
     @ViewBuilder
@@ -536,6 +587,7 @@ public struct ServerEditorView: View {
                 autoStart: autoStart,
                 enabledTools: enabledTools,
                 delegated: delegated,
+                compactOptOut: compactOptOut,
                 registryName: registryName,
                 notes: notes
             )
@@ -553,6 +605,7 @@ public struct ServerEditorView: View {
                 autoStart: autoStart,
                 enabledTools: enabledTools,
                 delegated: delegated,
+                compactOptOut: compactOptOut,
                 registryName: registryName,
                 notes: notes
             )

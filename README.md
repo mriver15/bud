@@ -119,15 +119,20 @@ model emits a declarative UI spec instead of a wall of text: cards, metrics,
 tables, charts, progress, callouts, code, images and buttons. Buttons can carry
 a follow-up prompt, so a generated surface can drive the conversation.
 
-**What a request costs is measured, and bounded.** Every tool is charged on every
-request whether or not it is called, so `--measure` reports what the prefix carries
-— split per tool group (native, browser, generated-ui, memory, skills, subagents,
-and each connected MCP server), with a leaderboard of the heaviest individual
-tools, and `--self-test` fails if the built-in block grows past its ceiling. At
-80% of a conversation's token budget the panel warns — with *Start new chat*,
-*Compact context*, or *Raise budget* on the banner rather than in a settings page.
-Past 120,000 characters of conversation the oldest tool results are emptied from what the
-model is sent: the user keeps seeing them, and the model is told it can call again.
+**What a request costs is measured, and bounded.** A turn only carries the tools
+it might need — a generic turn offers four recovery primitives and names the rest;
+saying "use the acme server" or attaching a file summons that group, and anything
+held back is reachable on demand. So `--measure` reports the full inventory's cost,
+per tool group, with a leaderboard of the heaviest individual tools, and
+`--self-test` fails if the built-in block grows past its ceiling — while the
+planner decides what any given turn actually pays. On this machine's 26-tool
+registry a generic turn carries **3,396 characters of schema instead of 19,591**,
+and `--measure --compact` shows what optional schema compaction would trim on top
+(26% measured). At 80% of a conversation's token budget the panel warns — with
+*Start new chat*, *Compact context*, or *Raise budget* on the banner rather than
+in a settings page. Past 120,000 characters of conversation the oldest tool results
+are emptied from what the model is sent: the user keeps seeing them, and the model
+is told it can call again.
 
 **You can watch it think.** Reasoning models stream their thinking, and the
 transcript shows it while it arrives and folds it away when the answer lands.

@@ -353,6 +353,10 @@ public final class AppModel {
     public func send(_ text: String? = nil) async {
         let message = (text ?? composerText).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty, !runtime.isStreaming else { return }
+        // Consumed here rather than later so a refused send (over budget) does not
+        // leave the paths to attach themselves to the next, unrelated message.
+        let attachmentPaths = stagedAttachmentPaths
+        stagedAttachmentPaths = []
         // Refused here rather than inside the runtime so the reason is visible: a
         // turn that started and then declined to call the model would look like a
         // failure rather than a limit. The ceiling is on the conversation, so a
@@ -366,7 +370,13 @@ public final class AppModel {
         composerText = ""
         errorMessage = nil
         turnStarted()
-        runtime.send(message)
+        runtime.send(
+            message,
+            context: ToolPlanningContext(
+                surface: surface.rawValue,
+                attachmentPaths: attachmentPaths
+            )
+        )
         // The runtime runs the turn on its own task so the caller (a button, a
         // slash command, a generated-UI action) is never blocked by it.
     }
@@ -404,6 +414,11 @@ public final class AppModel {
     /// is indistinguishable from a drop that failed.
     public private(set) var attachments: [DroppedFile] = []
 
+    /// The paths staged for the turn in flight. The composer clears the chips
+    /// before the asynchronous send reads them, so the paths are captured at
+    /// clear time and handed to the runtime there.
+    private var stagedAttachmentPaths: [String] = []
+
     /// Stages dropped files and returns the lines to insert into the composer.
     public func stage(files: [DroppedFile]) -> String {
         for file in files where !attachments.contains(where: { $0.id == file.id }) {
@@ -428,6 +443,7 @@ public final class AppModel {
     }
 
     public func clearAttachments() {
+        stagedAttachmentPaths = attachments.map(\.path)
         attachments.removeAll()
     }
 
@@ -655,7 +671,8 @@ public final class AppModel {
             turns: turns,
             messages: runtime.modelHistory,
             promptTokens: spent.prompt,
-            completionTokens: spent.completion
+            completionTokens: spent.completion,
+            contextSummary: runtime.contextSummary
         ))
         refreshConversations()
     }

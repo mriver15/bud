@@ -260,6 +260,23 @@ public enum RequestMeasureCLI {
             return true
         }
 
+        if arguments.contains("--compact") {
+            // The same tools, each through the compactor — the block a request
+            // would carry with schema compaction switched on.
+            let compactTools = tools.map { DescriptorCompactor.compact($0) }
+            let compactCost = RequestMeasurer.measure(
+                config: config,
+                tools: compactTools,
+                notes: BudStore.lessonContext(),
+                liveContext: liveContextSample(config: config),
+                skills: SkillContext.catalogue(query: "").text
+            )
+            print(report(cost, mcp: mcp))
+            print(compactToolBlock(compactCost, full: cost))
+            await mcp.shutdown()
+            return true
+        }
+
         print(report(cost, mcp: mcp))
         await mcp.shutdown()
         return true
@@ -367,6 +384,50 @@ public enum RequestMeasureCLI {
         let ready = mcp.servers.filter { mcp.statuses[$0.id]?.state == .ready }.count
         out += "\n  \(ready)/\(mcp.servers.count) configured servers connected; "
         out += "\(cost.toolCount - cost.servers.reduce(0) { $0 + $1.count }) built-in tools.\n"
+        return out
+    }
+
+    /// The compacted tool block, printed only with `--compact`. It repeats the
+    /// tool sections of `report` — tools, groups, heaviest — computed from
+    /// schemas that have been through the compactor, then one line naming what
+    /// the switch is worth.
+    private static func compactToolBlock(_ compact: RequestCost, full: RequestCost) -> String {
+        func line(_ label: String, _ chars: Int, _ note: String = "") -> String {
+            let count = BudFormat.count(chars)
+            let padded = count.padding(toLength: max(count.count, 9), withPad: " ", startingAt: 0)
+            return "  \(label.padding(toLength: 18, withPad: " ", startingAt: 0))\(padded)   \(note)\n"
+        }
+
+        var out = "\nCompact tool block — every non-agent schema through the compactor\n\n"
+        out += line("tools", compact.toolChars, "\(compact.toolCount) tools")
+
+        if !compact.toolGroups.isEmpty {
+            out += "\nCompact tool groups\n"
+            for group in compact.toolGroups {
+                out += "  \(group.name.padding(toLength: 18, withPad: " ", startingAt: 0))"
+                out += "\(BudFormat.count(group.chars).padding(toLength: 9, withPad: " ", startingAt: 0))"
+                out += "  prose \(BudFormat.count(group.proseChars))"
+                out += " · ≈ \(BudFormat.count(group.estimatedTokens)) tokens"
+                out += " · \(group.count) tool\(group.count == 1 ? "" : "s")\n"
+            }
+        }
+
+        if !compact.heaviestTools.isEmpty {
+            out += "\nHeaviest tools (compact)\n"
+            for tool in compact.heaviestTools {
+                out += "  \(tool.name.padding(toLength: 40, withPad: " ", startingAt: 0))"
+                out += "\(BudFormat.count(tool.chars).padding(toLength: 9, withPad: " ", startingAt: 0))"
+                out += "  prose \(BudFormat.count(tool.descriptionChars))"
+                out += " · schema \(BudFormat.count(tool.schemaChars))\n"
+            }
+        }
+
+        let saved = full.toolChars - compact.toolChars
+        let percent = full.toolChars == 0 ? 0.0 : Double(saved) / Double(full.toolChars) * 100.0
+        out += "\n  full \(BudFormat.count(full.toolChars))"
+        out += " → compact \(BudFormat.count(compact.toolChars))"
+        out += " — \(String(format: "%.1f", percent))% saved\n"
+
         return out
     }
 }

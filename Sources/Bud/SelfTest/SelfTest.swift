@@ -104,6 +104,9 @@ public enum BudSelfTest {
             toolProvenance,
             budLinks,
             toolConfirmation,
+            toolPlanning,
+            descriptorCompaction,
+            historyCompaction,
             promptSelection,
             markerHandles,
             tokenBenchmark,
@@ -600,6 +603,17 @@ public enum BudSelfTest {
             previous = full.toolChars
         }
 
+        // Planned exposure: the planner's promise on the largest inventory.
+        let planned = ToolPlanner.plan(
+            context: ToolPlanningContext(query: "Use the mock tools to do the thing"),
+            descriptors: (0..<200).map { syntheticTool($0) }
+        )
+        let plannedCost = RequestMeasurer.measure(config: config, tools: planned.descriptors, notes: "", liveContext: "")
+        c.check("planning a 200-tool turn stays inside the cap (\(planned.descriptors.count) offered)",
+                planned.descriptors.count <= 12)
+        c.check("...and carries far less than exposing everything (\(plannedCost.toolChars) vs \(previous))",
+                plannedCost.toolChars < previous)
+
         // The fixed built-ins — the part that does not grow with what a user
         // installs. 16,834 characters today; the ceiling is headroom, not a
         // target, and raising it is a deliberate edit, not an accident.
@@ -681,6 +695,214 @@ public enum BudSelfTest {
 
         model.config.conversationTokenBudget = 0
         c.check("...and a budget of zero is no budget, so it never warns", !model.isNearBudget)
+
+        return c.report()
+    }
+
+    // MARK: Phase 1 — the token phase's contracts
+
+    /// The planner's promises: a recovery core always survives, the cap holds on
+    /// large inventories, intent promotes the right group and nothing else, and
+    /// every descriptor is either offered or accounted for.
+    static func toolPlanning() -> SelfTestReport {
+        let c = Checker(suite: "planner")
+
+        func tool(_ name: String, _ group: String) -> ToolDescriptor {
+            ToolDescriptor(
+                name: name,
+                description: "A tool for \(name).",
+                schema: .object(["type": .string("object")]),
+                providerID: group,
+                providerName: group
+            )
+        }
+
+        var inventory = ["skill", "recall", "read_stored", "remember",
+                         "read_file", "list_files", "run_shell", "write_file"].map { tool($0, "native") }
+        for i in 0..<200 { inventory.append(tool("mock_\(i)", "mockserver")) }
+        for i in 0..<13 { inventory.append(tool("browser_\(i)", "Browser")) }
+        for i in 0..<8 { inventory.append(tool("acme_\(i)", "acme")) }
+
+        let core = ["skill", "recall", "read_stored", "remember"]
+        let generic = ToolPlanner.plan(
+            context: ToolPlanningContext(query: "How are you today?"),
+            descriptors: inventory
+        )
+        c.check("a generic turn keeps the recovery core",
+                core.allSatisfy { name in generic.descriptors.contains { $0.name == name } })
+        c.check("...and stays inside the twelve-descriptor cap (\(generic.descriptors.count) offered)",
+                generic.descriptors.count <= 12)
+        c.check("...and says why the rest was held back",
+                generic.omitted.allSatisfy { !$0.why.isEmpty })
+        c.equal("...and accounts for every descriptor",
+                generic.descriptors.count + generic.omitted.count, inventory.count)
+
+        let browsing = ToolPlanner.plan(
+            context: ToolPlanningContext(query: "Look up what changed on the release notes page"),
+            descriptors: inventory
+        )
+        c.check("a browse intent offers the browser group",
+                browsing.descriptors.contains { $0.providerName == "Browser" })
+
+        let fileTask = ToolPlanner.plan(
+            context: ToolPlanningContext(query: "what is this?", attachmentPaths: ["/tmp/notes.txt"]),
+            descriptors: inventory
+        )
+        c.check("an attachment offers the file tools",
+                fileTask.descriptors.contains { $0.name == "read_file" })
+        c.check("...and never a shell or a write from attachment intent",
+                !fileTask.descriptors.contains { $0.name == "run_shell" || $0.name == "write_file" })
+
+        let named = ToolPlanner.plan(
+            context: ToolPlanningContext(query: "Use the acme server to look something up"),
+            descriptors: inventory
+        )
+        c.check("naming a server offers its group",
+                named.descriptors.contains { $0.providerID == "acme" })
+
+        // The cap only has a job to do when intent promotes a large group: a
+        // no-intent plan is small by nature, which is why this names the
+        // two-hundred-tool server rather than the eight-tool one.
+        let largeIntent = ToolPlanner.plan(
+            context: ToolPlanningContext(query: "Use the mockserver tools to do the thing"),
+            descriptors: inventory
+        )
+        c.check("naming the large server promotes it",
+                largeIntent.descriptors.contains { $0.providerID == "mockserver" })
+        c.check("...but the cap still holds (\(largeIntent.descriptors.count) offered)",
+                largeIntent.descriptors.count <= 12)
+
+        let expanded = ToolPlanner.expanded(for: generic, requestedTool: "acme_3", allDescriptors: inventory)
+        c.check("the fail-open step offers the group the model asked for",
+                expanded?.descriptors.contains { $0.providerID == "acme" } == true)
+        c.nilValue("...and an unknown name is refused rather than guessed",
+                   ToolPlanner.expanded(for: generic, requestedTool: "nonsense_tool", allDescriptors: inventory))
+
+        return c.report()
+    }
+
+    /// The compactor's promise: structure survives, prose shrinks.
+    static func descriptorCompaction() -> SelfTestReport {
+        let c = Checker(suite: "compactor")
+
+        let original = ToolDescriptor(
+            name: "long_tool",
+            description: "A description that starts usefully. " + String(repeating: "padding that explains at length ", count: 20),
+            schema: .object([
+                "type": .string("object"),
+                "title": .string("Redundant title"),
+                "properties": .object([
+                    "mode": .object([
+                        "type": .string("string"),
+                        "enum": .array([.string("fast"), .string("thorough")]),
+                        "format": .string("uuid"),
+                        "description": .string("One of fast or thorough."),
+                    ]),
+                    "repeats": .object([
+                        "type": .string("string"),
+                        "description": .string("A short field description."),
+                    ]),
+                ]),
+                "required": .array([.string("mode")]),
+            ]),
+            providerID: "native",
+            providerName: "Bud"
+        )
+        let compacted = DescriptorCompactor.compact(original)
+        let schema = compacted.schema
+
+        let selfNamed = ToolDescriptor(
+            name: "echo",
+            description: "echo",
+            schema: .object(["type": .string("object")]),
+            providerID: "native",
+            providerName: "Bud"
+        )
+        c.check("a tool whose description repeats its name is emptied",
+                DescriptorCompactor.compact(selfNamed).description.isEmpty)
+        c.equal("the wire name survives", compacted.name, "long_tool")
+        c.equal("the required field survives", schema["required"], .array([.string("mode")]))
+        c.check("the enum survives",
+                schema["properties"]?["mode"]?["enum"]?.arrayValue == [.string("fast"), .string("thorough")])
+        c.check("the format survives",
+                schema["properties"]?["mode"]?["format"] == .string("uuid"))
+        c.check("the title is dropped", schema["title"] == nil)
+        c.check("a short schema description is untouched",
+                schema["properties"]?["repeats"]?["description"]?.stringValue == "A short field description.")
+        c.check("a short description is untouched",
+                schema["properties"]?["mode"]?["description"]?.stringValue == "One of fast or thorough.")
+        c.check("a long description is truncated",
+                (schema["properties"]?["repeats"]?["description"]?.stringValue ?? "").isEmpty
+                    || schema["properties"]?["repeats"]?["description"]?.stringValue?.count ?? 0 <= 241)
+        c.check("the descriptor-level long description is truncated too",
+                compacted.description.count <= 241 && compacted.description.hasSuffix("…"))
+        c.check("compaction is deterministic",
+                DescriptorCompactor.compact(original) == compacted)
+
+        // The setting round-trips, so an opt-in survives a save and a load.
+        var configured = BudConfig()
+        configured.compactSchemas = true
+        if let data = try? JSONEncoder().encode(BudConfigLoader.StoredConfig(from: configured)),
+           let decoded = try? JSONDecoder().decode(BudConfigLoader.StoredConfig.self, from: data) {
+            c.check("turning compaction on survives a save and a load",
+                    BudConfigLoader.apply(decoded, to: BudConfig()).compactSchemas)
+        } else {
+            c.check("the compaction setting round-trips", false)
+        }
+
+        return c.report()
+    }
+
+    /// The compactor's promise: the old span becomes one recorded-data message,
+    /// the newest exchanges survive verbatim, and no tool result is orphaned.
+    static func historyCompaction() -> SelfTestReport {
+        let c = Checker(suite: "compaction")
+
+        func user(_ text: String) -> ChatMessage { ChatMessage(role: .user, content: text) }
+        func assistant(_ text: String) -> ChatMessage { ChatMessage(role: .assistant, content: text) }
+        func call(_ id: String) -> ChatMessage {
+            ChatMessage(role: .assistant, toolCalls: [ToolCall(id: id, name: "t", arguments: "{}")])
+        }
+        func result(_ id: String) -> ChatMessage {
+            ChatMessage(role: .tool, content: "x", toolCallID: id, name: "t")
+        }
+
+        let under = [user("hi"), assistant("hello")]
+        c.equal("under the watermark nothing is touched",
+                HistoryCompactor.compact(under, summary: "nothing").map(\.content),
+                under.map(\.content))
+
+        let long = [
+            user("fix the build"), assistant("on it"), call("a"), result("a"),
+            user("also the docs"), assistant("done"), call("b"), result("b"),
+            user("thanks"),
+        ]
+        let compacted = HistoryCompactor.compact(long, summary: "Wanted the build fixed; decided docs too.", keep: 4)
+        c.check("the old span becomes one recorded-data message",
+                compacted.first?.content.hasPrefix(HistoryCompactor.summaryPrefix) == true)
+        c.check("...attributed as conversation data, not instruction",
+                compacted.first?.role == .user)
+        c.check("...and the newest exchanges survive verbatim",
+                Array(compacted.dropFirst()) == Array(long.suffix(4)))
+        for (index, message) in compacted.enumerated() where message.role == .tool {
+            let orphaned = index == 0 || !compacted[index - 1].toolCalls.contains { $0.id == message.toolCallID }
+            c.check("no tool result is orphaned (at \(index))", !orphaned)
+        }
+
+        c.check("the watermark trips just over 70%",
+                HistoryCompactor.crossesWatermark(characterCount: 7_001, budget: 10_000))
+        c.check("...and not at or below it",
+                !HistoryCompactor.crossesWatermark(characterCount: 7_000, budget: 10_000))
+
+        // The summary survives the archive, so a reopened chat does not re-summarise.
+        var conversation = Conversation(turns: [Turn(role: .user, segments: [])])
+        conversation.contextSummary = "Wanted the build fixed."
+        if let data = try? JSONEncoder().encode(conversation),
+           let reopened = try? JSONDecoder().decode(Conversation.self, from: data) {
+            c.equal("the summary survives a save and a reopen", reopened.contextSummary, "Wanted the build fixed.")
+        } else {
+            c.check("the summary round-trips the archive", false)
+        }
 
         return c.report()
     }
@@ -3079,10 +3301,25 @@ public enum BudSelfTest {
                 + "(worst: \(BudFormat.count(worst.text.count)))",
             worst.text.count <= catalogueCap
         )
-        // And it is bounded because the lines are, not because skills went missing.
+        // Bounded by a character budget, not by dropping skills silently: the
+        // promoted ones carry the day, the rest become one-liners, and anything
+        // beyond the budget is *counted* in a disclosure line — nothing goes
+        // missing, it just stops being spelled out.
         let listed = deepest.filter { worst.text.contains("- \($0.name):") }
-        c.equal("...with every one of them still listed", listed.count, deepest.count)
         c.check("...and something promoted", !worst.promoted.isEmpty)
+        c.check("the promoted skill is listed", worst.promoted.allSatisfy { promoted in
+            deepest.contains { $0.name == promoted && worst.text.contains("- \($0.name):") }
+                || worst.text.contains(promoted)
+        })
+        if worst.text.contains("More available:") {
+            let disclosure = worst.text.split(separator: "\n").first { $0.contains("More available:") } ?? ""
+            let unlisted = Int(String(disclosure.filter(\.isNumber))) ?? -1
+            c.equal("...and what is not listed is counted, not lost",
+                    listed.count + unlisted, deepest.count)
+        } else {
+            c.equal("...and with room to spare every skill is still listed",
+                    listed.count, deepest.count)
+        }
 
         // Every tool has to be choosable. A tool whose description is empty is one
         // the model cannot tell from its neighbour, and it is charged regardless.
@@ -4842,7 +5079,7 @@ public enum BudSelfTest {
                     + "\(BudStore.lessonContextLimit) notes)",
                 noteLines(crowded).count <= BudStore.lessonContextLimit)
         c.check("...and says how much it left out",
-                crowded.contains("more notes are not listed here"))
+                crowded.contains("More available:"))
         c.check("...and what it left out is never the person",
                 crowded.contains("no restating of the question just asked"))
 

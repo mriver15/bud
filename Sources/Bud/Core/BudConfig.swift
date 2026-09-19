@@ -109,6 +109,15 @@ public struct BudConfig: Sendable, Codable, Hashable {
     /// the model to notice that the instruction came from somewhere else. Turning
     /// it off is a decision somebody makes in Settings, not one they inherit.
     public var confirmDangerousTools: Bool
+    /// Whether tool schemas are compacted before they reach the model.
+    ///
+    /// A tool block is mostly prose: descriptions and `title` keys that a model
+    /// reading a schema for the first time does not need at full length. The
+    /// compactor trims descriptions over 240 characters and drops `title` keys,
+    /// which can shrink the per-request cost by a third for a bulky server. It is
+    /// off by default because a server may write its argument contract in its
+    /// descriptions — a server that does can opt out per server.
+    public var compactSchemas: Bool
     /// How much of the conversation the model is sent, in characters.
     ///
     /// History grew without limit: a tool result is capped at 24,000 characters
@@ -226,6 +235,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         maxToolRounds: Int = 24,
         allowParallelSubagents: Int = 6,
         confirmDangerousTools: Bool = true,
+        compactSchemas: Bool = false,
         historyBudgetChars: Int = 120_000,
         updateRepo: String = BudConfig.defaultUpdateRepo,
         updateFeedURL: String = "",
@@ -248,6 +258,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         self.maxToolRounds = maxToolRounds
         self.allowParallelSubagents = allowParallelSubagents
         self.confirmDangerousTools = confirmDangerousTools
+        self.compactSchemas = compactSchemas
         self.historyBudgetChars = historyBudgetChars
         self.updateRepo = updateRepo
         self.updateFeedURL = updateFeedURL
@@ -521,6 +532,7 @@ public enum BudConfigLoader {
         if let v = stored.maxToolRounds { config.maxToolRounds = v }
         if let v = stored.allowParallelSubagents { config.allowParallelSubagents = v }
         if let v = stored.confirmDangerousTools { config.confirmDangerousTools = v }
+        if let v = stored.compactSchemas { config.compactSchemas = v }
         if let v = stored.historyBudgetChars { config.historyBudgetChars = v }
         return config
     }
@@ -718,6 +730,7 @@ public enum BudConfigLoader {
         public var maxToolRounds: Int?
         public var allowParallelSubagents: Int?
         public var confirmDangerousTools: Bool?
+        public var compactSchemas: Bool?
         public var historyBudgetChars: Int?
 
         /// The single-provider shape Bud used before it supported more than
@@ -757,6 +770,10 @@ public enum BudConfigLoader {
             self.maxToolRounds = config.maxToolRounds
             self.allowParallelSubagents = config.allowParallelSubagents
             self.confirmDangerousTools = config.confirmDangerousTools
+            // Left out when off rather than written as `false`: the default is
+            // the common case, and a config file should not grow a key for every
+            // install that never turned it on.
+            self.compactSchemas = config.compactSchemas ? true : nil
             self.historyBudgetChars = config.historyBudgetChars
         }
 
@@ -782,6 +799,7 @@ public enum BudConfigLoader {
             maxToolRounds: Int? = nil,
             allowParallelSubagents: Int? = nil,
             confirmDangerousTools: Bool? = nil,
+            compactSchemas: Bool? = nil,
             apiKey: String? = nil,
             baseURL: String? = nil
         ) {
@@ -805,6 +823,7 @@ public enum BudConfigLoader {
             self.maxToolRounds = maxToolRounds
             self.allowParallelSubagents = allowParallelSubagents
             self.confirmDangerousTools = confirmDangerousTools
+            self.compactSchemas = compactSchemas
             self.apiKey = apiKey
             self.baseURL = baseURL
         }

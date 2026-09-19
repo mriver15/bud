@@ -736,6 +736,16 @@ private struct GeneralSettingsTab: View {
                     .font(Bud.Font.caption)
                     .foregroundStyle(model.config.confirmDangerousTools ? .tertiary : .secondary)
                     Divider().opacity(0.2)
+                    Toggle("Compact tool schemas", isOn: compactSchemasBinding)
+                        .toggleStyle(.switch)
+                    Text(
+                        "Trims tool descriptions over 240 characters and drops title keys, keeping each "
+                            + "schema's types, bounds and required fields. Servers that need their full "
+                            + "descriptions can opt out in MCP settings."
+                    )
+                    .font(Bud.Font.caption)
+                    .foregroundStyle(.tertiary)
+                    Divider().opacity(0.2)
                     Stepper(value: subagentConcurrencyBinding, in: 1...32) {
                         limitRow("Subagents in parallel", "\(model.config.allowParallelSubagents)")
                     }
@@ -836,6 +846,16 @@ private struct GeneralSettingsTab: View {
             get: { model.config.confirmDangerousTools },
             set: { newValue in
                 model.config.confirmDangerousTools = newValue
+                model.persistConfig()
+            }
+        )
+    }
+
+    private var compactSchemasBinding: Binding<Bool> {
+        Binding(
+            get: { model.config.compactSchemas },
+            set: { newValue in
+                model.config.compactSchemas = newValue
                 model.persistConfig()
             }
         )

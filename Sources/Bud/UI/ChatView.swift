@@ -93,7 +93,11 @@ public struct ChatView: View {
                     spent: model.conversationTokens,
                     budget: budget,
                     onNewChat: { startNewChat() },
-                    onCompact: { compactSummary = model.runtime.compactConversationNow() },
+                    onCompact: {
+                        Task {
+                            compactSummary = await model.runtime.compactConversationNow()
+                        }
+                    },
                     onRaiseBudget: { model.openSettings(tab: .general) }
                 )
                 .padding(.horizontal, Bud.Space.md)

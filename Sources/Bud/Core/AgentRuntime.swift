@@ -27,6 +27,21 @@ public final class AgentRuntime {
     private var renderedSkills = ""
     private var promotedSkills: [String] = []
 
+    /// What the panel told the next send: the surface it was on and the files it
+    /// had staged. Read at request-build time, when the planner is assembled.
+    private var sendSurface: String?
+    private var sendAttachments: [String] = []
+
+    /// The data-attributed summary this conversation's older half was folded
+    /// into, plus how many messages the history held when it was written. The
+    /// count is what makes "the last compaction is current" checkable: a summary
+    /// is current only while no message has been added since it was written.
+    public private(set) var contextSummary: String?
+    private var summaryAtMessageCount: Int?
+    /// Set at request-build time when the history crossed the watermark and the
+    /// last summary is stale; the actual summarisation runs after the turn.
+    private var summarisationOwed = false
+
     /// What was last asked. The catalogue is ranked against the current request,
     /// and the newest user message is the whole of what "current" means here.
     private func latestUserMessage() -> String {
@@ -62,18 +77,14 @@ public final class AgentRuntime {
     /// to is a limit nobody can set.
     public var historyCharacterCount: Int { history.reduce(0) { $0 + $1.content.count } }
 
-    /// Applies the budget to the conversation in place, now, and says what it freed.
+    /// Folds the conversation's older half into a model-written summary, now.
     ///
-    /// The bounder normally runs when the next request is built; this forces it
-    /// early so a user watching the conversation grow can reclaim the space without
-    /// waiting for another turn. `turns` and the transcript are untouched — the
-    /// model sees the markers, the user still sees everything. Returns the number
-    /// of characters freed as a sentence, zero when nothing was dropped.
-    public func compactConversationNow() -> String {
-        let bounded = Self.bounded(history, budget: env.config.historyBudgetChars)
-        history = bounded.messages
-        droppedFromHistory = bounded.dropped
-        return "dropped \(BudFormat.count(bounded.dropped)) characters of old tool results"
+    /// The manual form of the same flow the runtime runs on its own when a
+    /// request crosses the watermark. Returns what it did as a sentence — the
+    /// no-op message when the conversation is under the watermark and there is
+    /// nothing to summarise. `turns` and the transcript are untouched.
+    public func compactConversationNow() async -> String {
+        await compactHistory()
     }
 
     private var runTask: Task<Void, Never>?
@@ -132,6 +143,8 @@ public final class AgentRuntime {
         statusText = ""
         lastRoundCount = 0
         isStreaming = false
+        summarisationOwed = false
+        reestablishSummaryState()
     }
 
     // MARK: - Public control
@@ -143,6 +156,9 @@ public final class AgentRuntime {
         history.removeAll()
         lastError = nil
         statusText = ""
+        contextSummary = nil
+        summaryAtMessageCount = nil
+        summarisationOwed = false
     }
 
     public func stop() {
@@ -159,9 +175,16 @@ public final class AgentRuntime {
     }
 
     /// Appends a user message and runs the turn to completion.
-    public func send(_ text: String) {
+    ///
+    /// `context` carries what only the panel knows — the surface and the staged
+    /// attachments. The rest of the planning context (query, recent tools,
+    /// connected servers) is derived from the runtime's own state at request time.
+    public func send(_ text: String, context: ToolPlanningContext = ToolPlanningContext()) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isStreaming else { return }
+
+        sendSurface = context.surface
+        sendAttachments = context.attachmentPaths
 
         checkpoints.append(
             Checkpoint(turns: turns, history: history, prompt: trimmed, turnCount: turns.count)
@@ -229,6 +252,192 @@ public final class AgentRuntime {
         lastError = nil
         statusText = ""
         lastRoundCount = 0
+        summarisationOwed = false
+        reestablishSummaryState()
+    }
+
+    // MARK: - Planning
+
+    /// The plan for one round, plus the pieces the loop needs to fail open.
+    private struct RoundPlan {
+        let plan: ToolPlan
+        let tools: [ToolDescriptor]
+        let names: Set<String>
+        let allDescriptors: [ToolDescriptor]
+        let optOutServers: Set<String>
+    }
+
+    /// What the MCP provider knows about the servers behind it.
+    private struct ServerInfo {
+        let connected: [String]
+        let optOut: Set<String>
+    }
+
+    /// Assembles the planner context and asks the planner which tools to offer.
+    ///
+    /// Descriptors are fetched here, filtered after the await rather than before,
+    /// and that ordering is the whole safety argument for the `agentOnly` filter:
+    /// building the list is what asks the subagent provider for its descriptors,
+    /// which is where the agent roster is rebuilt. A tool hidden here therefore
+    /// always has an agent that can still reach it — where filtering first would
+    /// have a window in which a delegated server's tools were unreachable by
+    /// anything at all.
+    private func makePlan() async -> RoundPlan {
+        let all = await env.registry.descriptors()
+        let offered = all.filter { !$0.agentOnly }
+        let servers = await connectedServerInfo()
+
+        var context = ToolPlanningContext()
+        context.query = latestUserMessage()
+        context.surface = sendSurface
+        context.attachmentPaths = sendAttachments
+        context.recentToolNames = recentToolNames()
+        context.connectedServers = servers.connected
+
+        let plan = ToolPlanner.plan(context: context, descriptors: offered)
+        return RoundPlan(
+            plan: plan,
+            tools: applySchemaCompaction(plan.descriptors, optOutServers: servers.optOut),
+            names: Set(plan.descriptors.map(\.name)),
+            allDescriptors: offered,
+            optOutServers: servers.optOut
+        )
+    }
+
+    /// The connected MCP servers the registry's provider knows about: their names
+    /// (for name-matching) and the set that opted out of schema compaction.
+    private func connectedServerInfo() async -> ServerInfo {
+        guard let mcp = await env.registry.provider(for: "mcp") as? MCPManager else {
+            return ServerInfo(connected: [], optOut: [])
+        }
+        let readyIDs = Set(mcp.statuses.filter { $0.value.state == .ready }.keys)
+        let connected = mcp.servers.filter { readyIDs.contains($0.id) }.map(\.name)
+        let optOut = Set(mcp.servers.filter(\.compactOptOut).map(\.name))
+        return ServerInfo(connected: connected, optOut: optOut)
+    }
+
+    /// Schema compaction, off by default and overridable per server: trims a
+    /// descriptor's prose unless its server asked to keep it full.
+    private func applySchemaCompaction(
+        _ descriptors: [ToolDescriptor],
+        optOutServers: Set<String>
+    ) -> [ToolDescriptor] {
+        guard env.config.compactSchemas else { return descriptors }
+        return descriptors.map { descriptor in
+            optOutServers.contains(descriptor.providerName) ? descriptor : DescriptorCompactor.compact(descriptor)
+        }
+    }
+
+    /// The tool names the model used in the previous two tool rounds, which is
+    /// the best guess at what it is about to use again.
+    private func recentToolNames() -> [String] {
+        var names: [String] = []
+        let rounds = history.reversed().filter { !$0.toolCalls.isEmpty }
+        for message in rounds.prefix(2) {
+            names.append(contentsOf: message.toolCalls.map(\.name))
+        }
+        return names
+    }
+
+    // MARK: - Semantic compaction
+
+    /// Whether the summary on record still covers the current history: it is
+    /// current only while no message has been added since it was written.
+    private var summaryIsCurrent: Bool {
+        contextSummary != nil && summaryAtMessageCount == history.count
+    }
+
+    /// Marks a summarisation as owed, checked at request-build time.
+    private func markSummarisationIfNeeded() {
+        guard HistoryCompactor.crossesWatermark(
+            characterCount: historyCharacterCount,
+            budget: env.config.historyBudgetChars
+        ), !summaryIsCurrent else { return }
+        summarisationOwed = true
+    }
+
+    private func summariseIfOwed() async {
+        guard summarisationOwed else { return }
+        summarisationOwed = false
+        _ = await compactHistory()
+    }
+
+    /// The shared flow behind both the automatic and the manual compact: ask the
+    /// model for a summary, then fold the older half of the history into it.
+    private func compactHistory() async -> String {
+        guard HistoryCompactor.crossesWatermark(
+            characterCount: historyCharacterCount,
+            budget: env.config.historyBudgetChars
+        ) else {
+            return "Context is under the compaction watermark; nothing to summarise."
+        }
+        // Nothing older than the newest few messages means nothing to replace: a
+        // summary would only add characters to a history that already fits.
+        guard history.count > HistoryCompactor.keptMessages else {
+            return "Context is under the compaction watermark; nothing to summarise."
+        }
+        statusText = "Compacting context…"
+        guard let summary = await askForSummary() else {
+            statusText = ""
+            return "Compaction was not completed — the summarisation request failed."
+        }
+        let before = historyCharacterCount
+        history = HistoryCompactor.compact(history, summary: summary)
+        contextSummary = HistoryCompactor.summaryMessage(summary).content
+        summaryAtMessageCount = history.count
+        summarisationOwed = false
+        statusText = ""
+        return "compacted \(BudFormat.count(before - historyCharacterCount)) characters "
+            + "of conversation into a summary"
+    }
+
+    /// One internal summarisation request, through the same provider path with no
+    /// tools offered. Returns the model's summary, or nil when it failed or came
+    /// back empty.
+    private func askForSummary() async -> String? {
+        let config = env.config
+        var messages = [systemMessage()] + boundedHistory()
+        messages.append(ChatMessage(role: .user, content: HistoryCompactor.summarisePrompt))
+        let request = ChatRequest(
+            model: config.model,
+            messages: messages,
+            tools: [],
+            temperature: nil,
+            maxTokens: nil,
+            reasoningEffort: nil
+        )
+        var text = ""
+        do {
+            for try await event in env.makeBackend().stream(request) {
+                if Task.isCancelled { return nil }
+                switch event {
+                case .contentDelta(let delta):
+                    text += delta
+                case .usage(let prompt, let completion, _):
+                    env.recordUsage(prompt: prompt, completion: completion)
+                default:
+                    break
+                }
+            }
+        } catch {
+            return nil
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Re-derives the summary state from the head of the history, so a restored or
+    /// rewound conversation lands with the right notion of what is already
+    /// summarised.
+    private func reestablishSummaryState() {
+        if let first = history.first, first.role == .user,
+           first.content.hasPrefix(HistoryCompactor.summaryPrefix) {
+            contextSummary = first.content
+            summaryAtMessageCount = history.count
+        } else {
+            contextSummary = nil
+            summaryAtMessageCount = nil
+        }
     }
 
     // MARK: - The loop
@@ -240,8 +449,15 @@ public final class AgentRuntime {
             onTurnFinished?()
         }
 
+        await runRounds(limit: max(1, config.maxToolRounds))
+        // The turn has settled; a request that crossed the watermark marked a
+        // summarisation as owed, and this is where it is paid.
+        await summariseIfOwed()
+    }
+
+    private func runRounds(limit: Int) async {
         var round = 0
-        while round < max(1, config.maxToolRounds) {
+        while round < limit {
             round += 1
             lastRoundCount = round
             statusText = round == 1 ? "Thinking…" : "Round \(round)…"
@@ -251,7 +467,29 @@ public final class AgentRuntime {
             let turnIndex = turns.count - 1
             let turnStarted = Date()
 
-            let outcome = await streamRound(into: &assistant, turnIndex: turnIndex)
+            let plan = await makePlan()
+            var outcome = await streamRound(into: &assistant, turnIndex: turnIndex, plan: plan)
+
+            // Fail-open: the model called a tool the planner held back. Expand its
+            // group once and retry the round, telling the transcript it happened.
+            if case .toolCalls(let calls) = outcome,
+               let missing = calls.first(where: { !plan.names.contains($0.name) }),
+               let expandedPlan = ToolPlanner.expanded(
+                   for: plan.plan, requestedTool: missing.name, allDescriptors: plan.allDescriptors
+               ) {
+                let expanded = RoundPlan(
+                    plan: expandedPlan,
+                    tools: applySchemaCompaction(expandedPlan.descriptors, optOutServers: plan.optOutServers),
+                    names: Set(expandedPlan.descriptors.map(\.name)),
+                    allDescriptors: plan.allDescriptors,
+                    optOutServers: plan.optOutServers
+                )
+                assistant.segments.append(
+                    .notice(id: UUID().uuidString, text: expandedPlan.reason, kind: .info)
+                )
+                turns[turnIndex] = assistant
+                outcome = await streamRound(into: &assistant, turnIndex: turnIndex, plan: expanded)
+            }
 
             switch outcome {
             case .failed(let message):
@@ -346,22 +584,18 @@ public final class AgentRuntime {
         case cancelled
     }
 
-    private func streamRound(into turn: inout Turn, turnIndex: Int) async -> RoundOutcome {
+    private func streamRound(into turn: inout Turn, turnIndex: Int, plan: RoundPlan) async -> RoundOutcome {
         let config = env.config
         let roundStart = Date()
-        // Everything except what an agent holds.
-        //
-        // Filtered after the await rather than before, and that ordering is the
-        // whole safety argument for this feature: building the list is what asks
-        // the subagent provider for its descriptors, which is where the agent
-        // roster is rebuilt. A tool hidden here therefore always has an agent that
-        // can still reach it — where filtering first would have a window in which
-        // a delegated server's tools were unreachable by anything at all.
-        let tools = await env.registry.descriptors().filter { !$0.agentOnly }
+        // Request-build is the one moment the whole history is in front of us, so
+        // this is where the compaction watermark is checked.
+        markSummarisationIfNeeded()
+
+        let note = ToolPlanner.omittedNote(plan.plan.omitted)
         let request = ChatRequest(
             model: config.model,
-            messages: [systemMessage()] + boundedHistory(),
-            tools: tools,
+            messages: [systemMessage(omittedNote: note)] + boundedHistory(),
+            tools: plan.tools,
             temperature: config.temperature,
             maxTokens: config.maxTokens,
             reasoningEffort: config.reasoningEffort
@@ -624,7 +858,7 @@ public final class AgentRuntime {
         return FileManager.default.fileExists(atPath: StoredResults.url(for: token).path) ? token : nil
     }
 
-    private func systemMessage() -> ChatMessage {
+    private func systemMessage(omittedNote: String? = nil) -> ChatMessage {
         let config = env.config
         var text = config.systemPrompt
         text += "\nDefault model for this session: \(config.model)."
@@ -661,6 +895,12 @@ public final class AgentRuntime {
             renderedSkills = catalogue.text
         }
         if !renderedSkills.isEmpty { text += "\n\n" + renderedSkills }
+
+        // What the planner held back this turn, so the model knows the rest
+        // exists and can summon it by name rather than assuming it was never there.
+        if let omittedNote, !omittedNote.isEmpty {
+            text += "\n\n" + omittedNote
+        }
 
         // The one line that changes every minute rides last. Providers cache the
         // front of the prompt, so keeping the volatile clock at the end means a
