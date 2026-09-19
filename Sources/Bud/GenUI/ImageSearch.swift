@@ -223,9 +223,21 @@ public enum ImageSearch {
             // megabytes to draw a 96-point tile, and the original is not better.
             guard let source = info["thumburl"]?.stringValue ?? info["url"]?.stringValue else { return nil }
             let name = file.replacingOccurrences(of: "File:", with: "")
-            // SVG is left out: it is not something every image loader will decode,
-            // and a tile that silently fails is worse than the next result.
-            guard Self.isRaster(source) else { return nil }
+            // Screened on the **source file**, not on the address it was served
+            // from. Asked for a "Lucario Voice Line.ogg", Commons offers the
+            // picture it draws for an audio file — `fileicon-ogg.png` — which is a
+            // raster image at a `.png` address and sailed through a check made on
+            // the URL. The file is what it is; the address is a delivery detail.
+            guard Self.isImageFile(name), Self.isRaster(source) else { return nil }
+            // At least one word of the query has to be in the file's own name.
+            //
+            // Commons matches page *text*, so an uncommon name returns whatever
+            // happens to mention it. Asked for "Annihilape" it answered with three
+            // photographs of Mankey, including a 1948 baseball player named Tom
+            // Mankey and a Second World War enlistment record — none of them named
+            // Annihilape, all of them describing one. A match on the name is a
+            // match; a match on the prose is a guess.
+            guard Self.nameMentions(name, query) else { return nil }
             return FoundImage(
                 query: query,
                 url: tidy(source),
@@ -240,6 +252,34 @@ public enum ImageSearch {
     static func isRaster(_ url: String) -> Bool {
         let lowered = url.lowercased()
         return [".jpg", ".jpeg", ".png", ".gif", ".webp"].contains { lowered.contains($0) }
+    }
+
+    /// Whether the file itself is a picture.
+    ///
+    /// Separate from `isRaster`, which reads the address. A file called `.ogg` is
+    /// not an image however it is served, and Commons serves one the picture it
+    /// keeps for audio — which is how an audio file's icon arrived as a candidate
+    /// picture for a creature.
+    static func isImageFile(_ name: String) -> Bool {
+        let lowered = name.lowercased()
+        return [".jpg", ".jpeg", ".png", ".gif", ".webp"].contains { lowered.hasSuffix($0) }
+    }
+
+    /// Whether the file's own name contains a word from the query.
+    ///
+    /// The query's words minus the ones too short or too common to mean anything:
+    /// "red panda" is matched by `red` or `panda`, and "sunset over mountains" by
+    /// any of its three.
+    static func nameMentions(_ name: String, _ query: String) -> Bool {
+        let ignored: Set<String> = ["the", "and", "for", "with", "from", "over", "under", "of", "a", "an"]
+        let words = query
+            .lowercased()
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+            .filter { $0.count > 2 && !ignored.contains($0) }
+        guard !words.isEmpty else { return true }
+        let haystack = name.lowercased()
+        return words.contains { haystack.contains($0) }
     }
 
     /// Wikimedia appends campaign parameters to its own image URLs. They are
