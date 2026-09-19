@@ -278,7 +278,11 @@ public enum BudBrowserVerification {
             cancelledCleanly = true
         }
         c.check("cancel: a cancelled load throws rather than hangs", cancelledCleanly)
-        c.check("cancel: ...and the engine is no longer loading", !engine.webView.isLoading)
+        // WebKit's isLoading flag lags the navigation callback by a beat, so the
+        // settle is waited for rather than raced — the property is that the stop
+        // lands, not that it lands before the next line executes.
+        let settled = await Self.waitUntil(timeout: 5) { !engine.webView.isLoading }
+        c.check("cancel: ...and the engine is no longer loading", settled)
 
         // The engine must still be usable afterwards: a second load succeeds.
         do {
