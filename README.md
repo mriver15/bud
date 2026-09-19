@@ -7,6 +7,8 @@ draw its own interface when prose is the wrong shape.
 
 Built for macOS 26 with Swift 6 strict concurrency. No third-party packages.
 
+![Bud's panel in its new-chat state: a floating glass window with a sparkle-marked header, Chat / Agents / Browser / History tabs, a body offering four example questions, and a composer showing the active model, reasoning effort and tool count](docs/panel.png)
+
 ---
 
 ## Contents
