@@ -12,6 +12,48 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 1.5.0
+
+### Two subagents, one agent
+
+The question was whether a wide question can be split across two runs of the *same*
+agent — two `getcompetitive` subagents, each asking it about half of a team. It
+can, and it always could: nothing in the scheduler refuses a repeated name, and a
+call carries as many tasks as it likes.
+
+What refused it was a sentence in the tool description:
+
+> *"...and make sure no two of them are doing the same thing."*
+
+That was meant as "do not hand two tasks the same job". With one agent per server
+it reads as "do not use this agent twice", so the option was never offered. The
+wording now says the opposite, with the reason:
+
+> Several tasks may name the same agent, and often should. An agent is a way of
+> working, not a thing that can only run once: two tasks both naming a server
+> agent, each asking it about a different half of the question, run at the same
+> time and come back separately. Split a wide question that way — three creatures
+> to one task and three to another, rather than one task listing all six — and it
+> is answered as quickly as a narrow one. What to avoid is two tasks given the
+> same job, not two tasks given the same agent.
+
+Proven against a real MCP server, with tools: two tasks naming the same agent,
+both finishing, both calling the agent's own tool, each answering its own half,
+and **beginning together rather than in sequence**.
+
+### And the measurement was hiding part of it
+
+`--measure` built the delegation description from an **empty** agent registry, so
+it reported a description nobody is ever sent — without the roster of what can be
+delegated to, and without the guidance above. It said `spawn_subagents` cost 994
+characters; it costs **2,350** on a machine with one server connected.
+
+The figure grows with every skill installed and every server connected, so a
+measurement that leaves it out is worst exactly where the cost is largest. It now
+builds the roster the app would.
+
+---
+
 ## Bud 1.4.0
 
 ### Images and grids, checked rather than assumed
