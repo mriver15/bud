@@ -12,6 +12,20 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.7.1
+
+### A check that raced, fixed
+
+`--verify-browser`'s cancellation check asserted that the engine had stopped
+loading the instant the cancellation returned. WebKit's `isLoading` flag lags
+the navigation callback by a beat, so the check raced — CI caught it on a
+faster runner and the check now waits, bounded, for the settle. The property is
+that the stop lands, not that it lands before the next line runs.
+
+Test-only. The app is unchanged from 2.7.0.
+
+---
+
 ## Bud 2.7.0
 
 ### The last phase: polish
