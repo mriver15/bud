@@ -9,14 +9,18 @@ import Foundation
 ///   2. `~/.omp/agent/config.yml`       (the user's existing oh-my-pi setup)
 ///   3. built-in defaults
 ///
-/// The API key comes from `~/.bud/config.json`, then the Keychain, then
-/// `DEEPSEEK_API_KEY` in the environment, then `~/.zshrc`. The shell fallback
-/// matters because a GUI launch from Finder inherits no shell environment.
+/// The API key comes from `~/.bud/config.json`, then the variable the provider
+/// names in the process environment, then that same variable as set in
+/// `~/.zshrc`, `~/.zprofile`, `~/.bash_profile` or `~/.profile` — see
+/// `resolveKey(named:)`. The profile search is what a GUI launch from Finder
+/// depends on, since it inherits no shell environment. There is no Keychain
+/// lookup, and none is planned here: a reader who trusts a comment saying a
+/// credential is in the Keychain will not think to look for it in `~/.bud`.
 ///
-/// The Glama marketplace key follows the same shape, minus the Keychain: the
-/// stored config, then `GLAMA_API_KEY` in the environment, then the same profile
-/// search. Skipping the profile search would strand a key that is already
-/// exported in `~/.zshrc`, which is where keys usually live.
+/// The Glama marketplace key follows the same shape: the stored config, then
+/// `GLAMA_API_KEY` in the environment, then the same profile search. Skipping
+/// the profile search would strand a key that is already exported in `~/.zshrc`,
+/// which is where keys usually live.
 /// How much of the model's thinking is shown in the transcript.
 public enum ReasoningVisibility: String, Sendable, Codable, CaseIterable, Identifiable {
     /// Streamed while the turn is running, folded away when it finishes. Watching
@@ -98,6 +102,13 @@ public struct BudConfig: Sendable, Codable, Hashable {
     public var systemPrompt: String
     public var maxToolRounds: Int
     public var allowParallelSubagents: Int
+    /// Whether a tool that changes the machine asks before it acts.
+    ///
+    /// On by default, and that is the point: a page or a server can put text in
+    /// front of a model that has a shell, and the alternative to asking is trusting
+    /// the model to notice that the instruction came from somewhere else. Turning
+    /// it off is a decision somebody makes in Settings, not one they inherit.
+    public var confirmDangerousTools: Bool
     /// How much of the conversation the model is sent, in characters.
     ///
     /// History grew without limit: a tool result is capped at 24,000 characters
@@ -165,6 +176,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         systemPrompt: String = BudConfig.defaultSystemPrompt,
         maxToolRounds: Int = 24,
         allowParallelSubagents: Int = 6,
+        confirmDangerousTools: Bool = true,
         historyBudgetChars: Int = 120_000,
         updateRepo: String = BudConfig.defaultUpdateRepo,
         updateFeedURL: String = "",
@@ -186,6 +198,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         self.systemPrompt = systemPrompt
         self.maxToolRounds = maxToolRounds
         self.allowParallelSubagents = allowParallelSubagents
+        self.confirmDangerousTools = confirmDangerousTools
         self.historyBudgetChars = historyBudgetChars
         self.updateRepo = updateRepo
         self.updateFeedURL = updateFeedURL
@@ -355,8 +368,53 @@ public enum BudConfigLoader {
     }
 
     public static func ensureDirectory() {
+        createOwnerOnlyDirectory(budDirectory)
+    }
+
+    // MARK: Permissions
+
+    /// Bud's directory holds credentials and transcribed work; nothing in it is
+    /// for anyone but its owner. The two modes live here so the number is written
+    /// down once, next to the functions that apply it.
+    static let directoryMode = 0o700
+    static let fileMode = 0o600
+
+    /// Creates a directory its owner alone can read or traverse, and tightens one
+    /// that already exists.
+    ///
+    /// `createDirectory` applies no mode of its own, so `~/.bud` used to take the
+    /// umask — 0755 for almost every account — and the directory was listable and
+    /// traversable by anyone on the machine while every file inside it was
+    /// carefully 0600. The attributes are set on the path afterwards as well,
+    /// because `attributes` only apply to a directory this call actually creates:
+    /// an install that predates this keeps its 0755 until something fixes it.
+    static func createOwnerOnlyDirectory(_ url: URL) {
         try? FileManager.default.createDirectory(
-            at: budDirectory, withIntermediateDirectories: true
+            at: url, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: directoryMode]
+        )
+        restrictToOwner(url, mode: directoryMode)
+    }
+
+    /// Makes a file or directory that already exists owner-only.
+    static func restrictToOwner(_ url: URL, mode: Int = fileMode) {
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: mode], ofItemAtPath: url.path
+        )
+    }
+
+    /// Writes a file only its owner can read.
+    ///
+    /// `.atomic` writes a temporary file and renames it into place, and the
+    /// temporary is created by the write rather than copied from the destination —
+    /// a file that already existed at 0600 still lands at the umask's mode, which
+    /// is how `config.json` was safe and the tool-result store beside it was not.
+    /// So the permissions are set on the final path, after the rename, which is
+    /// the first moment the file exists under its own name.
+    static func writeOwnerOnly(_ data: Data, to url: URL) throws {
+        try data.write(to: url, options: .atomic)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: fileMode], ofItemAtPath: url.path
         )
     }
 
@@ -408,6 +466,7 @@ public enum BudConfigLoader {
         if let v = stored.systemPrompt, !v.isEmpty { config.systemPrompt = v }
         if let v = stored.maxToolRounds { config.maxToolRounds = v }
         if let v = stored.allowParallelSubagents { config.allowParallelSubagents = v }
+        if let v = stored.confirmDangerousTools { config.confirmDangerousTools = v }
         if let v = stored.historyBudgetChars { config.historyBudgetChars = v }
         return config
     }
@@ -442,11 +501,8 @@ public enum BudConfigLoader {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(stored) else { return }
-        try? data.write(to: configURL, options: [.atomic])
-        // The file holds a credential; keep it owner-only.
-        try? FileManager.default.setAttributes(
-            [.posixPermissions: 0o600], ofItemAtPath: configURL.path
-        )
+        // The file holds a credential; the helper keeps it owner-only.
+        try? writeOwnerOnly(data, to: configURL)
     }
 
     /// Writes only the API key without disturbing anything else.
@@ -607,6 +663,7 @@ public enum BudConfigLoader {
         public var systemPrompt: String?
         public var maxToolRounds: Int?
         public var allowParallelSubagents: Int?
+        public var confirmDangerousTools: Bool?
         public var historyBudgetChars: Int?
 
         /// The single-provider shape Bud used before it supported more than
@@ -640,6 +697,7 @@ public enum BudConfigLoader {
             self.systemPrompt = config.systemPrompt
             self.maxToolRounds = config.maxToolRounds
             self.allowParallelSubagents = config.allowParallelSubagents
+            self.confirmDangerousTools = config.confirmDangerousTools
             self.historyBudgetChars = config.historyBudgetChars
         }
 
@@ -664,6 +722,7 @@ public enum BudConfigLoader {
             systemPrompt: String? = nil,
             maxToolRounds: Int? = nil,
             allowParallelSubagents: Int? = nil,
+            confirmDangerousTools: Bool? = nil,
             apiKey: String? = nil,
             baseURL: String? = nil
         ) {
@@ -686,6 +745,7 @@ public enum BudConfigLoader {
             self.systemPrompt = systemPrompt
             self.maxToolRounds = maxToolRounds
             self.allowParallelSubagents = allowParallelSubagents
+            self.confirmDangerousTools = confirmDangerousTools
             self.apiKey = apiKey
             self.baseURL = baseURL
         }

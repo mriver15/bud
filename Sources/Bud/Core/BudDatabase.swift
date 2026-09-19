@@ -40,9 +40,7 @@ public final class BudDatabase: @unchecked Sendable {
     }
 
     public init(url: URL = BudDatabase.defaultURL) {
-        try? FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
-        )
+        BudConfigLoader.createOwnerOnlyDirectory(url.deletingLastPathComponent())
         var handle: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         guard sqlite3_open_v2(url.path, &handle, flags, nil) == SQLITE_OK, let handle else {
@@ -50,9 +48,7 @@ public final class BudDatabase: @unchecked Sendable {
             return
         }
         self.handle = handle
-        try? FileManager.default.setAttributes(
-            [.posixPermissions: 0o600], ofItemAtPath: url.path
-        )
+        BudConfigLoader.restrictToOwner(url)
         // Wait rather than fail. A reader holding the file for a moment is not a
         // reason to lose a turn.
         sqlite3_busy_timeout(handle, 5_000)
@@ -89,9 +85,7 @@ public final class BudDatabase: @unchecked Sendable {
         _ = exec("VACUUM INTO '\(destination.path)';")
         // Same permissions as the database it copies. A backup of a private
         // conversation is not less private for being a backup.
-        try? FileManager.default.setAttributes(
-            [.posixPermissions: 0o600], ofItemAtPath: destination.path
-        )
+        BudConfigLoader.restrictToOwner(destination)
     }
 
     /// Adds a column when the table does not already have it.

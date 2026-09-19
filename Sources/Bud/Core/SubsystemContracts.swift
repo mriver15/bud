@@ -130,6 +130,43 @@ public struct MCPServerConfig: Sendable, Codable, Hashable, Identifiable {
         return enabledTools.contains(tool)
     }
 
+    // MARK: Redaction
+
+    /// Below this, a value is not treated as a secret to hunt for. Replacing a
+    /// three-character value would mangle ordinary prose — `true`, `8080`, a
+    /// region code — and a real credential is never that short.
+    private static let redactionFloor = 4
+
+    /// The secrets this config declares, as `(name, value)` pairs: an environment
+    /// variable's value and a header's value.
+    ///
+    /// These are the values the user gave the server, so they are the ones that
+    /// can turn up in its output — a server that prints its own configuration at
+    /// startup prints exactly this. Nothing here guesses at what a token looks
+    /// like: a redactor that is wrong about the shape of a credential is a
+    /// redactor that leaks.
+    var declaredSecrets: [(name: String, value: String)] {
+        let pairs = env.map { (name: $0.key, value: $0.value) }
+            + headers.map { (name: $0.key, value: $0.value) }
+        return pairs.filter { $0.value.count >= Self.redactionFloor }
+    }
+
+    /// Replaces this server's declared secrets with a placeholder naming the key,
+    /// so a reader can still tell what was standing where it stood.
+    ///
+    /// Applied to anything that reaches the diagnostics log or the Copy button:
+    /// server output is quoted verbatim, and the clipboard is a place text leaves
+    /// the app.
+    public func redacting(_ text: String) -> String {
+        var out = text
+        for secret in declaredSecrets where out.contains(secret.value) {
+            out = out.replacingOccurrences(
+                of: secret.value, with: "[redacted \(secret.name)]"
+            )
+        }
+        return out
+    }
+
     /// Namespace prefix for this server's tools, e.g. `mcp__github__`.
     public var namespace: String { ToolNaming.sanitize(name.lowercased()) }
 

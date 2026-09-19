@@ -15,7 +15,49 @@ public nonisolated struct NativeToolsProvider: ToolProvider {
     public let providerID = "native"
     public let providerName = "Bud"
 
-    public init() {}
+    /// Asked before a tool that changes the machine, and answered by whatever is
+    /// holding the panel. `nil` means there is nobody to ask — the measurement
+    /// CLIs, and checks that are exercising the tool rather than the gate — and
+    /// the tool runs.
+    ///
+    /// Injected rather than reached for, because this provider is `nonisolated`
+    /// and knows nothing about the UI; the policy lives with the thing that can
+    /// show a dialog.
+    public typealias Confirmation = @Sendable (ToolConfirmation) async -> ToolConfirmation.Decision
+
+    private let confirm: Confirmation?
+
+    public init(confirm: Confirmation? = nil) {
+        self.confirm = confirm
+    }
+
+    /// The refusal a denied tool returns.
+    ///
+    /// A sentence rather than an error, because the model has to be able to read
+    /// it and do something else: a refusal is a normal outcome of asking, not a
+    /// failure of the tool. It says the command did not run, so a model that was
+    /// about to report success knows it has nothing to report.
+    static func refusal(for request: ToolConfirmation) -> ToolResult {
+        .error(
+            "The user declined this \(request.tool) call, so it was not run. "
+                + "Do not repeat it as it stands — ask again differently, or do something else."
+        )
+    }
+
+    /// Asks, if there is anyone to ask and the tool is one that changes things.
+    /// Returns a refusal to return to the model, or `nil` to carry on.
+    private func refusalUnlessConfirmed(tool: String, arguments: JSONValue) async -> ToolResult? {
+        guard let confirm,
+              let request = ToolConfirmation.request(
+                  tool: tool,
+                  arguments: arguments,
+                  expandingTilde: { expand($0) }
+              )
+        else { return nil }
+
+        let decision = await confirm(request)
+        return decision.isAllowed ? nil : Self.refusal(for: request)
+    }
 
     public nonisolated func toolDescriptors() async -> [ToolDescriptor] {
         [
@@ -156,11 +198,21 @@ public nonisolated struct NativeToolsProvider: ToolProvider {
         do {
             switch tool {
             case "read_file": return try readFile(arguments)
-            case "write_file": return try writeFile(arguments)
+            case "write_file":
+                // Asked before it is done, not after: a confirmation that arrives
+                // once the file is written is a notification.
+                if let refused = await refusalUnlessConfirmed(tool: "write_file", arguments: arguments) {
+                    return refused
+                }
+                return try writeFile(arguments)
             case "list_files": return try listFiles(arguments)
             case "search_files": return try searchFiles(arguments)
             case "read_stored": return try readStored(arguments)
-            case "run_shell": return try await runShell(arguments)
+            case "run_shell":
+                if let refused = await refusalUnlessConfirmed(tool: "run_shell", arguments: arguments) {
+                    return refused
+                }
+                return try await runShell(arguments)
             case "web_fetch": return try await webFetch(arguments)
             default: return .error("Unknown native tool '\(tool)'.")
             }
@@ -561,12 +613,117 @@ public nonisolated struct NativeToolsProvider: ToolProvider {
 
     // MARK: - web_fetch
 
+    /// Whether a target is this machine or a network next to it.
+    ///
+    /// `web_fetch` takes its URL from a model, and the model may have read that
+    /// URL on a page someone else wrote. Without this, `http://169.254.169.254/`
+    /// — cloud instance metadata, credentials included — or `http://127.0.0.1:8080/`
+    /// is fetched like any other page and its body joins the conversation.
+    ///
+    /// A name is resolved here and every address it answers with is checked, not
+    /// just the literal-IP form: `http://localhost/` and a hostname that happens
+    /// to point at 10.0.0.1 are the same request as the numbers. `localhost` is in
+    /// `/etc/hosts` on every Mac, `.local` is Bonjour, and `.internal` is what a
+    /// corporate resolver hands out. A name that does not resolve is refused
+    /// rather than passed through.
+    ///
+    /// Residual limit: this resolves the name, and the connection resolves it
+    /// again, so a name whose answer changes in between — DNS rebinding — still
+    /// reaches an address refused here. Pinning the connection to the address that
+    /// was checked would close it, and `URLSession` offers no way to ask for that;
+    /// the redirect guard below closes the other way round the check.
+    static func isBlockedTarget(_ host: String) -> Bool {
+        let name = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".[]"))
+        guard !name.isEmpty else { return true }
+        if name == "localhost"
+            || name.hasSuffix(".localhost")
+            || name.hasSuffix(".local")
+            || name.hasSuffix(".internal") {
+            return true
+        }
+        guard let addresses = resolvedAddresses(name) else { return true }
+        return addresses.contains { isPrivateAddress($0) }
+    }
+
+    /// The refusal a blocked target produces, so the check before the request and
+    /// the redirect guard after it say the same thing.
+    static func blockedTargetMessage(_ host: String) -> String {
+        let named = host.isEmpty ? "that address" : "'\(host)'"
+        return "web_fetch refuses \(named): it is this machine, a private or link-local "
+            + "address, or a name that resolves to one. Give a public http(s) URL instead."
+    }
+
+    /// Every address a name answers with, or `nil` when it does not resolve.
+    private static func resolvedAddresses(_ host: String) -> [String]? {
+        var hints = addrinfo(
+            ai_flags: 0, ai_family: AF_UNSPEC, ai_socktype: SOCK_STREAM, ai_protocol: 0,
+            ai_addrlen: 0, ai_canonname: nil, ai_addr: nil, ai_next: nil
+        )
+        var info: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, nil, &hints, &info) == 0, let head = info else { return nil }
+        defer { freeaddrinfo(head) }
+
+        var out: [String] = []
+        var node: UnsafeMutablePointer<addrinfo>? = head
+        while let current = node {
+            if let address = current.pointee.ai_addr {
+                var text = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                if getnameinfo(
+                    address, current.pointee.ai_addrlen,
+                    &text, socklen_t(text.count), nil, 0, NI_NUMERICHOST
+                ) == 0 {
+                    let bytes = text.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+                    out.append(String(decoding: bytes, as: UTF8.self))
+                }
+            }
+            node = current.pointee.ai_next
+        }
+        return out
+    }
+
+    /// Whether a numeric address is loopback, link-local, private, or otherwise
+    /// somewhere a fetch has no business going.
+    static func isPrivateAddress(_ address: String) -> Bool {
+        var v4 = in_addr()
+        if inet_pton(AF_INET, address, &v4) == 1 {
+            let b = withUnsafeBytes(of: v4.s_addr) { Array($0) }
+            guard b.count == 4 else { return true }
+            switch b[0] {
+            case 0, 10, 127: return true
+            case 100: return (b[1] & 0xC0) == 64
+            case 169: return b[1] == 254
+            case 172: return (b[1] & 0xF0) == 16
+            case 192: return b[1] == 168
+            case 198: return b[1] == 18 || b[1] == 19
+            default: return b[0] >= 224
+            }
+        }
+
+        var v6 = in6_addr()
+        guard inet_pton(AF_INET6, address, &v6) == 1 else { return true }
+        let b = withUnsafeBytes(of: v6) { Array($0) }
+        guard b.count == 16 else { return true }
+        let isV4Mapped = b[0..<10].allSatisfy { $0 == 0 } && b[10] == 0xFF && b[11] == 0xFF
+        if isV4Mapped {
+            return isPrivateAddress("\(b[12]).\(b[13]).\(b[14]).\(b[15])")
+        }
+        if b.allSatisfy({ $0 == 0 }) { return true }
+        if b[0..<15].allSatisfy({ $0 == 0 }), b[15] == 1 { return true }
+        if (b[0] & 0xFE) == 0xFC { return true }
+        if b[0] == 0xFE, (b[1] & 0xC0) == 0x80 { return true }
+        return b[0] == 0xFF
+    }
+
     private func webFetch(_ args: JSONValue) async throws -> ToolResult {
         guard let raw = args["url"]?.stringValue,
               let url = URL(string: raw),
               let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https" else {
             throw ToolFailure(message: "web_fetch requires a valid http(s) 'url'.")
+        }
+        let host = url.host() ?? ""
+        guard !Self.isBlockedTarget(host) else {
+            throw ToolFailure(message: Self.blockedTargetMessage(host))
         }
         let maxChars = min(200_000, max(500, Int(args["max_chars"]?.doubleValue ?? 40_000)))
 
@@ -577,7 +734,13 @@ public nonisolated struct NativeToolsProvider: ToolProvider {
         )
         request.timeoutInterval = 30
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let redirects = WebFetchRedirectGuard()
+        let (data, response) = try await URLSession.shared.data(for: request, delegate: redirects)
+        // Checked before the status code: a refused redirect arrives as the 3xx
+        // response itself, and "HTTP 302" would say nothing about why.
+        if let refused = redirects.refusedHost {
+            throw ToolFailure(message: Self.blockedTargetMessage(refused))
+        }
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
             throw ToolFailure(message: "HTTP \(http.statusCode) for \(url.absoluteString)")
         }
@@ -649,6 +812,45 @@ public nonisolated struct NativeToolsProvider: ToolProvider {
             collapsed.append(line)
         }
         return collapsed.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+// MARK: - Fetch redirects
+
+/// Refuses a redirect to somewhere `isBlockedTarget` would have refused.
+///
+/// The check before the request sees the URL the model gave; `URLSession` follows
+/// what that page answers with. A public host that replies `302 Location:
+/// http://127.0.0.1/` would otherwise make the check a formality, so the same
+/// question is asked again for every hop, before the hop is made.
+///
+/// Cancelling a redirect delivers the 3xx response itself, so the caller reads the
+/// refused host from here and reports it rather than a bare status code.
+///
+/// Internal rather than private so the decision can be put through the self-test
+/// without a server that redirects to a private address — the one thing that is
+/// awkward to arrange, and the only thing worth checking.
+final class WebFetchRedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var blocked: String?
+
+    /// The host a redirect was refused for, or nil when none was.
+    var refusedHost: String? { lock.withLock { blocked } }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        let host = request.url?.host() ?? ""
+        guard !NativeToolsProvider.isBlockedTarget(host) else {
+            lock.withLock { blocked = host }
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
     }
 }
 

@@ -1,9 +1,11 @@
 #!/bin/bash
 # Builds Bud.app from the SwiftPM executable.
 #
-# There is no .xcodeproj: this machine has only the Command Line Tools, so the
-# bundle is assembled by hand. That is also why the bundle is ad-hoc signed —
-# it is a locally-built app, not a distributed one.
+# There is no .xcodeproj: the bundle is assembled by hand around the SwiftPM
+# executable, so Bud builds with either the Command Line Tools or a full Xcode.
+# That is also why the bundle is ad-hoc signed — it is a locally-built app rather
+# than a notarised one, so macOS asks for confirmation the first time a downloaded
+# copy is opened. See the Build section of the README.
 #
 # This script is the only thing that writes Info.plist, so --version/--build
 # stamp CFBundleShortVersionString and CFBundleVersion right here. The updater
@@ -135,8 +137,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad-hoc signature. Required for the app to run at all on Apple Silicon, and it
-# keeps the hotkey and network entitlements consistent across rebuilds.
+# Ad-hoc signature. Required for the app to run at all on Apple Silicon: a
+# hand-assembled bundle has no signature of its own, and macOS refuses to launch
+# one it cannot validate. Ad-hoc is also what lets the self-test binaries run.
 echo "==> Signing (ad-hoc)"
 codesign --force --sign - --timestamp=none "$APP" >/dev/null 2>&1
 

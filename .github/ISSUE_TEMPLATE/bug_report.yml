@@ -1,0 +1,76 @@
+name: Bug report
+description: Something in Bud is broken or behaves differently from how it is described
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before you file: if this is a security problem, please use
+        [private vulnerability reporting](https://github.com/mriver15/bud/security/advisories/new)
+        instead of this form.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what Bud did, and what you expected instead. Exact wording of an error message is useful; a screenshot is better still.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The shortest sequence that shows it. If it only happens with a particular MCP server, skill, or model, say which.
+      placeholder: |
+        1. Open the panel with ⌥Space
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Bud version
+      description: From Bud → Settings → General, or the release you downloaded.
+      placeholder: 1.5.0
+    validations:
+      required: true
+
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      description: "From  → About This Mac."
+      placeholder: "26.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider
+      options:
+        - DeepSeek
+        - OpenAI-compatible
+        - Anthropic
+        - Google
+        - Ollama or another local runtime
+        - Not provider-specific
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: |
+        If the problem involves an MCP server, the panel under Settings → MCP has
+        a Copy button that produces everything needed. **Read what you paste** —
+        server logs sometimes quote a server's own startup banner. If a transcript
+        is relevant, check it before pasting; it is your conversation, and it may
+        contain your files.
+      render: text
+    validations:
+      required: false

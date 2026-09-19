@@ -262,14 +262,9 @@ public final class AgentRuntime {
 
                 let results = await execute(calls, turnIndex: turnIndex)
                 for (call, result) in zip(calls, results) {
-                    history.append(
-                        ChatMessage(
-                            role: .tool,
-                            content: result.modelFacingText(),
-                            toolCallID: call.id,
-                            name: call.name
-                        )
-                    )
+                    // Framed, so text that came back from a page or a server is
+                    // not read as something the user asked for.
+                    history.append(.toolResult(call, result))
                 }
                 continue
             }
@@ -539,8 +534,13 @@ public final class AgentRuntime {
         // only surface after a restart. An empty result means there is nothing
         // to say, and an empty "things you remember" heading would cost a
         // paragraph of context to tell the model it knows nothing.
+        //
+        // Fenced, because this is the system prompt: a note is written from
+        // whatever the model was told, including a sentence that arrived in a
+        // fetched page or an MCP result, and here it sits in the most-trusted
+        // part of the request with nothing to say it is data.
         let notes = BudStore.lessonContext()
-        if !notes.isEmpty { text += "\n\n" + notes }
+        if !notes.isEmpty { text += "\n\n" + ToolProvenance.rememberedNotes(notes) }
 
         // Read on every request for the same reason the notes are: a skill
         // installed halfway through a conversation has to be usable in it.

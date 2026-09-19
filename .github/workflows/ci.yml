@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Build and verify
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Toolchain
+        run: |
+          swift --version
+          sw_vers
+
+      # Debug first: the assertion suite and every verification CLI are linked
+      # into the debug binary, and that is what the checks below run.
+      - name: Build
+        run: |
+          swift build
+          swift build -c release
+
+      # Deterministic, offline, and the suite that guards the most: every
+      # subsystem's contract, plus the two surfaces only a render can check,
+      # plus the browser engine driving real WebKit.
+      #
+      # Not run here: --verify-live, which needs an API key and a connected MCP
+      # server, and so needs secrets a fork will not have. See CONTRIBUTING.md.
+      - name: Checks
+        run: |
+          ./.build/debug/Bud --self-test
+          ./.build/debug/Bud --verify-ui
+          ./.build/debug/Bud --verify-browser
+
+      - name: Assemble the app bundle
+        run: ./Scripts/build-app.sh

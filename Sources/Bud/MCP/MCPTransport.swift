@@ -164,6 +164,37 @@ public final class StdioTransport: @unchecked Sendable, MCPTransport {
     /// the signal is neutralised once, process-wide, before any write.
     private static let ignoreSIGPIPE: Void = { signal(SIGPIPE, SIG_IGN) }()
 
+    /// The variables a server inherits because a process on this platform is
+    /// unusable without them. Everything else has to be declared by the server's
+    /// own config.
+    private static let inheritedNames = [
+        "PATH", "HOME", "TMPDIR", "USER", "SHELL", "LANG", "LC_ALL", "TERM",
+    ]
+
+    /// The environment a child server is spawned with.
+    ///
+    /// Deliberately *not* Bud's own. A server installed from the marketplace runs
+    /// `npx -y <package>` chosen by a catalogue record, and a child that inherits
+    /// everything would be handed every provider API key in this process's
+    /// environment — plus a `GH_TOKEN` or `GITHUB_TOKEN`, which the updater reads.
+    /// The server's own variables are still applied: a server that needs something
+    /// else declares it in its config, which is the right place for that decision
+    /// and makes it visible in Settings rather than inherited by accident.
+    ///
+    /// Separate from `start()` so what a server is handed can be checked without
+    /// spawning one.
+    static func childEnvironment(
+        declared: [String: String],
+        ambient: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
+        var environment: [String: String] = [:]
+        for name in inheritedNames {
+            if let value = ambient[name] { environment[name] = value }
+        }
+        for (name, value) in declared { environment[name] = value }
+        return environment
+    }
+
     public init(command: String, args: [String] = [], env: [String: String] = [:]) {
         self.command = command
         self.arguments = args
@@ -181,8 +212,7 @@ public final class StdioTransport: @unchecked Sendable, MCPTransport {
             )
         }
 
-        var childEnvironment = ProcessInfo.processInfo.environment
-        for (key, value) in environment { childEnvironment[key] = value }
+        var childEnvironment = Self.childEnvironment(declared: environment)
         childEnvironment["PATH"] = ExecutableLookup.searchPath(childEnvironment).joined(separator: ":")
 
         let process = Process()

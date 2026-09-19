@@ -2,10 +2,25 @@
 
 A native macOS assistant that lives in a floating Liquid Glass panel. Chat with
 any provider, connect any MCP server, browse a marketplace of them, delegate to
-subagents, and let the model draw its own interface when prose is the wrong
-shape.
+subagents, drive a real browser, remember things across chats, and let the model
+draw its own interface when prose is the wrong shape.
 
 Built for macOS 26 with Swift 6 strict concurrency. No third-party packages.
+
+---
+
+## Contents
+
+- [What it does](#what-it-does) — menu-bar life, reasoning visibility, MCP
+  servers, marketplace, browser, delegation, generated interfaces, cost
+  budgeting, skills, stored results, images, memory
+- [Built-in tools](#built-in-tools) · [Trust model](SECURITY.md)
+- [Requirements](#requirements) · [Download](#download) ·
+  [First launch](#first-launch) · [Build](#build) ·
+  [Configuration](#configuration) · [Usage](#usage) ·
+  [What Bud doesn't do](#what-bud-doesnt-do) ·
+  [Architecture](#architecture) · [Verification](#verification) ·
+  [Licence](#licence)
 
 ---
 
@@ -13,9 +28,8 @@ Built for macOS 26 with Swift 6 strict concurrency. No third-party packages.
 
 **Lives in the menu bar.** Bud is an accessory app with no Dock icon, and it puts
 **nothing on screen until you ask**. Launch it and you get a sparkle in the menu
-bar — no window, no corner bubble, nothing to dismiss. Summon the panel with
-`⌥⌘B`, from the menu bar, or with a `bud://` link; `Esc` or `⌥⌘B` puts it away
-again.
+bar — no window, no corner bubble, nothing to dismiss. Summon the panel from that
+sparkle or with a `bud://` link; `Esc` puts it away again.
 
 If you want it within reach while you work, the panel's collapse control parks it
 as a small glass bubble in a screen corner — showing a spinning ring while it
@@ -48,6 +62,28 @@ repository rather than given a fabricated command.
 > link. If you need a surface where no visible credit fits, Glama offers a
 > commercial licence that waives this.
 
+**A real browser, built in.** Bud ships a native browser — WebKit, not a bundled
+Chromium — with thirteen tools covering what a Playwright install would provide,
+and no Node, no `npx`, no download behind any of it. The page lives in the
+Browser surface; the model reads it as an *outline* — headings, links, buttons,
+fields and checkboxes, each action carrying a ref — and acts through the refs
+(`browser_click`, `browser_type`, `browser_hover`, `browser_select`,
+`browser_press`, `browser_scroll`), so it does what a person does: read the
+labels, click the thing. Every action returns a fresh outline, so there is no
+stale map to click through, and a ref that is stale or invented fails loudly
+instead of clicking whatever happens to sit at that position now.
+
+Browsing is a session, not a series of lookups. One web view lives for the life
+of the app, so a sign-in survives the tool calls that follow it; a desktop user
+agent keeps mobile layouts out; `file://` URLs open through the read-access path
+WebKit actually allows. `browser_console` returns what the page logged and what
+it threw — captured by a hook injected at document start, before the page's own
+scripts run, because the error worth having is usually the one thrown while the
+page is still initialising. Every action also captures a screenshot and shows it
+beside the tool row: the model reads the outline, the user sees the page it
+acted on. A page that never settles cannot hang the agent — loads time out at
+45 seconds.
+
 **Delegation, to something with a name.** Ask Bud to split work and it runs each
 slice concurrently in a fresh context with its own tool loop, then reports back.
 The Agents tab shows both halves of that: **Delegates** — everything it can hand
@@ -70,10 +106,11 @@ their parent's slot rather than the pool's, so nesting cannot starve the pool it
 is running in.
 
 **A server can hand its tools to its agent** (MCP → a server → Tools & log). The
-main agent then carries the server's *name* instead of its schemas. On a real
-21-tool server that is 17,915 tokens per request down to 5,494 — a 69% cut — at the
-cost of a delegation per question. Off by default, per server, because a single
-instant lookup is slower that way and a bulky one is not.
+main agent then carries the server's *name* instead of its schemas. On the 21-tool
+server this was measured against — 17,915 tokens per request down to 5,494, a 69%
+cut, reproducible with `--measure` — at the cost of a delegation per question. Off
+by default, per server, because a single instant lookup is slower that way and a
+bulky one is not.
 
 **Generated interfaces.** For comparisons, dashboards and status reports, the
 model emits a declarative UI spec instead of a wall of text: cards, metrics,
@@ -87,17 +124,18 @@ out — and `--self-test` fails if the built-in block grows past its budget. Pas
 120,000 characters of conversation the oldest tool results are emptied from what the
 model is sent: the user keeps seeing them, and the model is told it can call again.
 
-**You can watch it think.** Every provider streams its reasoning, and the
+**You can watch it think.** Reasoning models stream their thinking, and the
 transcript shows it while it arrives and folds it away when the answer lands.
 Settings → General offers *While thinking*, *Always*, or *Hidden*; opening or
 closing a panel by hand overrides whichever is set, so a turn folding itself away
 never closes something you deliberately opened.
 
 **Skills load themselves, and the list ranks.** Skill bodies arrive only when one
-is used — they average twelve thousand characters. The catalogue that says what is
-installed is ranked against the current message: what looks relevant gets its whole
-description, everything else gets one line, and **nothing is ever dropped from the
-list** — because the matching that would have to drop things scores nothing at all
+is used — the ones installed here average around twelve thousand characters each.
+The catalogue that says what is installed is ranked against the current message:
+what looks relevant gets its whole description, everything else gets one line, and
+**nothing is ever dropped from the list** — because the matching that would have to
+drop things scores nothing at all
 for "W-9" against a skill described as "PDF", and the model knows they are the same
 thing. Skills may declare `metadata.triggers` to close that gap from the other
 side.
@@ -108,6 +146,14 @@ a note saying how much is missing. `read_stored` searches it or reads a line ran
 and handles are validated as handles — `store_` and eight hex characters — because
 one arrives from a model and becomes a path. The transcript still shows the whole
 result; only the model is bounded.
+
+**Memory that outlives the chat.** `remember` writes a fact worth carrying out of
+a conversation; `recall` reads the notes back. Notes are stored under one of
+three scopes — `general`, `user`, `project` — and recall is bounded by count and
+characters, cut on a line boundary so the last note shown is never half a
+sentence. The tool descriptions name the situations that justify a call and the
+ones that do not, because a memory tool described vaguely is either called every
+turn or never called at all.
 
 **Pictures, without a picture source.** A surface that needs an image asks
 `find_image` for one — one thing or a whole set in a single call. Wikipedia
@@ -120,31 +166,109 @@ answers, and a surface showing the wrong picture is worse than one showing none.
 An MCP server can still return images directly, in which case they render under
 the tool row and no lookup happens.
 
-**Local capabilities out of the box.** `read_file`, `write_file`, `list_files`,
-`run_shell` and `web_fetch` are built in, so Bud is useful before you connect
-anything.
+**Local capabilities out of the box.** `read_file` (text, PDFs, and the text out
+of an image), `search_files`, `write_file`, `list_files`, `run_shell` and
+`web_fetch` are built in, alongside the browser and memory tools — so Bud is
+useful before you connect anything.
+
+**Every conversation is kept.** The History surface is the whole archive —
+searchable, renamable, deletable — while the menu bar shortcuts the last few.
+
+---
+
+## Built-in tools
+
+Everything below ships with Bud. MCP servers add their own tools, namespaced
+`mcp__<server>__<tool>`; built-ins are never namespaced.
+
+| Provider | Tools |
+|---|---|
+| **Bud** (native) | `read_file` — text, PDFs, and text out of images · `search_files` — regex search across folders · `write_file` · `list_files` — glob-listed paths · `run_shell` — zsh, bounded timeout · `web_fetch` — HTML to readable text · `read_stored` — search and paged reads of spilled results |
+| **Browser** | `browser_open` · `browser_snapshot` · `browser_read` · `browser_click` · `browser_type` · `browser_hover` · `browser_select` · `browser_wait` · `browser_console` · `browser_press` · `browser_scroll` · `browser_back` · `browser_screenshot` |
+| **Memory** | `remember` — file a fact under `general`, `user` or `project` · `recall` — bounded, line-cut reads |
+| **Skills** | `skill` — load a skill's instructions by name |
+| **Interface** | `render_ui` — draw a declarative surface · `find_image` — licensed pictures, Wikipedia first, Wikimedia Commons as fallback |
+| **Subagents** | `spawn_subagents` — split work across concurrent, isolated runs |
 
 ---
 
 ## Requirements
 
-- macOS 26.0 or later (Liquid Glass)
-- Swift 6.2+ toolchain
-- An API key for a hosted provider, or a local runtime such as Ollama (no key)
+- **Apple Silicon.** Bud builds and runs `arm64` only; there is no Intel build.
+- **macOS 26.0 or later**, for Liquid Glass.
+- **Swift 6.2 or later.** Xcode 26 or the Command Line Tools both provide one.
+- **An API key** for a hosted provider, or a local runtime such as Ollama, which
+  needs none. See [Configuration](#configuration) for where to put it.
 
-No Xcode required — the build uses SwiftPM and assembles the app bundle directly.
+No Xcode project is required — the build uses SwiftPM and assembles the app bundle
+by hand. The Command Line Tools alone are enough, which is what this project is
+built with.
+
+---
+
+## Download
+
+[Releases](https://github.com/mriver15/bud/releases/latest) carries a built
+`Bud-<version>.zip`. Unzip it, move `Bud.app` wherever you keep applications, and
+open it.
+
+The app is **ad-hoc signed, not notarised** — there is no paid developer
+certificate behind this project, so the first launch needs one confirmation:
+**right-click the app and choose Open**, then Open again. Double-clicking first
+only tells you macOS cannot verify the developer, which is accurate. After that,
+macOS remembers and it opens normally.
+
+Updates arrive through the app itself and are checked against a key compiled into
+it; a first copy is only as trustworthy as the release page you downloaded it
+from. See [SECURITY.md](SECURITY.md).
+
+---
+
+## First launch
+
+Bud starts with nothing configured, so the first thing it needs is a key.
+
+1. Open it and look for the sparkle in the menu bar — there is no window.
+2. Click the sparkle, then `⌘,` for Settings → General.
+3. Paste a key for any provider. DeepSeek is the default; Gemini, OpenAI and
+   Anthropic are a dropdown away. [Ollama](https://ollama.com) needs no key at
+   all — install it, pull a model, and it appears in the same menu.
+4. Ask it something.
+
+Settings writes `~/.bud/config.json`, and that file is the whole configuration —
+it can be written by hand instead. Three fields are enough to start:
+
+```json
+{
+  "provider": "deepseek",
+  "providerKeys": { "deepseek": "sk-..." },
+  "providerModels": { "deepseek": "deepseek-v4-flash" }
+}
+```
+
+Or skip the file: `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and
+`GEMINI_API_KEY` are all read from the environment, as is one for each of the
+other supported providers. The file wins over the environment, and the
+environment wins over a shell profile, so a key you set deliberately is never
+shadowed by one you set and forgot.
+
+Everything else — MCP servers, the marketplace, subagents, memory, skills — is
+optional. Nothing is connected on first run and Bud is useful without any of it.
 
 ---
 
 ## Build
 
 ```bash
-git clone <repo> bud && cd bud
+git clone https://github.com/mriver15/bud bud && cd bud
 ./Scripts/build-app.sh          # -> build/Bud.app
 open build/Bud.app
 ```
 
 Debug build: `./Scripts/build-app.sh debug`
+
+Building it yourself avoids the Gatekeeper step entirely, because the copy is
+yours rather than downloaded.
 
 ---
 
@@ -155,7 +279,7 @@ Bud reads configuration in this order, highest priority first:
 | Source | Purpose |
 |---|---|
 | `~/.bud/config.json` | Bud's own settings |
-| `~/.omp/agent/config.yml` | Your existing oh-my-pi setup (`modelRoles.default`) |
+| `~/.omp/agent/config.yml` | If you also run oh-my-pi, its `modelRoles.default` is picked up as a model choice |
 | built-in defaults | `deepseek-v4-flash` |
 
 The API key is resolved from `~/.bud/config.json`, then the environment, then
@@ -179,7 +303,7 @@ models:
 
 | Dialect | Providers |
 |---|---|
-| OpenAI-compatible | 175 of 217 — including several with nothing to do with OpenAI |
+| OpenAI-compatible | 175 of 217 as the catalogue stood in September 2026 — including several with nothing to do with OpenAI |
 | Anthropic Messages | Anthropic and gateways that resell Claude |
 | Google Generative AI | Gemini |
 
@@ -288,19 +412,19 @@ nobody asked for — but a check the user asked for always reports.
 
 | Action | How |
 |---|---|
-| Show or hide the panel | `⌥⌘B` |
+| Show or hide the panel | The menu-bar sparkle, or a `bud://` link |
 | Put it away | `Esc` |
 | Park it in a corner as a bubble | The collapse control in the panel header |
 | Move the bubble to another corner | Drag it and release |
 | Send | `Enter` |
-| Newline | `Shift``Enter` |
-| Stop generating | Stop button, or `/stop` |
+| Newline | `⇧``Return` |
+| Stop generating | The stop button that appears while a reply streams |
 | Switch model | Header model chip |
 | Slash commands | Type `/` in the composer |
 | Settings | `⌘,` |
 
-Slash commands: `/clear`, `/tools`, `/settings`, `/mcp`, `/marketplace`,
-`/agents`.
+Slash commands: `/new` (a fresh transcript), `/tools`, `/settings`, `/mcp`,
+`/marketplace`, `/agents`.
 
 ### Driving Bud from outside
 
@@ -308,15 +432,42 @@ Bud registers a `bud://` URL scheme, so anything that can open a link can talk t
 it — Shortcuts, a shell alias, a script, a calendar alert.
 
 ```bash
-open "bud://ask?text=Summarise%20my%20Downloads%20folder"   # opens the panel and sends
-open "bud://collapse"                                        # collapse to the corner bubble
-open "bud://expand"                                          # open the full panel
-open "bud://toggle"                                          # whichever is the other one
+open "bud://ask?text=Summarise%20my%20Downloads%20folder"   # opens the panel, text in the composer
+open "bud://toggle"                                          # show it or put it away
+open "bud://settings"                                        # open Settings
+open "bud://history"                                         # open the conversation list
 open "bud://new"                                             # start a fresh transcript
 ```
 
 The text is percent-encoded like any URL query value. Unrecognised routes are
 ignored rather than opening the panel into an undefined state.
+
+`ask` puts the text in the composer and waits for you to press Send — it does not
+send on its own. Treat the scheme the way you would treat a shell: anything able
+to open a link can put words in front of a model that has tools, so the press of
+Send is the point at which the instruction becomes yours rather than a caller's.
+
+---
+
+## What Bud doesn't do
+
+- **Not on iOS, Windows or Linux.** macOS 26 on Apple Silicon only. There is no
+  Intel build and no plan for one.
+- **Not notarised.** Ad-hoc signed, so the first launch of a downloaded copy
+  needs one confirmation. See [Download](#download).
+- **Not a widget.** It is a real application that happens to have no windows
+  until you ask for one — a WidgetKit widget could not host a chat, hold a
+  browser session, or run a subagent.
+- **Not a model.** It has no weights and does no inference of its own; it talks
+  to providers you configure, or to a local runtime such as Ollama.
+- **No voice, no image generation, no fine-tuning.**
+- **No sandbox.** Tools run as you, with your permissions. That is the point,
+  and [SECURITY.md](SECURITY.md) is the honest accounting of it.
+- **No telemetry.** Nothing is reported anywhere. The only hosts Bud ever
+  contacts are the provider you configured, the MCP servers you connected, the
+  marketplace catalogue, GitHub for updates, Wikimedia for `find_image`, and npm
+  when resolving a package to install — and you can watch every one of them in
+  the tool log.
 
 ---
 
@@ -333,7 +484,9 @@ Sources/Bud/
 │   ├── ChatBackend.swift     the streaming contract every dialect implements
 │   ├── AgentRuntime.swift    the agent loop: stream, call tools, repeat
 │   ├── ToolProvider.swift    tool contract + namespacing registry
-│   └── NativeTools.swift     file, search, shell and web tools
+│   ├── NativeTools.swift     file, search, shell, web and stored-result tools
+│   ├── MemoryTools.swift     remember/recall over the SQLite store
+│   └── StoredResults.swift   overflow store and validated handles
 ├── Providers/
 │   ├── ProviderRegistry.swift          known providers, dialects, env vars
 │   ├── ProviderCredentials.swift       resolved credentials + the factory
@@ -342,10 +495,15 @@ Sources/Bud/
 │   └── GoogleGenerativeAIBackend.swift Gemini
 ├── MCP/                      JSON-RPC, stdio + HTTP transports, manager
 ├── Marketplace/              registry client, store, browser UI
-├── Subagents/                agents, the pool, and the delegation UI
+├── Subagents/                agent registry, the pool, delegation UI
+├── Browser/                  WebKit engine + the thirteen browser tools
+├── Skills/                   skill scan, ranking, store, the `skill` tool
 ├── GenUI/                    UI spec language, renderer, render_ui + find_image
+├── Update/                   signed manifests, checker, in-place installer
 ├── UI/                       glass design system, chat, settings, panel
 └── SelfTest/                 offline assertion suite (`--self-test`)
+
+Sources/BudMain/              the `bud` executable's entry point
 ```
 
 Three design decisions worth knowing:
@@ -372,11 +530,15 @@ would otherwise reject.
 
 ```bash
 swift build
-./.build/debug/Bud --self-test        # 105 checks, offline, deterministic
-./.build/debug/Bud --verify-live      # 36 checks, live network + real MCP process
-./.build/debug/Bud --verify-ui        # 16 checks, launches the real panel
+./.build/debug/Bud --self-test          # every subsystem's contract — offline
+./.build/debug/Bud --verify-ui          # the real panel, and its committed layers
+./.build/debug/Bud --verify-browser     # real WebKit, against real pages
+./.build/debug/Bud --verify-live        # a real model and a real MCP server; needs a key
 ./.build/debug/Bud --render-ui /tmp/ui  # writes a PNG of every surface
+./.build/debug/Bud --measure            # what a request costs, tool by tool
 ```
+
+Each one prints its own total, so there is no count here to go stale.
 
 **`--self-test`** covers the surfaces where a silent bug is expensive: SSE frame
 decoding (including the terminal frame that carries `finish_reason` *and* `usage`
@@ -422,8 +584,8 @@ Two limits are worth knowing, because both can be mistaken for product bugs:
   "not verifiable this way", not as a failure.
 
 To capture real pixels, grant Screen Recording to your terminal and use
-`screencapture -x out.png` — note that on macOS 26 `-l<windowid>` and `-R<x,y,w,h>`
-were both unreliable here, so capture the full screen and crop.
+`screencapture -x out.png`. Note that on macOS 26 `-l<windowid>` and `-R<x,y,w,h>`
+are both unreliable for a floating panel, so capture the full screen and crop.
 
 ### Design system
 
@@ -486,4 +648,5 @@ too. Pick one spelling per codebase; do not mix.
 
 ## Licence
 
-Private project.
+MIT — see [LICENSE](LICENSE). Use it, change it, ship it, sell it; the only
+condition is that the copyright notice comes along.

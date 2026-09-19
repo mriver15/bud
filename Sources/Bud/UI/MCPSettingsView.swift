@@ -584,7 +584,13 @@ struct DiagnosticsPanel: View {
         }
         lines.append("")
         lines.append(contentsOf: logs.isEmpty ? ["(no log entries)"] : logs)
+        // Last stop before the pasteboard. The log and the status are already
+        // redacted where they were written, and this repeats it because the
+        // clipboard is where the text leaves the app: a line that arrived from a
+        // path that forgot is a credential pasted into a bug report.
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
+        NSPasteboard.general.setString(
+            config.redacting(lines.joined(separator: "\n")), forType: .string
+        )
     }
 }

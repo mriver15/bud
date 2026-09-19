@@ -2,10 +2,14 @@
 import PackageDescription
 
 // All application code lives in `BudKit` so the executable is a thin shell around
-// `BudApp` and the assertion suite can be linked into it. There is deliberately
-// no test target: this machine has only the Command Line Tools, which ship
-// neither XCTest nor Swift Testing, so `swift test` cannot build here. The checks
-// live behind `--self-test` instead — see Sources/Bud/SelfTest/.
+// `BudApp` and the assertion suite can be linked into it.
+//
+// There is deliberately no test target. Bud assembles its own app bundle from
+// SwiftPM and builds with either the Command Line Tools or a full Xcode; the
+// checks are compiled into the app rather than into a separate test bundle, so
+// they exercise the same binary that ships, and run without XCTest being present.
+// Run them with `--self-test`, `--verify-ui`, `--verify-browser` and
+// `--verify-live` — see Sources/Bud/SelfTest/.
 let package = Package(
     name: "Bud",
     platforms: [.macOS(.v26)],

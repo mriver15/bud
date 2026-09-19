@@ -325,11 +325,13 @@ public final class BrowserToolProvider: ToolProvider {
     /// directory the system is free to empty.
     private func save(_ data: Data) -> String? {
         let directory = BudConfigLoader.budDirectory.appendingPathComponent("screenshots", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // A screenshot is the page the session was signed into, so neither it nor
+        // the directory it lands in is for anyone else on the machine.
+        BudConfigLoader.createOwnerOnlyDirectory(directory)
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
         let url = directory.appendingPathComponent("page-\(stamp).png")
         do {
-            try data.write(to: url, options: .atomic)
+            try BudConfigLoader.writeOwnerOnly(data, to: url)
             prune(directory)
             return url.path
         } catch {

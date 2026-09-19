@@ -155,7 +155,7 @@ public final class MCPManager: MCPManaging, ToolProvider {
             let diagnostics = await client.diagnostics
             await client.stop()
             guard isCurrentConnect(id, token) else { return }
-            let message = Self.failureMessage(error: error, diagnostics: diagnostics)
+            let message = config.redacting(Self.failureMessage(error: error, diagnostics: diagnostics))
             statuses[id] = MCPServerStatus(
                 id: id, name: config.name, transport: config.transport,
                 state: .failed, error: message
@@ -377,7 +377,7 @@ public final class MCPManager: MCPManaging, ToolProvider {
 
     private func markFailed(_ config: MCPServerConfig, reason: String) async {
         guard let client = clients[config.id] else { return }
-        let tail = Self.clipped(await client.diagnostics)
+        let tail = config.redacting(Self.clipped(await client.diagnostics))
         let message = tail.isEmpty ? reason : "\(reason)\n\(tail)"
         let status = MCPServerStatus(
             id: config.id, name: config.name, transport: config.transport,
@@ -439,14 +439,9 @@ public final class MCPManager: MCPManaging, ToolProvider {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(servers) else { return }
-        let url = BudConfigLoader.mcpURL
-        try? data.write(to: url, options: [.atomic])
         // Server entries carry API keys in `env` and `headers`, so the file is
         // owner-only for the same reason `config.json` is.
-        try? FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: url.path
-        )
+        try? BudConfigLoader.writeOwnerOnly(data, to: BudConfigLoader.mcpURL)
     }
 
     private func persist() { Self.writeStored(servers) }
@@ -461,9 +456,17 @@ public final class MCPManager: MCPManaging, ToolProvider {
 
     private func appendLogLines(_ id: String, _ lines: [String]) {
         guard !lines.isEmpty else { return }
+        // Server output is quoted here verbatim, and this buffer is what the Copy
+        // button puts on the pasteboard. Servers print their own configuration at
+        // startup, so the values this config declares are replaced before a line
+        // is stored rather than on the way out, where only one of the readers
+        // would be covered.
+        let visible = servers.first { $0.id == id }.map { config in
+            lines.map { config.redacting($0) }
+        } ?? lines
         let stamp = Date().formatted(date: .omitted, time: .standard)
         var buffer = logBuffers[id] ?? []
-        buffer.append(contentsOf: lines.map { "[\(stamp)] \($0)" })
+        buffer.append(contentsOf: visible.map { "[\(stamp)] \($0)" })
         if buffer.count > Self.logLimit {
             buffer.removeFirst(buffer.count - Self.logLimit)
         }

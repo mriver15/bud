@@ -452,14 +452,7 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
                         callID: call.id
                     )
                 }
-                messages.append(
-                    ChatMessage(
-                        role: .tool,
-                        content: result.modelFacingText(),
-                        toolCallID: call.id,
-                        name: call.name
-                    )
-                )
+                messages.append(.toolResult(call, result))
             }
         }
 

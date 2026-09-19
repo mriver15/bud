@@ -712,6 +712,20 @@ private struct GeneralSettingsTab: View {
                     Stepper(value: maxToolRoundsBinding, in: 1...64) {
                         limitRow("Tool rounds per turn", "\(model.config.maxToolRounds)")
                     }
+                    Divider().opacity(0.2)
+                    Toggle("Ask before running commands and writing files", isOn: confirmDangerousToolsBinding)
+                        .toggleStyle(.switch)
+                    Text(
+                        model.config.confirmDangerousTools
+                            ? "Shell commands and file writes stop and show you what they are about to do. "
+                                + "Reading, searching and fetching do not ask."
+                            : "The agent runs shell commands and writes files without asking. Anything Bud reads "
+                                + "— a page, an MCP server's reply — is in the same context as your instructions, "
+                                + "so a single sentence in one of them can become a command."
+                    )
+                    .font(Bud.Font.caption)
+                    .foregroundStyle(model.config.confirmDangerousTools ? .tertiary : .secondary)
+                    Divider().opacity(0.2)
                     Stepper(value: subagentConcurrencyBinding, in: 1...32) {
                         limitRow("Subagents in parallel", "\(model.config.allowParallelSubagents)")
                     }
@@ -802,6 +816,16 @@ private struct GeneralSettingsTab: View {
             get: { model.config.allowParallelSubagents },
             set: { newValue in
                 model.config.allowParallelSubagents = newValue
+                model.persistConfig()
+            }
+        )
+    }
+
+    private var confirmDangerousToolsBinding: Binding<Bool> {
+        Binding(
+            get: { model.config.confirmDangerousTools },
+            set: { newValue in
+                model.config.confirmDangerousTools = newValue
                 model.persistConfig()
             }
         )

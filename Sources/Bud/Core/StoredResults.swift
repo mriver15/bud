@@ -46,7 +46,9 @@ public enum StoredResults {
     /// could not be written — in which case the caller truncates, as before.
     @discardableResult
     public static func store(_ text: String) -> String? {
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // A spilled result is where a `run_shell env` or a large `read_file` ends
+        // up, so the directory and the file are both kept to their owner.
+        BudConfigLoader.createOwnerOnlyDirectory(directory)
 
         var body = text
         if let data = body.data(using: .utf8), data.count > maxStoredBytes {
@@ -60,7 +62,7 @@ public enum StoredResults {
 
         let handle = prefix + String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(handleLength)).lowercased()
         do {
-            try Data(body.utf8).write(to: url(for: handle), options: .atomic)
+            try BudConfigLoader.writeOwnerOnly(Data(body.utf8), to: url(for: handle))
         } catch {
             return nil
         }

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security problem
+    url: https://github.com/mriver15/bud/security/advisories/new
+    about: Report a vulnerability privately rather than in a public issue.
+  - name: How Bud works, and how to build it
+    url: https://github.com/mriver15/bud/blob/main/README.md
+    about: The README covers the architecture, the trust model, and every verification command.

@@ -32,10 +32,13 @@ public enum ImageAssets {
         // written and what it is handed to as.
         guard let kind = kind(of: data) else { return nil }
 
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // An image from a server is a picture of whatever that server could see,
+        // so the directory and the file are kept to the owner for the same reason
+        // the browser's screenshots are.
+        BudConfigLoader.createOwnerOnlyDirectory(directory)
         let url = directory.appendingPathComponent("\(UUID().uuidString).\(kind.extension)")
         do {
-            try data.write(to: url, options: .atomic)
+            try BudConfigLoader.writeOwnerOnly(data, to: url)
             prune()
             return url
         } catch {

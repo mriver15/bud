@@ -142,6 +142,83 @@ public final class AppModel {
         }
     }
 
+    // MARK: - Agreeing to something
+
+    /// The request waiting for an answer, if there is one. The UI shows this.
+    public private(set) var pendingConfirmation: ToolConfirmation?
+
+    /// Requests that have arrived but are not on screen yet, in the order they
+    /// asked. A turn can run several tools at once, and two subagents can each be
+    /// waiting, so the gate is a queue rather than a single slot: the second one
+    /// waits its turn instead of overwriting the first, which would leave a tool
+    /// suspended forever on a continuation nobody still holds.
+    private var queuedConfirmations: [(ToolConfirmation, CheckedContinuation<ToolConfirmation.Decision, Never>)] = []
+
+    /// Tools the user has said yes to for the rest of this session. Not persisted,
+    /// because agreeing once mid-task is not the same act as setting a preference.
+    private var sessionApprovedTools: Set<String> = []
+
+    /// Asks before a tool that changes the machine.
+    ///
+    /// Called from the tool, not from the UI, so a subagent's calls are gated too —
+    /// a subagent runs in its own context but on the same machine.
+    public func requestConfirmation(_ request: ToolConfirmation) async -> ToolConfirmation.Decision {
+        guard config.confirmDangerousTools else { return .allow }
+        if sessionApprovedTools.contains(request.tool) { return .allow }
+
+        return await withCheckedContinuation { continuation in
+            queuedConfirmations.append((request, continuation))
+            presentNextConfirmation()
+        }
+    }
+
+    /// Answers the request on screen.
+    ///
+    /// Safe to call when nothing is pending: a double answer, a click that raced a
+    /// keyboard shortcut, or an answer arriving after a cancellation all land here
+    /// and do nothing, because the alternative is a crash on a stray click.
+    public func answerConfirmation(_ decision: ToolConfirmation.Decision) {
+        guard !queuedConfirmations.isEmpty else { return }
+        let (request, continuation) = queuedConfirmations.removeFirst()
+        if decision == .allowForSession {
+            sessionApprovedTools.insert(request.tool)
+        }
+        pendingConfirmation = nil
+        continuation.resume(returning: decision)
+        presentNextConfirmation()
+    }
+
+    /// Puts the next queued request on screen, skipping any the user has already
+    /// covered for this session while it waited.
+    private func presentNextConfirmation() {
+        guard pendingConfirmation == nil else { return }
+
+        while let (request, continuation) = queuedConfirmations.first {
+            if sessionApprovedTools.contains(request.tool) {
+                queuedConfirmations.removeFirst()
+                continuation.resume(returning: .allow)
+                continue
+            }
+            pendingConfirmation = request
+            // The panel may be hidden, or behind something. A question nobody can
+            // see is a hang, so asking brings it forward.
+            NotificationCenter.default.post(name: .budShowPanel, object: nil)
+            return
+        }
+    }
+
+    /// Denies everything waiting. Called when a turn is stopped: the tools a turn
+    /// is blocked on are part of that turn, and leaving one suspended would leave
+    /// the runtime waiting on an answer that is never coming.
+    private func cancelPendingConfirmations() {
+        if pendingConfirmation != nil { pendingConfirmation = nil }
+        let waiting = queuedConfirmations
+        queuedConfirmations = []
+        for (_, continuation) in waiting {
+            continuation.resume(returning: .deny)
+        }
+    }
+
     /// Set by the shell to present the settings window.
     public var onPresentSettings: (@MainActor (SettingsTab) -> Void)?
     /// Set by the shell to quit.
@@ -214,7 +291,12 @@ public final class AppModel {
         }
         agents.refresh()
         let providers: [any ToolProvider] = [
-            NativeToolsProvider(),
+            NativeToolsProvider(confirm: { [weak self] request in
+                // No model means no panel and nobody to ask. An unasked question
+                // is not a yes, so a tool that needs an answer does not get one.
+                guard let self else { return .deny }
+                return await self.requestConfirmation(request)
+            }),
             MemoryToolsProvider(),
             mcp,
             subagents,
@@ -285,6 +367,10 @@ public final class AppModel {
 
     public func stop() {
         notifier.turnCancelled()
+        // A tool blocked on a confirmation is part of the turn being stopped, so
+        // stopping has to answer it. Leaving it suspended would leave the runtime
+        // waiting on a question that is no longer on screen.
+        cancelPendingConfirmations()
         runtime.stop()
     }
 

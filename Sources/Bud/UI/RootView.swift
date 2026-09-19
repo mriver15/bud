@@ -24,6 +24,18 @@ struct RootView: View {
         }
         .frame(minWidth: 380, minHeight: 420)
         .preferredColorScheme(nil)
+        // Over everything, because a command is paused behind it. The panel is
+        // brought forward when the request is made, so this is on screen rather
+        // than waiting in a window nobody is looking at.
+        .overlay {
+            if let request = model.pendingConfirmation {
+                ToolConfirmationView(request: request) { decision in
+                    model.answerConfirmation(decision)
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: model.pendingConfirmation?.id)
         // The surface is switched from outside the header too — the menu bar's
         // history row, and anything that opens or starts a conversation — so it
         // cannot belong to the picker alone.

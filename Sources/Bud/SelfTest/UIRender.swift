@@ -576,6 +576,52 @@ public enum UIRender {
             )
         }
 
+        // MARK: The confirmation surface
+        //
+        // Rendered over a transcript-shaped backdrop rather than on its own,
+        // because what matters is whether it reads as a decision standing in
+        // front of the conversation rather than beside it.
+
+        for (label, request) in [
+            ("confirm-command", ToolConfirmation(
+                tool: "run_shell",
+                headline: "Run this command?",
+                detail: "rm -rf ./build && swift build -c release",
+                note: "in ~/Projects/bud",
+                isCommand: true
+            )),
+            ("confirm-write", ToolConfirmation(
+                tool: "write_file",
+                headline: "Write this file?",
+                detail: "/Users/someone/Projects/bud/Sources/Bud/Core/ToolConfirmation.swift",
+                note: "1,284 characters",
+                preview: "import Foundation\n\n/// One thing the agent wants to do to the machine, waiting for a person\nto agree to it.",
+                isCommand: false
+            )),
+        ] {
+            emit(
+                label,
+                ZStack {
+                    VStack(alignment: .leading, spacing: Bud.Space.sm) {
+                        ForEach(0..<6, id: \.self) { row in
+                            RoundedRectangle(cornerRadius: Bud.Radius.control)
+                                .fill(.white.opacity(0.06))
+                                .frame(height: row.isMultiple(of: 3) ? 46 : 18)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(Bud.Space.md)
+                    ToolConfirmationView(request: request, onAnswer: { _ in })
+                }
+                .frame(width: 520, height: 420)
+                .background(Color.black.opacity(0.30)),
+                width: 520,
+                height: 420,
+                directory: directory,
+                into: &written
+            )
+        }
+
         // MARK: Marketplace with live registry data
 
         emit(

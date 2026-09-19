@@ -174,8 +174,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await model.start() }
     }
 
-    /// `bud://ask?text=…` sends a message, `bud://toggle` shows or hides Bud,
-    /// `bud://settings?tab=marketplace` opens that settings pane,
+    /// `bud://ask?text=…` stages a question in the composer, `bud://toggle` shows
+    /// or hides Bud, `bud://settings?tab=marketplace` opens that settings pane,
     /// `bud://history` shows the archive, and `bud://new` starts a fresh
     /// conversation. Anything else is ignored — an unrecognised link must never
     /// leave the app in a half-open state.
@@ -185,7 +185,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MainActor.assumeIsolated { handle(url) }
     }
 
-    private func handle(_ url: URL) {
+    /// Internal rather than private so the self-test can put a link through it.
+    /// What each route is allowed to do is the point of the whole function, and
+    /// the one that matters most — `ask` — is the one a regression would turn
+    /// back into running on its own.
+    func handle(_ url: URL) {
         let route = url.host()?.lowercased() ?? ""
         switch route {
         case "ask":
@@ -193,11 +197,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let text = items.first { $0.name == "text" }?.value ?? ""
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
-            // Shown before the question is sent: asking from a link is a
-            // deliberate question, so the answer should be on screen when it
-            // arrives rather than waiting behind a hidden window.
-            panels?.show()
-            Task { await model.send(trimmed) }
+            // Staged, never sent. Any local process, script or Shortcuts action
+            // can open a `bud://` link, and the agent this would have started is
+            // one with `run_shell` in its hands — so the question waits in the
+            // composer for a person to press Send, exactly as the Services entry
+            // does. The scheme, the route and the `?text=` parameter are
+            // unchanged; who confirms is what changed.
+            model.compose(trimmed, reveal: true)
 
         case "toggle":
             panels?.toggle()

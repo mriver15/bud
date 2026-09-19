@@ -1,0 +1,45 @@
+name: Feature request
+description: Suggest something Bud should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do that Bud makes hard today. Describe the situation rather than the feature — the situation usually has more than one good answer.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind
+      description: Optional. If you already know what you want built, this is where to say it, and why that shape rather than another.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - The panel and its interface
+        - MCP servers
+        - The marketplace
+        - Subagents and delegation
+        - Generated interfaces
+        - Memory and stored results
+        - The browser
+        - Skills
+        - Updates and releases
+        - Not sure
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: willingness
+    attributes:
+      label: Would you like to work on it?
+      options:
+        - label: I would be willing to open a pull request for this
+          required: false
