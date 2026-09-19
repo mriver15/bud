@@ -455,6 +455,11 @@ public final class MarketplaceStore: MarketplaceProviding {
     /// that npm never answers, therefore changes nothing at all — which is what
     /// keeps a slow or unreachable registry from touching the catalogue.
     private func startNpmProbes() {
+        // Snapshot before anything closes over it. Declaring this below would
+        // shadow the property for the whole function, and the filter below would
+        // then be capturing a name that does not exist yet — which some compilers
+        // accept and others reject outright.
+        let resolver = self.resolver
         var seen = Set<String>()
         let pending = npmCandidates.filter { candidate in
             guard seen.insert(candidate.identity).inserted else { return false }
@@ -462,7 +467,6 @@ public final class MarketplaceStore: MarketplaceProviding {
         }
         guard !pending.isEmpty else { return }
 
-        let resolver = self.resolver
         Task { [weak self] in
             await withTaskGroup(of: Void.self) { group in
                 var next = 0
