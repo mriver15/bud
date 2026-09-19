@@ -566,7 +566,7 @@ over a desktop-like gradient so layout, spacing, typography and contrast can be
 reviewed. It reports the number of distinct colours per surface and flags a blank
 one rather than silently writing an empty file.
 
-Two limits are worth knowing, because both can be mistaken for product bugs:
+Three limits are worth knowing, because all three can be mistaken for product bugs:
 
 - **The backdrop is never composited.** `cacheDisplay` and `ImageRenderer` draw the
   view tree, not the window server's output, so the glass renders as a tint over
@@ -582,6 +582,14 @@ Two limits are worth knowing, because both can be mistaken for product bugs:
   app. The cause is AppKit layout that only completes once a window is actually
   ordered on screen; an offscreen capture cannot reproduce it. Treat `BLANK` as
   "not verifiable this way", not as a failure.
+- **A full pass is slow, and can stall.** Most of the run is fixed cost — the model
+  start, the marketplace probe, the window server — so even a named surface takes
+  about two minutes before its PNG appears. A full pass has also been seen to stop
+  partway and then sit idle rather than finish, at 0% CPU, with no further output;
+  the same stop reproduces on checkouts from before the surface it stopped at
+  existed, so it belongs to the harness rather than to any one view. Naming what
+  you want — `--render-ui /tmp/ui browser` — renders those and skips the rest,
+  which is both what you usually want and has not been seen to stall.
 
 To capture real pixels, grant Screen Recording to your terminal and use
 `screencapture -x out.png`. Note that on macOS 26 `-l<windowid>` and `-R<x,y,w,h>`
