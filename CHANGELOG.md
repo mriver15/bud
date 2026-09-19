@@ -12,6 +12,58 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.8.0
+
+### Pick a model instead of typing one
+
+The Model ID was a free-text field — you had to know the id, which made
+switching models an exercise in reading a provider's docs. It is now a
+dropdown:
+
+- The provider's own model list is fetched from its `/models` endpoint (a real
+  key must produce a real list — the live suite proves it), merged with the
+  curated ids verified for DeepSeek, de-duplicated, and shown in Settings →
+  General. **Custom…** reveals the old field, so an id outside any list is
+  still one keystroke's worth of work rather than impossible.
+- The panel header's model chip gained the same list above *Set model…*, with a
+  checkmark on the active model — switching no longer needs Settings at all.
+- Any failure — no key, a local runtime, a provider without an endpoint —
+  degrades to the curated list plus the default rather than an empty control.
+- The temperature caption stopped saying "DeepSeek's own default" — it now
+  speaks for whichever provider is active.
+
+### The thinking scrolls with the stream
+
+Streamed reasoning rendered inside its own capped box, so the newest thinking
+accumulated below the fold while the visible text sat still. The box now
+follows the stream — pinned to the bottom as deltas arrive — and lets go when
+you scroll up to read earlier thinking, re-engaging on the next turn exactly
+like the transcript's own following behaviour. The disclosure's animation also
+respects Reduce Motion, which an earlier pass had missed.
+
+### A render can no longer touch the real config
+
+Found while shipping the above: the render harness tears its settings views
+down, and Settings persists on disappear — so `--render-ui settings-…` was
+writing the **real** `~/.bud/config.json`, which after the Keychain work means
+stripping the secrets from it. The scratch store is now the whole isolation:
+the database, the spills, the keychain, **and the config directory** are all
+redirected, so a headless run cannot see the real file, let alone write it.
+Proven by mtime: a settings render leaves the real config untouched, and a
+check guards the redirect itself. The keys were recovered from the migration
+backup — the same one that saved them the first time.
+
+### Verification
+
+```
+--self-test       1088/1088   (+8: catalog parsing, merge order, keyless
+                              fallback, and the scratch-isolation guard)
+--verify-ui         25/25     --verify-browser   43/43
+--verify-live      151/151    (+2: the live model-list fetch)
+```
+
+---
+
 ## Bud 2.7.2
 
 ### The web tool the model guessed, now resolves

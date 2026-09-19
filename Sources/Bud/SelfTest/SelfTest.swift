@@ -104,6 +104,8 @@ public enum BudSelfTest {
             toolProvenance,
             budLinks,
             toolConfirmation,
+            scratchIsolation,
+            modelCatalog,
             paletteRanking,
             outlineDelta,
             descriptorCache,
@@ -1348,6 +1350,64 @@ public enum BudSelfTest {
         c.equal("nothing in the archive produces no boundaries",
                 Conversation.exchangeBoundaries(turns: [], messages: []).count, 0)
 
+        return c.report()
+    }
+
+    // MARK: The model dropdown
+
+    /// The catalog's promises: the wire shape parses, the merge keeps order and
+    /// never duplicates, and a provider that cannot fetch still offers its
+    /// curated list plus the default rather than an empty control.
+    static func modelCatalog() async -> SelfTestReport {
+        let c = Checker(suite: "catalog")
+
+        // The standard OpenAI-compatible /models shape.
+        let wire: JSONValue = .object([
+            "data": .array([
+                .object(["id": .string("deepseek-flash")]),
+                .object(["id": .string("deepseek-v4-pro")]),
+                .object(["id": .string("")]),          // junk the merge must drop
+                .object(["id": .string("deepseek-v4-pro")]), // duplicate
+            ]),
+        ])
+        c.equal("the wire shape parses to its ids, junk ids dropped",
+                ModelCatalog.parseModelList(wire), ["deepseek-flash", "deepseek-v4-pro", "deepseek-v4-pro"])
+        c.equal("garbage parses to nothing", ModelCatalog.parseModelList(.object(["data": .string("no")])), [])
+        c.equal("a missing data field parses to nothing", ModelCatalog.parseModelList(.object([:])), [])
+
+        let deepseek = ProviderRegistry.all.first { $0.id == "deepseek" }!
+        c.check("the curated list is populated where it was verified",
+                !deepseek.knownModels.isEmpty)
+
+        let merged = ModelCatalog.merge(
+            curated: deepseek.knownModels,
+            fetched: ["deepseek-flash", "deepseek-v4-pro", "a-future-model"],
+            defaultModel: deepseek.defaultModel
+        )
+        c.equal("the merge keeps first-occurrence order",
+                merged, ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-flash", "a-future-model"])
+        c.check("...and the default is always present",
+                deepseek.defaultModel.map(merged.contains) == true)
+
+        // A provider that cannot fetch — non-OpenAI-compatible, or no key — still
+        // offers something to pick.
+        let anthropic = ProviderRegistry.all.first { $0.id == "anthropic" }!
+        let keyless = await ModelCatalog.models(for: anthropic, key: "")
+        c.check("a keyless provider still offers its default",
+                anthropic.defaultModel.map(keyless.contains) == true)
+
+        return c.report()
+    }
+
+    /// The scratch store is the whole isolation: a headless run must not see the
+    /// real config directory, or a settings render's persist-on-disappear writes
+    /// the user's file — which is how a render once stripped their keys.
+    static func scratchIsolation() -> SelfTestReport {
+        let c = Checker(suite: "isolation")
+        c.check(
+            "a scratch run's config directory is not the real one",
+            BudConfigLoader.budDirectory.path.hasPrefix(FileManager.default.temporaryDirectory.path)
+        )
         return c.report()
     }
 

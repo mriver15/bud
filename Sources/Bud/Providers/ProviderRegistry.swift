@@ -44,6 +44,12 @@ public struct ProviderDescriptor: Sendable, Hashable, Identifiable {
     public var requiresKey: Bool
     /// A sensible starting model, used to prefill the field for a new provider.
     public var defaultModel: String?
+    /// Models Bud has verified against the provider and ships in the picker,
+    /// shown before the `/models` fetch lands and kept when it fails.
+    ///
+    /// Most providers leave this empty: their suggested default is always
+    /// offered, and the fetch fills in the rest.
+    public var knownModels: [String]
     /// Shown in Settings, for anything a user should know before configuring it.
     public var note: String?
     /// Template for an endpoint whose *host* names a region, with `{region}` as
@@ -66,6 +72,7 @@ public struct ProviderDescriptor: Sendable, Hashable, Identifiable {
         docURL: String? = nil,
         requiresKey: Bool = true,
         defaultModel: String? = nil,
+        knownModels: [String] = [],
         note: String? = nil,
         regionTemplate: String? = nil,
         regions: [String] = []
@@ -78,6 +85,7 @@ public struct ProviderDescriptor: Sendable, Hashable, Identifiable {
         self.docURL = docURL
         self.requiresKey = requiresKey
         self.defaultModel = defaultModel
+        self.knownModels = knownModels
         self.note = note
         self.regionTemplate = regionTemplate
         self.regions = regions
@@ -128,7 +136,8 @@ public enum ProviderRegistry {
         ProviderDescriptor(
             id: "deepseek", name: "DeepSeek", wireFormat: .openAICompatible,
             baseURL: "https://api.deepseek.com/v1", envKeys: ["DEEPSEEK_API_KEY"],
-            docURL: "https://api-docs.deepseek.com", defaultModel: "deepseek-v4-flash"
+            docURL: "https://api-docs.deepseek.com", defaultModel: "deepseek-v4-flash",
+            knownModels: ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-flash"]
         ),
         ProviderDescriptor(
             id: "openai", name: "OpenAI", wireFormat: .openAICompatible,

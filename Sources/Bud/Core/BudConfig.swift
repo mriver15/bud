@@ -441,9 +441,18 @@ public struct BudConfig: Sendable, Codable, Hashable {
 // MARK: - Loading
 
 public enum BudConfigLoader {
-    public static let budDirectory: URL = FileManager.default
+    private static let budDirectoryLock = NSLock()
+    private nonisolated(unsafe) static var _budDirectory: URL = FileManager.default
         .homeDirectoryForCurrentUser
         .appendingPathComponent(".bud", isDirectory: true)
+    /// Where Bud's own files live. The headless modes redirect this to a
+    /// throwaway directory, so a check or a render can never write — or strip —
+    /// the real config the way a settings render once did. Lock-guarded like the
+    /// keychain store: read or written only under the lock.
+    public static var budDirectory: URL {
+        get { budDirectoryLock.withLock { _budDirectory } }
+        set { budDirectoryLock.withLock { _budDirectory = newValue } }
+    }
 
     public static var configURL: URL { budDirectory.appendingPathComponent("config.json") }
     public static var mcpURL: URL { budDirectory.appendingPathComponent("mcp.json") }

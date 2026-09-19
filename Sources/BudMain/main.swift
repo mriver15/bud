@@ -19,6 +19,11 @@ func useScratchStore() {
     try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     BudDatabase.shared = BudDatabase(url: directory.appendingPathComponent("bud.sqlite"))
     StoredResults.overrideDirectory = directory.appendingPathComponent("store", isDirectory: true)
+    // The config file too. A settings render used to fire the app's own
+    // persist-on-disappear into the real config.json — stripping the secrets a
+    // save no longer writes. The scratch store is the whole isolation: database,
+    // spills, keychain, and now the config directory itself.
+    BudConfigLoader.budDirectory = directory.appendingPathComponent("config", isDirectory: true)
     // The same isolation for secrets: a headless run must never read the real
     // Keychain — the consent prompt is a hang, and a migration into a throwaway
     // store would be a key's last stop. The exact-identifier gate in BudConfig

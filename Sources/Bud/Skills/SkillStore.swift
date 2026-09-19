@@ -8,8 +8,11 @@ import Foundation
 /// one with a text editor has done the right thing in every case — there is no
 /// sync step to forget and no state that can disagree with the disk.
 public enum SkillStore {
-    private static let defaultDirectory = BudConfigLoader.budDirectory
-        .appendingPathComponent("skills", isDirectory: true)
+    /// Read per call, not captured once: the headless modes redirect the bud
+    /// directory after this file's static initialisers have run.
+    private static var defaultDirectory: URL {
+        BudConfigLoader.budDirectory.appendingPathComponent("skills", isDirectory: true)
+    }
 
     /// Redirects the store, and nothing but the test suite sets it.
     ///

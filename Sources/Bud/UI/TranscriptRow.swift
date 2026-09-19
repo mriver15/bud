@@ -368,6 +368,13 @@ private struct ReasoningDisclosure: View {
     /// answer lands without fighting anyone who opened it deliberately.
     @BudState private var chosen: Bool?
 
+    /// Whether the inner scroll still follows the stream. The reader scrolling up
+    /// to look at earlier thinking opts out for the rest of the turn; a new turn
+    /// re-engages it, exactly like the transcript's own following behaviour.
+    @BudState private var followsStream = true
+
+    private static let reasoningBottom = "bud.reasoning.bottom"
+
     private var isExpanded: Bool {
         visibility.isExpanded(isStreaming: isStreaming, chosen: chosen)
     }
@@ -375,7 +382,7 @@ private struct ReasoningDisclosure: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button {
-                withAnimation(.snappy(duration: 0.18)) { chosen = !isExpanded }
+                Bud.animate(.snappy(duration: 0.18)) { chosen = !isExpanded }
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "chevron.right")
@@ -399,16 +406,29 @@ private struct ReasoningDisclosure: View {
             .buttonStyle(.plain)
 
             if isExpanded {
-                ScrollView {
-                    Text(text)
-                        .font(Bud.Font.callout)
-                        .italic()
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        Text(text)
+                            .font(Bud.Font.callout)
+                            .italic()
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Color.clear.frame(height: 1).id(Self.reasoningBottom)
+                    }
+                    .frame(maxHeight: 220)
+                    .onScrollPhaseChange { _, phase in
+                        if phase != .idle { followsStream = false }
+                    }
+                    .onChange(of: text) { _, _ in
+                        guard isStreaming, followsStream else { return }
+                        proxy.scrollTo(Self.reasoningBottom, anchor: .bottom)
+                    }
+                    .onChange(of: isStreaming) { _, streaming in
+                        if streaming { followsStream = true }
+                    }
                 }
-                .frame(maxHeight: 220)
                 .padding(Bud.Space.sm)
                 .background {
                     RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)

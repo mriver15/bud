@@ -453,6 +453,26 @@ public enum BudLiveVerification {
             c.check("find_image: what it finds renders in a surface", false)
         }
 
+        // MARK: The model catalog, live
+
+        // The dropdown's source of truth is the provider's own /models answer.
+        // A real key must produce a real list — one containing the ids the
+        // curated list verified — or the control falls back silently.
+        let deepseek = ProviderRegistry.all.first { $0.id == "deepseek" }!
+        // A hermetic run has no config keys — the scratch config is empty by
+        // design — so the live check resolves the key the way a headless runtime
+        // does: from the environment.
+        let catalogKey = config.providerKeys["deepseek"].flatMap { $0.isEmpty ? nil : $0 }
+            ?? ProcessInfo.processInfo.environment["DEEPSEEK_API_KEY"]
+        if let catalogKey, !catalogKey.isEmpty {
+            let models = await ModelCatalog.models(for: deepseek, key: catalogKey)
+            c.check("deepseek: the live model list comes back non-empty", !models.isEmpty)
+            c.check("deepseek: ...and the curated ids are in it",
+                    deepseek.knownModels.allSatisfy(models.contains))
+        } else {
+            c.check("deepseek: a configured key exists to fetch the model list", false)
+        }
+
         // MARK: Agent runtime, end to end
 
         let runtimeEnv = AppEnvironment(config: config)

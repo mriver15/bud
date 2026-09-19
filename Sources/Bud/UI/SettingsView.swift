@@ -115,9 +115,16 @@ private struct GeneralSettingsTab: View {
     @BudState private var probe: Probe = .idle
     @BudState private var ompLine = "checking…"
     @BudState private var budget: ContextBudget?
+    /// The merged model list for the active provider, loaded once per provider
+    /// change. Held apart from `model` so the picker can show the curated list
+    /// synchronously while the fetch is in flight.
+    @BudState private var modelCatalog: [String] = []
+    @BudState private var catalogProviderID = ""
+    @BudState private var showsCustomModelField = false
 
     private static let knownEfforts = ["low", "medium", "high", "max"]
     private static let glamaKeysURLString = "https://glama.ai/settings/api-keys"
+    private static let customModelTag = "bud.custom-model"
 
     var body: some View {
         ScrollView {
@@ -582,6 +589,7 @@ private struct GeneralSettingsTab: View {
                                !suggested.isEmpty,
                                suggested != model.config.model {
                                 Button("Use \(suggested)") {
+                                    showsCustomModelField = false
                                     model.config.model = suggested
                                     model.persistConfig()
                                 }
@@ -589,13 +597,23 @@ private struct GeneralSettingsTab: View {
                                 .font(Bud.Font.caption)
                             }
                         }
-                        TextField(
-                            model.config.activeProvider.defaultModel ?? "model-id",
-                            text: modelIDBinding
-                        )
-                        .textFieldStyle(.roundedBorder)
-                        .font(Bud.Font.mono)
-                        .onSubmit { model.persistConfig() }
+                        Picker("Model", selection: modelPickerSelection) {
+                            ForEach(modelOptions, id: \.self) { modelID in
+                                Text(modelID).tag(modelID)
+                            }
+                            Text("Custom…").tag(Self.customModelTag)
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 240, alignment: .leading)
+                        if showsCustomModelField || model.config.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            TextField(
+                                model.config.activeProvider.defaultModel ?? "model-id",
+                                text: modelIDBinding
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .font(Bud.Font.mono)
+                            .onSubmit { model.persistConfig() }
+                        }
                         Text("Sent verbatim to \(model.config.activeProvider.name).")
                             .font(Bud.Font.caption)
                             .foregroundStyle(.tertiary)
@@ -650,7 +668,7 @@ private struct GeneralSettingsTab: View {
                                     .frame(width: 40, alignment: .trailing)
                             }
                         } else {
-                            Text("DeepSeek's own default applies.")
+                            Text("The provider's default applies.")
                                 .font(Bud.Font.caption)
                                 .foregroundStyle(.tertiary)
                         }
@@ -658,14 +676,64 @@ private struct GeneralSettingsTab: View {
                 }
             }
         }
+        .task(id: model.config.provider) {
+            await loadModelCatalog()
+        }
     }
-
 
     private var modelIDBinding: Binding<String> {
         Binding(
             get: { model.config.model },
             set: { model.config.model = $0 }
         )
+    }
+
+    /// The models offered for the active provider, plus the currently configured
+    /// model when the provider has never heard of it. Curated + default appear
+    /// synchronously, so the picker is populated before the fetch lands.
+    private var modelOptions: [String] {
+        let active = model.config.activeProvider
+        let base = catalogProviderID == model.config.provider
+            ? modelCatalog
+            : ModelCatalog.curated(active)
+        var options = base
+        let current = model.config.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !current.isEmpty, !options.contains(current) {
+            options.append(current)
+        }
+        return options
+    }
+
+    /// The picker's selection, mapping the "Custom…" entry to the editing state
+    /// rather than to a real model id.
+    private var modelPickerSelection: Binding<String> {
+        Binding(
+            get: {
+                if showsCustomModelField { return Self.customModelTag }
+                let current = model.config.model.trimmingCharacters(in: .whitespacesAndNewlines)
+                return modelOptions.contains(current) ? current : Self.customModelTag
+            },
+            set: { selection in
+                if selection == Self.customModelTag {
+                    showsCustomModelField = true
+                } else {
+                    showsCustomModelField = false
+                    if selection != model.config.model {
+                        model.config.model = selection
+                        model.persistConfig()
+                    }
+                }
+            }
+        )
+    }
+
+    /// Loads the active provider's model list once per provider change.
+    private func loadModelCatalog() async {
+        let provider = model.config.activeProvider
+        let key = model.config.resolvedKey(for: provider)
+        let merged = await ModelCatalog.models(for: provider, key: key)
+        catalogProviderID = provider.id
+        modelCatalog = merged
     }
 
     /// The picker must always have a valid selection, so an effort that came from

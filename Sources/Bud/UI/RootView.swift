@@ -14,6 +14,11 @@ struct RootView: View {
     @BudState private var onboarding: OnboardingState?
     /// The ⌘K command palette, over whatever surface is showing.
     @BudState private var showsPalette = false
+    /// The merged model list for the active provider, for the header's quick
+    /// switch. Loaded once per provider change; the curated list stands in while
+    /// the fetch is in flight.
+    @BudState private var modelCatalog: [String] = []
+    @BudState private var catalogProviderID = ""
 
     init(model: AppModel) {
         self.model = model
@@ -75,6 +80,13 @@ struct RootView: View {
             }
             await model.start()
             await prepareOnboarding()
+        }
+        .task(id: model.config.provider) {
+            let provider = model.config.activeProvider
+            let key = model.config.resolvedKey(for: provider)
+            let merged = await ModelCatalog.models(for: provider, key: key)
+            catalogProviderID = provider.id
+            modelCatalog = merged
         }
     }
 
@@ -194,6 +206,18 @@ struct RootView: View {
                 }
             }
             Divider()
+            ForEach(headerModelOptions, id: \.self) { modelID in
+                Button {
+                    model.setModel(modelID)
+                } label: {
+                    if modelID == model.config.model {
+                        Label(modelID, systemImage: "checkmark")
+                    } else {
+                        Text(modelID)
+                    }
+                }
+            }
+            Divider()
             Button("Set model…") { model.openSettings(tab: .general) }
         } label: {
             HStack(spacing: Bud.Space.xs) {
@@ -209,6 +233,22 @@ struct RootView: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help("\(model.config.activeProvider.name) · \(model.config.model)")
+    }
+
+    /// The models offered for the active provider, plus the currently configured
+    /// model when the provider has never heard of it. The curated list stands in
+    /// until the fetch lands, so the quick switch is never empty.
+    private var headerModelOptions: [String] {
+        let active = model.config.activeProvider
+        let base = catalogProviderID == model.config.provider
+            ? modelCatalog
+            : ModelCatalog.curated(active)
+        var options = base
+        let current = model.config.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !current.isEmpty, !options.contains(current) {
+            options.append(current)
+        }
+        return options
     }
 
     /// The model, shortened for a 460pt header.
