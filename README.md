@@ -7,6 +7,8 @@ draw its own interface when prose is the wrong shape.
 
 Built for macOS 26 with Swift 6 strict concurrency. No third-party packages.
 
+![Bud's panel on a fresh install: a floating glass window with a sparkle-marked header reading Bud, tabs for Chat, Agents, Browser and History, the words "Ask me something" over one line about what it can do and what it will not pretend to, four suggested questions, and a composer showing the active model, reasoning effort and tool count](docs/panel.png)
+
 ---
 
 ## Contents
