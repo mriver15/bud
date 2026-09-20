@@ -129,6 +129,10 @@ public struct BudConfig: Sendable, Codable, Hashable {
     /// the `render_ui` tool. Ships only if the experiment's token/latency and
     /// repair-rate numbers beat the tool approach.
     public var uiOutputDialect: Bool
+    /// Which engine answers the routing batch when the adaptive planner is on.
+    /// Deterministic is the floor; provider runs the session model and falls
+    /// back to deterministic on any failure. A Jev adapter joins later.
+    public var decisionEngine: DecisionEngineID
     /// How much of the conversation the model is sent, in characters.
     ///
     /// History grew without limit: a tool result is capped at 24,000 characters
@@ -286,6 +290,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         compactSchemas: Bool = false,
         contextCompilerV2: Bool = false,
         uiOutputDialect: Bool = false,
+        decisionEngine: DecisionEngineID = .deterministic,
         historyBudgetChars: Int = 120_000,
         hasCompletedOnboarding: Bool = false,
         updateRepo: String = BudConfig.defaultUpdateRepo,
@@ -312,6 +317,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         self.compactSchemas = compactSchemas
         self.contextCompilerV2 = contextCompilerV2
         self.uiOutputDialect = uiOutputDialect
+        self.decisionEngine = decisionEngine
         self.historyBudgetChars = historyBudgetChars
         self.hasCompletedOnboarding = hasCompletedOnboarding
         self.updateRepo = updateRepo
@@ -655,6 +661,12 @@ public enum BudConfigLoader {
         if let v = stored.compactSchemas { config.compactSchemas = v }
         if let v = stored.contextCompilerV2 { config.contextCompilerV2 = v }
         if let v = stored.uiOutputDialect { config.uiOutputDialect = v }
+        // Stored as a raw string so a future value (e.g. "jev") written by a
+        // newer build degrades to the deterministic floor here instead of
+        // breaking the whole config load.
+        if let v = stored.decisionEngine {
+            config.decisionEngine = DecisionEngineID(rawValue: v) ?? .deterministic
+        }
         if let v = stored.historyBudgetChars { config.historyBudgetChars = v }
         if let v = stored.hasCompletedOnboarding { config.hasCompletedOnboarding = v }
         return config
@@ -1014,6 +1026,7 @@ public enum BudConfigLoader {
         public var compactSchemas: Bool?
         public var contextCompilerV2: Bool?
         public var uiOutputDialect: Bool?
+        public var decisionEngine: String?
         public var historyBudgetChars: Int?
         public var hasCompletedOnboarding: Bool?
 
@@ -1062,6 +1075,9 @@ public enum BudConfigLoader {
             self.compactSchemas = config.compactSchemas ? true : nil
             self.contextCompilerV2 = config.contextCompilerV2 ? true : nil
             self.uiOutputDialect = config.uiOutputDialect ? true : nil
+            self.decisionEngine = config.decisionEngine == .deterministic
+                ? nil
+                : config.decisionEngine.rawValue
             self.historyBudgetChars = config.historyBudgetChars
             // Left out when false, like `compactSchemas`: the default is what a
             // fresh install already is, and the flag is only written once the
@@ -1094,6 +1110,7 @@ public enum BudConfigLoader {
             compactSchemas: Bool? = nil,
             contextCompilerV2: Bool? = nil,
             uiOutputDialect: Bool? = nil,
+            decisionEngine: String? = nil,
             hasCompletedOnboarding: Bool? = nil,
             apiKey: String? = nil,
             baseURL: String? = nil
@@ -1121,6 +1138,7 @@ public enum BudConfigLoader {
             self.compactSchemas = compactSchemas
             self.contextCompilerV2 = contextCompilerV2
             self.uiOutputDialect = uiOutputDialect
+            self.decisionEngine = decisionEngine
             self.hasCompletedOnboarding = hasCompletedOnboarding
             self.apiKey = apiKey
             self.baseURL = baseURL

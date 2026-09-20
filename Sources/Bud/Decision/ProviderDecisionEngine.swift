@@ -13,10 +13,18 @@ public struct ProviderDecisionEngine: DecisionEngine {
 
     private let backend: any ChatBackend
     private let model: String
+    /// Where the decision call's token spend is reported, so a per-round
+    /// classifier does not make the session's usage accounting lie.
+    public var onUsage: (@Sendable (Int, Int) -> Void)?
 
-    public init(backend: any ChatBackend, model: String) {
+    public init(
+        backend: any ChatBackend,
+        model: String,
+        onUsage: (@Sendable (Int, Int) -> Void)? = nil
+    ) {
         self.backend = backend
         self.model = model
+        self.onUsage = onUsage
     }
 
     public func evaluate(
@@ -41,7 +49,14 @@ public struct ProviderDecisionEngine: DecisionEngine {
 
         var text = ""
         for try await event in backend.stream(request) {
-            if case .contentDelta(let delta) = event { text += delta }
+            switch event {
+            case .contentDelta(let delta):
+                text += delta
+            case .usage(let prompt, let completion, _):
+                onUsage?(prompt, completion)
+            default:
+                break
+            }
         }
         return try Self.parse(text, questions: questions)
     }

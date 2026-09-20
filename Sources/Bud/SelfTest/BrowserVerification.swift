@@ -280,8 +280,11 @@ public enum BudBrowserVerification {
         c.check("cancel: a cancelled load throws rather than hangs", cancelledCleanly)
         // WebKit's isLoading flag lags the navigation callback by a beat, so the
         // settle is waited for rather than raced — the property is that the stop
-        // lands, not that it lands before the next line executes.
-        let settled = await Self.waitUntil(timeout: 5) { !engine.webView.isLoading }
+        // lands, not that it lands before the next line executes. Fifteen
+        // seconds rather than five: a loaded CI runner can keep the KVO-driven
+        // flag up far past the local case, and the bound still catches a stop
+        // that never lands.
+        let settled = await Self.waitUntil(timeout: 15) { !engine.webView.isLoading }
         c.check("cancel: ...and the engine is no longer loading", settled)
 
         // The engine must still be usable afterwards: a second load succeeds.

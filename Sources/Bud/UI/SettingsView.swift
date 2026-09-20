@@ -835,6 +835,27 @@ private struct GeneralSettingsTab: View {
                     .font(Bud.Font.caption)
                     .foregroundStyle(.tertiary)
                     Divider().opacity(0.2)
+                    HStack(spacing: Bud.Space.sm) {
+                        Text("Decision engine")
+                            .font(Bud.Font.callout)
+                        Spacer(minLength: Bud.Space.sm)
+                        Picker("Decision engine", selection: decisionEngineBinding) {
+                            ForEach(DecisionEngineID.allCases, id: \.self) { engine in
+                                Text(engine.label).tag(engine)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 260, alignment: .leading)
+                    }
+                    Text(
+                        "Who answers the routing questions when Context compiler v2 is on. "
+                            + "Deterministic is rules-only and offline; Provider asks the session "
+                            + "model and falls back to deterministic when it fails or answers "
+                            + "nonsense."
+                    )
+                    .font(Bud.Font.caption)
+                    .foregroundStyle(.tertiary)
+                    Divider().opacity(0.2)
                     Stepper(value: subagentConcurrencyBinding, in: 1...32) {
                         limitRow("Subagents in parallel", "\(model.config.allowParallelSubagents)")
                     }
@@ -965,6 +986,16 @@ private struct GeneralSettingsTab: View {
             get: { model.config.uiOutputDialect },
             set: { newValue in
                 model.config.uiOutputDialect = newValue
+                model.persistConfig()
+            }
+        )
+    }
+
+    private var decisionEngineBinding: Binding<DecisionEngineID> {
+        Binding(
+            get: { model.config.decisionEngine },
+            set: { newValue in
+                model.config.decisionEngine = newValue
                 model.persistConfig()
             }
         )

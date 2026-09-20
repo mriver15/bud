@@ -12,6 +12,21 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.11.2
+
+### The decision engine becomes selectable
+
+Settings › Limits gains a **Decision engine** picker: Deterministic
+(rules-only, offline — the default) or Provider (the session model, with
+token accounting and automatic fallback to the deterministic batch when it
+fails or answers nonsense). A provider's judgments are compared against the
+deterministic view in the shadow trace, and a future engine value in the
+config degrades safely instead of breaking the load.
+
+Also: the browser-cancel verification now waits longer for WebKit's loading
+flag to settle, fixing the CI flake that failed a couple of main-branch runs.
+
+
 ## Bud 2.11.1
 
 ### The rollout flags reach Settings
