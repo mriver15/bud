@@ -22,8 +22,8 @@ public final class AgentRuntime {
     /// when the budget is doing something rather than leaving it a silent trim.
     public private(set) var droppedFromHistory = 0
     /// The catalogue currently rendered into the system prompt, and which skills
-    /// it promotes. Kept so the front of the prompt only changes when the answer
-    /// does.
+    /// it promotes. Kept so the front of the prompt only changes when the
+    /// ranking does; the compiler consumes what this cache produced.
     private var renderedSkills = ""
     private var promotedSkills: [String] = []
 
@@ -42,34 +42,47 @@ public final class AgentRuntime {
     /// last summary is stale; the actual summarisation runs after the turn.
     private var summarisationOwed = false
 
+    /// Phase 1 of the context-harness rework: every round leaves a shadow
+    /// ContextMap describing what the request path decided, without touching the
+    /// payload. Kept as a bounded ring so a long conversation leaves its recent
+    /// rounds inspectable rather than its oldest.
+    public private(set) var shadowMaps: [ContextMap] = []
+    /// Planner-vs-map divergences from the shadow runs, newest last. The trace
+    /// surface for the phase; a later CapabilityIndex phase reads it as its
+    /// baseline.
+    public private(set) var shadowDivergences: [String] = []
+    private var shadowRound = 1
+
+    /// Phase 2 of the context-harness rework: the assembly seam. The runtime
+    /// performs the retrieval (notes, skill ranking) and hands the compiler
+    /// typed inputs; the compiler produces the payload the request is built
+    /// from, byte-identical to the pre-extraction path.
+    private let compiler: any ContextCompiling = ContextCompiler()
+
+    /// Phase 6: adaptive planning state. Sticky evidence admits what succeeded
+    /// recently; the decision batch and retrieval from planning feed the
+    /// memory resolver; the exposed/used bookkeeping is the planner-regret
+    /// telemetry.
+    private var stickyEvidence = StickyEvidence()
+    private var lastDecisionBatch: DecisionBatch?
+    private var lastRetrieval: [MemoryCandidate] = []
+    /// Regret signals for the turn that just settled, newest last. The
+    /// eval-driven tuning phase mines these rather than guessing at thresholds.
+    public private(set) var plannerRegret: [String] = []
+    private var exposedToolNames: Set<String> = []
+    private var usedToolNames: Set<String> = []
+    private var failOpenCount = 0
+    private var aliasRecoveries: [String] = []
+    private var recallCalls = 0
+    /// The execution gate (Phase 7), set by the app: the runtime feeds it the
+    /// round's execution assessment and injection advisories; the providers
+    /// ask it before anything mutates.
+    public var harness: ExecutionHarness?
+
     /// What was last asked. The catalogue is ranked against the current request,
     /// and the newest user message is the whole of what "current" means here.
     private func latestUserMessage() -> String {
         history.last { $0.role == .user }?.content ?? ""
-    }
-
-    /// The tail of the conversation, for ranking what is worth remembering.
-    ///
-    /// The subject of a conversation is mostly in its tail: what was said a dozen
-    /// turns ago is a weaker guess at what a note would be used for than what was
-    /// said in the last exchange. Tool results are skipped — they are the largest
-    /// thing in the history and the least like something a note is about — and
-    /// every message is capped, because this is a query to rank against rather
-    /// than context to send.
-    ///
-    /// Apart from the runtime so it can be exercised without one, like `bounded`:
-    /// what makes the cut is the whole of the behaviour.
-    nonisolated static func conversationTail(
-        of history: [ChatMessage],
-        messages: Int = 6,
-        perMessage: Int = 1_500
-    ) -> String {
-        var tail: [String] = []
-        for message in history.reversed() where message.role == .user || message.role == .assistant {
-            tail.append(String(message.content.prefix(perMessage)))
-            if tail.count == messages { break }
-        }
-        return tail.reversed().joined(separator: "\n")
     }
 
     /// What the model is currently being sent, before the budget trims it. Shown
@@ -159,6 +172,18 @@ public final class AgentRuntime {
         contextSummary = nil
         summaryAtMessageCount = nil
         summarisationOwed = false
+        shadowMaps.removeAll()
+        shadowDivergences.removeAll()
+        shadowRound = 1
+        stickyEvidence = StickyEvidence()
+        lastDecisionBatch = nil
+        lastRetrieval.removeAll()
+        plannerRegret.removeAll()
+        exposedToolNames.removeAll()
+        usedToolNames.removeAll()
+        failOpenCount = 0
+        aliasRecoveries.removeAll()
+        recallCalls = 0
     }
 
     public func stop() {
@@ -264,7 +289,15 @@ public final class AgentRuntime {
         let tools: [ToolDescriptor]
         let names: Set<String>
         let allDescriptors: [ToolDescriptor]
+        /// The whole inventory, agent-only included: the planner plans over the
+        /// offered subset, while the shadow ContextMap also inventories what is
+        /// reachable only by delegation.
+        let fullInventory: [ToolDescriptor]
         let optOutServers: Set<String>
+        let context: ToolPlanningContext
+        /// The capability index for fail-open resolution, built when
+        /// contextCompilerV2 is on; nil keeps the pre-index fail-open path.
+        let index: CapabilityIndex?
     }
 
     /// What the MCP provider knows about the servers behind it.
@@ -294,13 +327,45 @@ public final class AgentRuntime {
         context.recentToolNames = recentToolNames()
         context.connectedServers = servers.connected
 
-        let plan = ToolPlanner.plan(context: context, descriptors: offered)
+        let plan: ToolPlan
+        let index: CapabilityIndex?
+        if env.config.contextCompilerV2 {
+            // Phase 6: the typed decision batch decides exposure, with sticky
+            // evidence and explicit intent feeding the resolver.
+            let built = CapabilityIndex.build(descriptors: all, alwaysOn: ToolPlanner.alwaysOnCore)
+            index = built
+            let state = DecisionState(
+                query: context.query,
+                surface: context.surface,
+                attachmentPaths: context.attachmentPaths,
+                recentToolNames: context.recentToolNames,
+                connectedServers: context.connectedServers,
+                round: shadowRound
+            )
+            let questions = DecisionQuestions.initial(domains: built.capabilities.map(\.id) + ["none"])
+            let batch = (try? await DeterministicDecisionEngine().evaluate(state: state, questions: questions))
+                ?? DecisionBatch(engineID: "deterministic", answers: [])
+            lastDecisionBatch = batch
+            lastRetrieval = MemoryRetriever.retrieve(query: context.query, budget: 600)
+            plan = CapabilityResolver.stageA(
+                state: state,
+                batch: batch,
+                descriptors: offered,
+                stickyTools: stickyEvidence.activeTools(currentRound: shadowRound)
+            ).plan
+        } else {
+            index = nil
+            plan = ToolPlanner.plan(context: context, descriptors: offered)
+        }
         return RoundPlan(
             plan: plan,
             tools: applySchemaCompaction(plan.descriptors, optOutServers: servers.optOut),
             names: Set(plan.descriptors.map(\.name)),
             allDescriptors: offered,
-            optOutServers: servers.optOut
+            fullInventory: all,
+            optOutServers: servers.optOut,
+            context: context,
+            index: index
         )
     }
 
@@ -396,7 +461,9 @@ public final class AgentRuntime {
     /// back empty.
     private func askForSummary() async -> String? {
         let config = env.config
-        var messages = [systemMessage()] + boundedHistory()
+        let compiled = compiler.compile(compileInputs(tools: [], omittedNote: nil))
+        droppedFromHistory = compiled.metadata.droppedHistoryCharacters
+        var messages = [ChatMessage(role: .system, content: compiled.system)] + compiled.messages
         messages.append(ChatMessage(role: .user, content: HistoryCompactor.summarisePrompt))
         let request = ChatRequest(
             model: config.model,
@@ -450,9 +517,45 @@ public final class AgentRuntime {
         }
 
         await runRounds(limit: max(1, config.maxToolRounds))
+        finalizeRegret()
         // The turn has settled; a request that crossed the watermark marked a
         // summarisation as owed, and this is where it is paid.
         await summariseIfOwed()
+    }
+
+    /// Turns the turn's exposure/usage bookkeeping into named regret signals,
+    /// filed as evidence for the eval-driven tuning phase.
+    private func finalizeRegret() {
+        var lines: [String] = []
+        let unused = exposedToolNames.subtracting(usedToolNames)
+        if !unused.isEmpty {
+            lines.append("unused_exposed_tool: \(unused.sorted().joined(separator: ", "))")
+        }
+        if failOpenCount > 0 {
+            lines.append("missed_capability: fail-open expanded \(failOpenCount) time(s)")
+        }
+        for alias in aliasRecoveries {
+            lines.append("alias_recovery: \(alias)")
+        }
+        if recallCalls > 0 {
+            lines.append("memory_miss: the model called recall \(recallCalls) time(s) mid-task")
+        }
+        plannerRegret.append(contentsOf: lines)
+        for line in lines {
+            CognitiveStore.recordContextEvent(
+                requestID: nil,
+                sourceType: "planner",
+                sourceID: nil,
+                action: "regret",
+                score: nil,
+                reason: line
+            )
+        }
+        exposedToolNames.removeAll()
+        usedToolNames.removeAll()
+        failOpenCount = 0
+        aliasRecoveries.removeAll()
+        recallCalls = 0
     }
 
     private func runRounds(limit: Int) async {
@@ -475,15 +578,23 @@ public final class AgentRuntime {
             if case .toolCalls(let calls) = outcome,
                let missing = calls.first(where: { !plan.names.contains($0.name) }),
                let expandedPlan = ToolPlanner.expanded(
-                   for: plan.plan, requestedTool: missing.name, allDescriptors: plan.allDescriptors
+                   for: plan.plan, requestedTool: missing.name, allDescriptors: plan.allDescriptors,
+                   capabilities: plan.index
                ) {
                 let expanded = RoundPlan(
                     plan: expandedPlan,
                     tools: applySchemaCompaction(expandedPlan.descriptors, optOutServers: plan.optOutServers),
                     names: Set(expandedPlan.descriptors.map(\.name)),
                     allDescriptors: plan.allDescriptors,
-                    optOutServers: plan.optOutServers
+                    fullInventory: plan.fullInventory,
+                    optOutServers: plan.optOutServers,
+                    context: plan.context,
+                    index: plan.index
                 )
+                failOpenCount += 1
+                if expandedPlan.reason.contains("(as ") {
+                    aliasRecoveries.append(expandedPlan.reason)
+                }
                 assistant.segments.append(
                     .notice(id: UUID().uuidString, text: expandedPlan.reason, kind: .info)
                 )
@@ -521,6 +632,14 @@ public final class AgentRuntime {
                 turns[turnIndex] = assistant
                 statusText = ""
                 lastError = nil
+
+                // Phase 8 experiment: under the flag, an envelope in the final
+                // answer becomes the surface, and the history records the prose
+                // without it.
+                if env.config.uiOutputDialect {
+                    extractOutputDialect(from: &assistant)
+                    turns[turnIndex] = assistant
+                }
 
                 recordAnswer(assistant)
 
@@ -592,14 +711,22 @@ public final class AgentRuntime {
         markSummarisationIfNeeded()
 
         let note = ToolPlanner.omittedNote(plan.plan.omitted)
+        exposedToolNames.formUnion(plan.tools.map(\.name))
+        let compiled = compiler.compile(compileInputs(tools: plan.tools, omittedNote: note))
+        droppedFromHistory = compiled.metadata.droppedHistoryCharacters
         let request = ChatRequest(
             model: config.model,
-            messages: [systemMessage(omittedNote: note)] + boundedHistory(),
-            tools: plan.tools,
+            messages: [ChatMessage(role: .system, content: compiled.system)] + compiled.messages,
+            tools: compiled.tools,
             temperature: config.temperature,
             maxTokens: config.maxTokens,
             reasoningEffort: config.reasoningEffort
         )
+
+        // Shadow diagnostics, run only after the payload is final: the map
+        // describes the request that was built and never participates in
+        // building it. Phase 1's entire safety argument is this ordering.
+        await recordShadowMap(plan: plan, compiled: compiled)
 
         // Tool call fragments arrive keyed by index; names/ids land on the first
         // fragment for that index and arguments dribble in afterwards.
@@ -739,6 +866,21 @@ public final class AgentRuntime {
 
         statusText = ""
 
+        // Sticky evidence and regret bookkeeping: what actually ran, and
+        // whether it worked.
+        usedToolNames.formUnion(calls.map(\.name))
+        recallCalls += calls.filter { $0.name == "recall" }.count
+        for call in calls {
+            if let result = results[call.id] {
+                stickyEvidence.record(tool: call.name, succeeded: !result.isError, round: shadowRound)
+            }
+        }
+        // Advisory only: results that read like instructions tighten what the
+        // next approval dialog says. The deterministic gate still decides.
+        harness?.noteInjectionSuspicion(
+            results.values.contains { ExecutionPolicy.looksLikeInstructions($0.text) }
+        )
+
         // Tool execution is this whole span, from the moment the calls were about
         // to run to the moment the last result landed.
         var phases = turns[turnIndex].phases ?? TurnPhases()
@@ -774,143 +916,183 @@ public final class AgentRuntime {
 
     // MARK: - Prompt construction
 
-    // MARK: - What the conversation costs
+    /// Phase 1 shadow recording: runs the deterministic analysis over the same
+    /// planning inputs the planner saw, with the budget the compiler measured
+    /// for the payload that was actually built. Runs once per round, after
+    /// `streamRound` compiled the payload, and writes only to the runtime's own
+    /// diagnostics.
+    private func recordShadowMap(plan: RoundPlan, compiled: CompiledContext) async {
+        var map = RequestAnalyzer.analyze(
+            inputs: RequestAnalyzer.Inputs(
+                query: plan.context.query,
+                surface: plan.context.surface,
+                attachmentPaths: plan.context.attachmentPaths,
+                recentToolNames: plan.context.recentToolNames,
+                connectedServers: plan.context.connectedServers,
+                round: shadowRound
+            ),
+            descriptors: plan.fullInventory,
+            plan: plan.plan,
+            notesCharacters: compiled.metadata.notesCharacters,
+            promotedSkills: compiled.metadata.promotedSkills,
+            budget: compiled.metadata.ledger
+        )
 
-    /// The conversation as the model receives it, trimmed to the budget.
-    ///
-    /// History grew without limit. A result is capped at 24,000 characters when it
-    /// arrives and nothing capped the total, so every round re-sent every result
-    /// the conversation had ever produced — and the conversation that most needs a
-    /// long one is the one that called the most tools.
-    ///
-    /// Only tool *results* are emptied, and only their contents. The call and its
-    /// result have to stay paired or the provider rejects the whole request, so a
-    /// dropped result becomes a line saying it was dropped rather than a missing
-    /// message. Oldest first, and never the newest: the newest result is the one
-    /// the model has not read yet.
-    ///
-    /// This bounds what the *model* carries, not what happened. `turns` keeps the
-    /// full text, the transcript keeps showing it, and the model is told how to
-    /// recover — call the tool again, or `read_stored` when the result had already
-    /// spilled to the store — which is true, and is all the recovery it needs.
-    private func boundedHistory() -> [ChatMessage] {
-        let bounded = Self.bounded(history, budget: env.config.historyBudgetChars)
-        droppedFromHistory = bounded.dropped
-        return bounded.messages
-    }
-
-    /// The trimming itself, apart from the runtime so it can be exercised without
-    /// one: what gets emptied and what does not is the whole of the behaviour.
-    nonisolated static func bounded(
-        _ messages: [ChatMessage],
-        budget: Int
-    ) -> (messages: [ChatMessage], dropped: Int) {
-        guard budget > 0, !messages.isEmpty else { return (messages, 0) }
-
-        var total = messages.reduce(0) { $0 + $1.content.count }
-        guard total > budget else { return (messages, 0) }
-
-        var bounded = messages
-        var dropped = 0
-        for index in bounded.indices {
-            guard total > budget, index < bounded.count - 1 else { break }
-            guard bounded[index].role == .tool else { continue }
-            let content = bounded[index].content
-            // Not worth emptying something the marker would be nearly as long as.
-            guard content.count > dropThreshold else { continue }
-            let marker = droppedMarker(for: content)
-            guard marker.count < content.count else { continue }
-            total -= content.count - marker.count
-            dropped += content.count
-            bounded[index].content = marker
+        // Phase 4 shadow: cognitive-store retrieval joins the map's memory
+        // candidates, and each inclusion is filed as an evidence event for the
+        // recall evals. Diagnostics only — the payload was already built.
+        let retrieval = MemoryRetriever.retrieve(query: plan.context.query, budget: 600)
+        map.memories.append(contentsOf: retrieval)
+        CognitiveStore.recordContextEvent(
+            requestID: map.id.uuidString,
+            sourceType: "memory",
+            sourceID: nil,
+            action: "shadow-retrieval",
+            score: nil,
+            reason: "retrieved \(retrieval.count) candidate(s) for the round"
+        )
+        for candidate in retrieval {
+            CognitiveStore.recordContextEvent(
+                requestID: map.id.uuidString,
+                sourceType: candidate.id.split(separator: ":").first.map(String.init) ?? "memory",
+                sourceID: candidate.id,
+                action: "included",
+                score: nil,
+                reason: candidate.reason
+            )
         }
-        return (bounded, dropped)
-    }
+        // Phase 7: the gate sees the round's posture — advisory context for
+        // whatever the person is asked to approve.
+        harness?.updateAssessment(map.execution)
 
-    /// Below this a result is cheaper to send than to explain away. The marker is
-    /// now under ~90 characters, so this sits a few times above it: a result has
-    /// to be comfortably larger than its replacement before the rewrite is worth
-    /// the churn.
-    nonisolated private static let dropThreshold = 200
+        shadowRound += 1
+        shadowMaps.append(map)
+        if shadowMaps.count > 32 { shadowMaps.removeFirst() }
+        shadowDivergences.append(contentsOf: ContextMapTrace.divergences(map: map, plan: plan.plan))
 
-    nonisolated private static func droppedMarker(for content: String) -> String {
-        if let handle = storedHandle(in: content) {
-            // A spilled result keeps its handle: the data is still on disk, and
-            // `read_stored` is how the model gets back to it.
-            return "[dropped to fit the budget; still stored as \(handle) — read_stored to retrieve.]"
+        // Phase 5 shadow: the typed decision batch over the same state, compared
+        // against the analyzer's map and filed as evidence. The deterministic
+        // engine costs nothing to run; the comparison is the parity check the
+        // phase's exit criterion asks for.
+        let index = CapabilityIndex.build(
+            descriptors: plan.fullInventory, alwaysOn: ToolPlanner.alwaysOnCore
+        )
+        let state = DecisionState(
+            query: plan.context.query,
+            surface: plan.context.surface,
+            attachmentPaths: plan.context.attachmentPaths,
+            recentToolNames: plan.context.recentToolNames,
+            connectedServers: plan.context.connectedServers,
+            round: shadowRound
+        )
+        let engine = DeterministicDecisionEngine()
+        let decisionStart = Date()
+        let questions = DecisionQuestions.initial(
+            domains: index.capabilities.map(\.id) + ["none"]
+        )
+        if let batch = try? await engine.evaluate(state: state, questions: questions) {
+            let latencyMs = Date().timeIntervalSince(decisionStart) * 1000
+            shadowDivergences.append(contentsOf: DecisionTrace.compare(batch: batch, map: map, plan: plan.plan))
+            shadowDivergences.append(
+                String(format: "decision batch: %d of %d answers in %.2f ms (%@)",
+                       batch.answers.count, questions.count, latencyMs, batch.engineID)
+            )
+            for answer in batch.answers {
+                CognitiveStore.recordContextEvent(
+                    requestID: map.id.uuidString,
+                    sourceType: "decision",
+                    sourceID: answer.questionID,
+                    action: "answered",
+                    score: answer.confidence,
+                    reason: "\(answer.rationale) — " + answer.kindDescription
+                )
+            }
         }
-        return "[dropped \(BudFormat.count(content.count)) characters; call the tool again to see it.]"
+
+        // Phase 3 shadow: the capability index's view of the same round, next to
+        // the planner's. What the index resolves that the planner held back is a
+        // potential missed capability; a delegate the query names is the
+        // delegation the compact spawn path would resolve.
+        let offeredGroups = Set(plan.plan.descriptors.map(\.providerName))
+        for match in index.resolve(plan.context.query)
+        where match.confidence >= ContextMapTrace.activateThreshold {
+            if match.capability.isDelegate {
+                shadowDivergences.append(
+                    "index resolves '\(plan.context.query)' to delegate '\(match.capability.id)' "
+                        + "(" + String(format: "%.2f", match.confidence) + ", \(match.reason))"
+                )
+            } else if !offeredGroups.contains(match.capability.id) {
+                shadowDivergences.append(
+                    "index activates '\(match.capability.id)' (\(match.reason)) but the planner omitted it"
+                )
+            }
+        }
+        if shadowDivergences.count > 200 {
+            shadowDivergences.removeFirst(shadowDivergences.count - 200)
+        }
     }
 
-    /// The `store_` handle a spilled result carries, when its data is still there.
+    /// Phase 8 experiment: a final answer that carried a `bud-ui` envelope
+    /// renders its surface from the answer, with the envelope itself removed
+    /// from the prose both on screen and in the model-facing history.
+    private func extractOutputDialect(from turn: inout Turn) {
+        let result = UISpecDecoder.decode(turn.plainText)
+        guard let payload = result.rawJSON, result.payload.ui != nil else { return }
+
+        var segments: [Segment] = []
+        for segment in turn.segments {
+            if case .text = segment { continue }
+            segments.append(segment)
+        }
+        let markdown = result.payload.markdown
+        if !markdown.isEmpty {
+            segments.append(.text(id: UUID().uuidString, text: markdown))
+        }
+        segments.append(.ui(id: UUID().uuidString, payload: payload))
+        turn.segments = segments
+    }
+
+    /// The compiler inputs one request needs: retrieval first, compilation
+    /// second, so the compiler itself stays a pure transformation.
     ///
-    /// The spill marker sits at the end of the content, so the *last* handle in
-    /// the text is the one for this result; any earlier one is part of the result's
-    /// own text. A handle is only kept when the file still exists — a token that
-    /// merely looks like a handle points nowhere.
-    nonisolated private static func storedHandle(in content: String) -> String? {
-        guard let expression = try? NSRegularExpression(pattern: #"store_[0-9a-fA-F]{8}"#) else {
-            return nil
-        }
-        let range = NSRange(content.startIndex..., in: content)
-        guard let match = expression.matches(in: content, range: range).last,
-              let tokenRange = Range(match.range, in: content) else { return nil }
-        let token = String(content[tokenRange]).lowercased()
-        return FileManager.default.fileExists(atPath: StoredResults.url(for: token).path) ? token : nil
-    }
-
-    private func systemMessage(omittedNote: String? = nil) -> ChatMessage {
+    /// Notes are read on every request rather than once at init, because a fact
+    /// the model records with `remember` halfway through a conversation has to
+    /// reach the next round. Ranked against the tail of the conversation,
+    /// because which notes are worth their full text depends on what is being
+    /// discussed, and what is being discussed is in the last thing said rather
+    /// than the first.
+    ///
+    /// The skill catalogue is ranked against what was just asked, and
+    /// re-rendered only when that changes which skills are promoted. The
+    /// catalogue sits at the front of the prompt, which is the part a provider
+    /// caches, so rewriting it on every message to say the same thing would
+    /// cost more than the lines it saves.
+    private func compileInputs(tools: [ToolDescriptor], omittedNote: String?) -> CompilationInputs {
         let config = env.config
-        var text = config.systemPrompt
-        text += "\nDefault model for this session: \(config.model)."
-        if let effort = config.reasoningEffort { text += " Reasoning effort: \(effort)." }
-
-        // Read on every request rather than once at init, because a fact the
-        // model records with `remember` halfway through a conversation has to
-        // reach the next round; a copy taken when the runtime was built would
-        // only surface after a restart. An empty result means there is nothing
-        // to say, and an empty "things you remember" heading would cost a
-        // paragraph of context to tell the model it knows nothing.
-        //
-        // Ranked against the tail of the conversation, because which notes are
-        // worth their full text depends on what is being discussed, and what is
-        // being discussed is in the last thing said rather than the first.
-        //
-        // Fenced, because this is the system prompt: a note is written from
-        // whatever the model was told, including a sentence that arrived in a
-        // fetched page or an MCP result, and here it sits in the most-trusted
-        // part of the request with nothing to say it is data.
-        let notes = BudStore.lessonContext(Self.conversationTail(of: history))
-        if !notes.isEmpty { text += "\n\n" + ToolProvenance.rememberedNotes(notes) }
-
-        // Read on every request for the same reason the notes are: a skill
-        // installed halfway through a conversation has to be usable in it.
-        //
-        // Ranked against what was just asked, and re-rendered only when that
-        // changes which skills are promoted. The catalogue sits at the front of the
-        // prompt, which is the part a provider caches, so rewriting it on every
-        // message to say the same thing would cost more than the lines it saves.
+        let notes = BudStore.lessonContext(ContextCompiler.conversationTail(of: history))
         let catalogue = SkillContext.catalogue(query: latestUserMessage())
         if catalogue.promoted != promotedSkills {
             promotedSkills = catalogue.promoted
             renderedSkills = catalogue.text
         }
-        if !renderedSkills.isEmpty { text += "\n\n" + renderedSkills }
-
-        // What the planner held back this turn, so the model knows the rest
-        // exists and can summon it by name rather than assuming it was never there.
-        if let omittedNote, !omittedNote.isEmpty {
-            text += "\n\n" + omittedNote
-        }
-
-        // The one line that changes every minute rides last. Providers cache the
-        // front of the prompt, so keeping the volatile clock at the end means a
-        // new timestamp invalidates only the tail instead of the whole stable
-        // prefix above it.
-        let stamp = DateFormatter()
-        stamp.dateFormat = "EEEE, d MMMM yyyy, HH:mm"
-        text += "\n\nCurrent time: \(stamp.string(from: Date()))."
-
-        return ChatMessage(role: .system, content: text)
+        return CompilationInputs(
+            systemPrompt: config.systemPrompt,
+            model: config.model,
+            reasoningEffort: config.reasoningEffort,
+            historyBudgetChars: config.historyBudgetChars,
+            history: history,
+            tools: tools,
+            notes: notes,
+            skillCatalogue: renderedSkills,
+            promotedSkills: promotedSkills,
+            memorySection: env.config.contextCompilerV2
+                ? MemoryResolver.section(
+                    needsMemory: lastDecisionBatch?.answer(for: "needs_memory")?.booleanValue,
+                    candidates: lastRetrieval
+                )
+                : "",
+            omittedNote: omittedNote,
+            now: Date()
+        )
     }
 }

@@ -119,6 +119,16 @@ public struct BudConfig: Sendable, Codable, Hashable {
     /// off by default because a server may write its argument contract in its
     /// descriptions — a server that does can opt out per server.
     public var compactSchemas: Bool
+    /// Phase 3 of the context-harness rework, off → shadow → on: when true,
+    /// the parent prompt carries the compact capability index instead of the
+    /// serialized delegate roster, and fail-open expansion resolves capability
+    /// language against the index. Off until the harness proves parity.
+    public var contextCompilerV2: Bool
+    /// Phase 8 experiment: when true, a final answer carrying a `bud-ui`
+    /// envelope renders its surface from the answer itself instead of through
+    /// the `render_ui` tool. Ships only if the experiment's token/latency and
+    /// repair-rate numbers beat the tool approach.
+    public var uiOutputDialect: Bool
     /// How much of the conversation the model is sent, in characters.
     ///
     /// History grew without limit: a tool result is capped at 24,000 characters
@@ -274,6 +284,8 @@ public struct BudConfig: Sendable, Codable, Hashable {
         allowParallelSubagents: Int = 6,
         confirmDangerousTools: Bool = true,
         compactSchemas: Bool = false,
+        contextCompilerV2: Bool = false,
+        uiOutputDialect: Bool = false,
         historyBudgetChars: Int = 120_000,
         hasCompletedOnboarding: Bool = false,
         updateRepo: String = BudConfig.defaultUpdateRepo,
@@ -298,6 +310,8 @@ public struct BudConfig: Sendable, Codable, Hashable {
         self.allowParallelSubagents = allowParallelSubagents
         self.confirmDangerousTools = confirmDangerousTools
         self.compactSchemas = compactSchemas
+        self.contextCompilerV2 = contextCompilerV2
+        self.uiOutputDialect = uiOutputDialect
         self.historyBudgetChars = historyBudgetChars
         self.hasCompletedOnboarding = hasCompletedOnboarding
         self.updateRepo = updateRepo
@@ -639,6 +653,8 @@ public enum BudConfigLoader {
         if let v = stored.allowParallelSubagents { config.allowParallelSubagents = v }
         if let v = stored.confirmDangerousTools { config.confirmDangerousTools = v }
         if let v = stored.compactSchemas { config.compactSchemas = v }
+        if let v = stored.contextCompilerV2 { config.contextCompilerV2 = v }
+        if let v = stored.uiOutputDialect { config.uiOutputDialect = v }
         if let v = stored.historyBudgetChars { config.historyBudgetChars = v }
         if let v = stored.hasCompletedOnboarding { config.hasCompletedOnboarding = v }
         return config
@@ -996,6 +1012,8 @@ public enum BudConfigLoader {
         public var allowParallelSubagents: Int?
         public var confirmDangerousTools: Bool?
         public var compactSchemas: Bool?
+        public var contextCompilerV2: Bool?
+        public var uiOutputDialect: Bool?
         public var historyBudgetChars: Int?
         public var hasCompletedOnboarding: Bool?
 
@@ -1042,6 +1060,8 @@ public enum BudConfigLoader {
             // the common case, and a config file should not grow a key for every
             // install that never turned it on.
             self.compactSchemas = config.compactSchemas ? true : nil
+            self.contextCompilerV2 = config.contextCompilerV2 ? true : nil
+            self.uiOutputDialect = config.uiOutputDialect ? true : nil
             self.historyBudgetChars = config.historyBudgetChars
             // Left out when false, like `compactSchemas`: the default is what a
             // fresh install already is, and the flag is only written once the
@@ -1072,6 +1092,8 @@ public enum BudConfigLoader {
             allowParallelSubagents: Int? = nil,
             confirmDangerousTools: Bool? = nil,
             compactSchemas: Bool? = nil,
+            contextCompilerV2: Bool? = nil,
+            uiOutputDialect: Bool? = nil,
             hasCompletedOnboarding: Bool? = nil,
             apiKey: String? = nil,
             baseURL: String? = nil
@@ -1097,6 +1119,8 @@ public enum BudConfigLoader {
             self.allowParallelSubagents = allowParallelSubagents
             self.confirmDangerousTools = confirmDangerousTools
             self.compactSchemas = compactSchemas
+            self.contextCompilerV2 = contextCompilerV2
+            self.uiOutputDialect = uiOutputDialect
             self.hasCompletedOnboarding = hasCompletedOnboarding
             self.apiKey = apiKey
             self.baseURL = baseURL

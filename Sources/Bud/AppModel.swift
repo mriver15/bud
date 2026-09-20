@@ -80,6 +80,10 @@ public final class AppModel {
     public let mcp: MCPManager
     public let marketplace: MarketplaceStore
     public let subagents: SubagentSupervisor
+    /// The one execution gate (Phase 7): native tools and MCP mutations both
+    /// ask through it, and the runtime feeds it the round's execution
+    /// assessment and injection advisories.
+    public let harness: ExecutionHarness
     /// What can be delegated to: the built-ins, plus whatever the installed skills
     /// and connected servers add. Rebuilt whenever either changes.
     public let agents = AgentRegistry()
@@ -274,6 +278,10 @@ public final class AppModel {
         self.marketplace = MarketplaceStore()
         self.subagents = SubagentSupervisor(env: env, agents: agents)
         self.update = UpdateModel()
+        // One execution gate for native tools and MCP mutations (Phase 7). The
+        // dialog asker is wired after `self` is complete — it captures the
+        // panel — and both providers share the one gate.
+        self.harness = ExecutionHarness()
         // Wired here because this is the first moment `self` is complete enough
         // to be captured. The closure reads `onQuit` when it is called, not when
         // it is set, so the app delegate can still be the one to fill it in.
@@ -282,6 +290,14 @@ public final class AppModel {
             self?.scheduleConversationSave()
             self?.turnFinished()
         }
+        harness.setConfirmation { [weak self] request in
+            // No model means no panel and nobody to ask. An unasked question
+            // is not a yes, so a tool that needs an answer does not get one.
+            guard let self else { return .deny }
+            return await self.requestConfirmation(request)
+        }
+        mcp.harness = harness
+        runtime.harness = harness
     }
 
     // MARK: Derived state
@@ -337,21 +353,9 @@ public final class AppModel {
             self?.mcp.serverTools(id: server.id) ?? []
         }
         agents.refresh()
-        // MCP mutations ask through the same gate as native tools. The manager
-        // holds the closure rather than reaching for the model, for the same
-        // reason the native provider does: it knows nothing about the panel.
-        mcp.confirm = { [weak self] request in
-            guard let self else { return .deny }
-            return await self.requestConfirmation(request)
-        }
 
         let providers: [any ToolProvider] = [
-            NativeToolsProvider(confirm: { [weak self] request in
-                // No model means no panel and nobody to ask. An unasked question
-                // is not a yes, so a tool that needs an answer does not get one.
-                guard let self else { return .deny }
-                return await self.requestConfirmation(request)
-            }),
+            NativeToolsProvider(harness: harness),
             MemoryToolsProvider(),
             mcp,
             subagents,

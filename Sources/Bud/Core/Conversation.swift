@@ -219,6 +219,11 @@ extension Conversation {
 
                 case .notice(_, let text, _):
                     out += "> \(text)\n\n"
+
+                case .ui:
+                    // A surface does not export as prose; the answer around it
+                    // already says what it shows.
+                    break
                 }
             }
             if let error = turn.error, !error.isEmpty {

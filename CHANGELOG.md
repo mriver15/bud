@@ -12,6 +12,61 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.11.0
+
+### The context harness rework, in place
+
+This is the architecture release: every request now passes through a typed
+harness pipeline — analyze the request, decide what it needs, compile the
+context, and gate what may execute — without changing what any existing
+conversation sees. The full design is in `docs/context-harness-roadmap.md`.
+
+What is in the tree and running:
+
+- **Shadow ContextMap.** Every round records a typed map of what the harness
+  believed was relevant — intent, entities, capability scores, memory and
+  skill candidates, budget, provenance — alongside the payload it actually
+  sent. The two can be compared every round, and the divergence trace is
+  recorded per turn.
+- **ContextCompiler.** Prompt assembly — system text, history bounding, the
+  budget ledger, notes and skill placement — now lives behind one seam and is
+  pinned byte-for-byte against the previous behavior by golden fixtures.
+- **Capability index and delegate resolution.** Behind `contextCompilerV2`,
+  the parent prompt carries one-line capability summaries instead of the
+  serialized agent roster; `spawn_subagents` takes a capability and Bud
+  resolves the agent locally, refusing with the closest names instead of
+  guessing. Fail-open expansion now resolves capability language, not just
+  tool names.
+- **Cognitive memory.** A versioned store for facts, episodes, entities,
+  relations and directives (SQLite + FTS), with supersession instead of
+  overwrites, bounded graph traversal, and ranked, budgeted retrieval.
+  Existing remembered notes migrate in as episodes, and nothing is inferred
+  that was not written.
+- **Typed decisions.** A deterministic decision engine answers the routing
+  questions — capability needs, complexity, mutation intent, domain,
+  ambiguity — as enums and scores, with a provider fallback that fails closed
+  on malformed output.
+- **Adaptive planning.** Under `contextCompilerV2`, the decisions drive which
+  capabilities a round is offered, sticky evidence keeps what succeeded, and
+  a UI-less round no longer pays for the largest schemas. Planner-regret
+  signals (unused tools, fail-open expansions, alias recoveries, memory
+  misses) are filed as evidence.
+- **Execution harness.** Native tools and MCP mutations now ask through one
+  gate with a decision trace; the round's mutation reading and an advisory
+  injection heuristic add context to approval dialogs — advice only, never
+  permission.
+- **Output dialect experiment.** A `bud-ui` envelope a model can speak into
+  its answer, decoded and rendered locally, behind `uiOutputDialect`; the
+  ship decision belongs to the eval numbers.
+- **Eval layer.** Labeled routing and retrieval corpora with a deterministic
+  optimization/holdout split and recall gates, plus `bud --profile --regret`
+  for the regret report and the resolver-vs-planner schema comparison.
+
+Rollout flags `contextCompilerV2` and `uiOutputDialect` remain off by
+default: default-user payloads are byte-identical to 2.10.0. The offline
+suite has grown to 1,286 checks, and the live verification suite covers the
+flag-on path end to end.
+
 ## Bud 2.10.0
 
 ### Every turn can end as a surface

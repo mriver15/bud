@@ -258,6 +258,15 @@ public struct TranscriptRow: View {
                 isTail: isTail(id)
             )
 
+        case .ui(_, let payload):
+            // A surface the model spoke into its answer. Rendered exactly like
+            // a tool-produced one — same card, same actions.
+            GenerativeUIView(
+                spec: payload,
+                onAction: { action in Task { await model.submit(action: action) } },
+                onPrompt: { prompt in Task { await model.send(prompt) } }
+            )
+
         case .notice(_, let text, let kind):
             NoticeBanner(text: text, kind: kind)
         }

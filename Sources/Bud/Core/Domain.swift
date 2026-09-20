@@ -272,11 +272,16 @@ public enum Segment: Sendable, Identifiable {
         resultText: String?,
         ui: JSONValue?
     )
+    /// A surface the model spoke into its answer (the output dialect), rather
+    /// than one a tool call produced. Rendered exactly like a tool's UI
+    /// payload.
+    case ui(id: String, payload: JSONValue)
     case notice(id: String, text: String, kind: NoticeKind)
 
     public var id: String {
         switch self {
-        case .reasoning(let id, _), .text(let id, _), .tool(let id, _, _, _, _, _), .notice(let id, _, _):
+        case .reasoning(let id, _), .text(let id, _), .tool(let id, _, _, _, _, _),
+             .ui(let id, _), .notice(let id, _, _):
             return id
         }
     }
@@ -295,6 +300,10 @@ extension Turn {
             switch segment {
             case .reasoning(_, let text), .text(_, let text), .notice(_, let text, _):
                 parts.append(text)
+            case .ui:
+                // A surface has nothing to search; its title and labels came
+                // from the surrounding prose.
+                break
             case .tool(_, let call, let providerName, _, let resultText, _):
                 parts.append(providerName)
                 parts.append(call.name)
@@ -451,7 +460,7 @@ public struct Turn: Sendable, Identifiable {
 /// both, and can be read by eye when something has gone wrong.
 extension Segment: Codable {
     private enum Kind: String, Codable {
-        case reasoning, text, tool, notice
+        case reasoning, text, tool, ui, notice
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -476,6 +485,8 @@ extension Segment: Codable {
                 resultText: try c.decodeIfPresent(String.self, forKey: .resultText),
                 ui: try c.decodeIfPresent(JSONValue.self, forKey: .ui)
             )
+        case .ui:
+            self = .ui(id: id, payload: try c.decode(JSONValue.self, forKey: .ui))
         case .notice:
             self = .notice(
                 id: id,
@@ -504,6 +515,10 @@ extension Segment: Codable {
             try c.encode(state, forKey: .state)
             try c.encodeIfPresent(resultText, forKey: .resultText)
             try c.encodeIfPresent(ui, forKey: .ui)
+        case .ui(let id, let payload):
+            try c.encode(Kind.ui, forKey: .kind)
+            try c.encode(id, forKey: .id)
+            try c.encode(payload, forKey: .ui)
         case .notice(let id, let text, let kind):
             try c.encode(Kind.notice, forKey: .kind)
             try c.encode(id, forKey: .id)

@@ -498,6 +498,20 @@ public enum BudLiveVerification {
         c.check("runtime: tool result reached the transcript", succeeded)
         c.check("runtime: produced a final answer", !runtime.turns.compactMap { $0.plainText.isEmpty ? nil : $0 }.isEmpty)
 
+        // Phase 1 of the context-harness rework: every round must have left a
+        // shadow ContextMap with provenance and a measured budget. The live run
+        // is the proof the recording sits on the real request path.
+        c.check("context map: the live turn left shadow maps", !runtime.shadowMaps.isEmpty)
+        c.check("context map: ...and each one records its provenance",
+                runtime.shadowMaps.allSatisfy { !$0.provenance.isEmpty })
+        c.check("context map: ...and measured its budget",
+                runtime.shadowMaps.allSatisfy { $0.budget.totalCharacters > 0 })
+
+        // Phase 4: the cognitive retrieval runs against the scratch store every
+        // round and files its evidence, even when nothing matches.
+        c.check("context map: shadow retrieval filed evidence events",
+                CognitiveStore.contextEventCount() > 0)
+
         // The per-turn accounting the transcript footer reads: a real turn must
         // leave real numbers behind, or the footer would silently show nothing
         // and the numbers would be decoration rather than data.
@@ -560,6 +574,48 @@ public enum BudLiveVerification {
             "rewind: dropping an unknown exchange is refused",
             !loaded.deleteFrom(turnAt: 0)
         )
+
+        // MARK: Context compiler v2, end to end
+
+        // Phase 3: under the flag, the spawn description holds the roster back
+        // and capability resolution replaces it. The same echo turn must still
+        // settle — the flag changes what the parent prompt carries, not whether
+        // the loop works.
+        var flagConfig = config
+        flagConfig.contextCompilerV2 = true
+        let flagEnv = AppEnvironment(config: flagConfig)
+        await flagEnv.registry.register(mcp)
+        await flagEnv.registry.register(GenUIToolProvider())
+        let flagAgents = AgentRegistry()
+        flagAgents.rebuild(skills: [], servers: [])
+        await flagEnv.registry.register(SubagentSupervisor(env: flagEnv, agents: flagAgents))
+        let spawnDescriptor = await flagEnv.registry.descriptors()
+            .first { $0.name == SubagentSupervisor.spawnToolName }
+        // The O(1) property: the compact description is built without the
+        // roster, so its length cannot grow with it — asserted against the
+        // full description the same roster produces. (Name-substring checks
+        // would trip on the shared guidance text, which mentions what a scout
+        // cannot do as part of the delegation contract.)
+        c.check("context compiler v2: the spawn description is roster-independent",
+                spawnDescriptor?.description == SubagentSupervisor.spawnDescriptionCompact())
+        // The win is asymptotic: compact costs a fixed amount, the roster
+        // description grows with the roster — asserted against a large one, not
+        // the handful of built-ins a fresh session holds.
+        let largeRoster = (0..<60).map { "- agent\($0): does thing \($0)." }.joined(separator: "\n")
+        c.check("context compiler v2: ...and smaller than a large roster description",
+                (spawnDescriptor?.description.count ?? 0)
+                    < SubagentSupervisor.spawnDescription(roster: largeRoster).count)
+        c.check("context compiler v2: ...and its schema carries the capability field",
+                spawnDescriptor?.schema["properties"]?["tasks"]?["items"]?["properties"]?["capability"]
+                    != nil)
+        let flagRuntime = AgentRuntime(env: flagEnv)
+        flagRuntime.send("Use the echo tool to echo the phrase 'flag works', then tell me what it returned.")
+        let flagSettled = await waitUntil(timeout: 120) { !flagRuntime.isStreaming }
+        c.check("context compiler v2: the turn settles under the flag", flagSettled)
+        c.check("context compiler v2: shadow maps still record", !flagRuntime.shadowMaps.isEmpty)
+        // Phase 6: the adaptive path records what it exposed and never used.
+        c.check("context compiler v2: planner regret is recorded",
+                flagRuntime.plannerRegret.contains { $0.hasPrefix("unused_exposed_tool") })
 
         // MARK: A result too large to send
 

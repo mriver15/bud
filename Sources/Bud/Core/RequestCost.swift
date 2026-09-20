@@ -282,7 +282,7 @@ public enum RequestMeasureCLI {
         return true
     }
 
-    /// The shape of what `AgentRuntime.systemMessage` appends, without a clock
+    /// The shape of what `ContextCompiler.compile` appends, without a clock
     /// reading — a measurement that changes every time it runs is not one you
     /// can compare against the next.
     private static func liveContextSample(config: BudConfig) -> String {
