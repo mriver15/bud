@@ -814,6 +814,27 @@ private struct GeneralSettingsTab: View {
                     .font(Bud.Font.caption)
                     .foregroundStyle(.tertiary)
                     Divider().opacity(0.2)
+                    Toggle("Context compiler v2 (adaptive planning)", isOn: contextCompilerV2Binding)
+                        .toggleStyle(.switch)
+                    Text(
+                        "Rollout flag: typed decisions choose which capabilities each round is offered, "
+                            + "what succeeded stays available, the agent roster leaves the prompt, and "
+                            + "UI schemas are omitted from UI-less rounds. Off until the harness proves "
+                            + "parity with the current planner."
+                    )
+                    .font(Bud.Font.caption)
+                    .foregroundStyle(.tertiary)
+                    Divider().opacity(0.2)
+                    Toggle("UI output dialect (experiment)", isOn: uiOutputDialectBinding)
+                        .toggleStyle(.switch)
+                    Text(
+                        "Experiment: a final answer can draw a surface by speaking it into the reply "
+                            + "(a `bud-ui` block) instead of calling the render_ui tool. Ships only if "
+                            + "the token and repair numbers beat the tool approach."
+                    )
+                    .font(Bud.Font.caption)
+                    .foregroundStyle(.tertiary)
+                    Divider().opacity(0.2)
                     Stepper(value: subagentConcurrencyBinding, in: 1...32) {
                         limitRow("Subagents in parallel", "\(model.config.allowParallelSubagents)")
                     }
@@ -924,6 +945,26 @@ private struct GeneralSettingsTab: View {
             get: { model.config.compactSchemas },
             set: { newValue in
                 model.config.compactSchemas = newValue
+                model.persistConfig()
+            }
+        )
+    }
+
+    private var contextCompilerV2Binding: Binding<Bool> {
+        Binding(
+            get: { model.config.contextCompilerV2 },
+            set: { newValue in
+                model.config.contextCompilerV2 = newValue
+                model.persistConfig()
+            }
+        )
+    }
+
+    private var uiOutputDialectBinding: Binding<Bool> {
+        Binding(
+            get: { model.config.uiOutputDialect },
+            set: { newValue in
+                model.config.uiOutputDialect = newValue
                 model.persistConfig()
             }
         )

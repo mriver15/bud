@@ -12,6 +12,16 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.11.1
+
+### The rollout flags reach Settings
+
+The two harness flags shipped in 2.11.0 as config keys now have toggles in
+Settings › Limits: **Context compiler v2 (adaptive planning)** and **UI
+output dialect (experiment)**, both off by default and persisted like every
+other setting. Nothing else changed.
+
+
 ## Bud 2.11.0
 
 ### The context harness rework, in place
