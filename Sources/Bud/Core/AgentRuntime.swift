@@ -110,6 +110,12 @@ public final class AgentRuntime {
     /// would save a transcript that was still being written.
     public var onTurnFinished: (@MainActor () -> Void)?
 
+    /// Called whenever the runtime is stopped — the Stop button, a rewind, a
+    /// clear, a restore, or shutdown. Every one of those means the work in
+    /// flight is abandoned, which is how the app reaches the subagents a turn
+    /// spawned and cancels them with the turn.
+    public var onStop: (@MainActor () -> Void)?
+
     public init(env: AppEnvironment) {
         self.env = env
     }
@@ -197,6 +203,7 @@ public final class AgentRuntime {
             isStreaming = false
             statusText = "Stopped"
         }
+        onStop?()
     }
 
     /// Appends a user message and runs the turn to completion.

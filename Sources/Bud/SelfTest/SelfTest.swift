@@ -785,6 +785,43 @@ public enum BudSelfTest {
                     !planted.contains(key))
         }
 
+        // The composer's command history: shell-style up/down with draft
+        // restoration, and the cap.
+        c.check("up with no history does nothing",
+                !model.navigateComposerHistory(previous: true))
+        model.composerHistory = ["first", "second"]
+        model.composerText = ""
+        c.check("up recalls the newest command", model.navigateComposerHistory(previous: true))
+        c.equal("...and puts it in the composer", model.composerText, "second")
+        c.check("...again for the one before it", model.navigateComposerHistory(previous: true))
+        c.equal("...which is the oldest", model.composerText, "first")
+        c.check("...and again does nothing past the oldest",
+                !model.navigateComposerHistory(previous: true))
+        c.check("down walks forward", model.navigateComposerHistory(previous: false))
+        c.equal("...to the newer command", model.composerText, "second")
+        c.check("...and off the end restores the draft", model.navigateComposerHistory(previous: false))
+        c.equal("...which was empty", model.composerText, "")
+        model.composerText = "half-written draft"
+        _ = model.navigateComposerHistory(previous: true)
+        _ = model.navigateComposerHistory(previous: true)
+        _ = model.navigateComposerHistory(previous: false)
+        _ = model.navigateComposerHistory(previous: false)
+        c.equal("browsing history never eats the draft", model.composerText, "half-written draft")
+        model.clearComposer()
+        c.equal("Cmd-Backspace erases the composer", model.composerText, "")
+        model.recordComposerHistory("same")
+        model.recordComposerHistory("same")
+        c.equal("repeats do not stack", model.composerHistory.last, "same")
+        for index in 0..<(AppModel.composerHistoryLimit + 10) {
+            model.recordComposerHistory("entry \(index)")
+        }
+        c.equal("the history is capped", model.composerHistory.count, AppModel.composerHistoryLimit)
+        c.equal("...and the oldest fell off", model.composerHistory.first, "entry 10")
+
+        // Stopping a fresh model is a no-op that leaves nothing streaming.
+        model.stop()
+        c.check("stopping a quiet app stays quiet", !model.isStreaming)
+
         return c.report()
     }
 

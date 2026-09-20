@@ -379,6 +379,16 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         task.cancel()
     }
 
+    /// Cancels every live run. Stopping the main conversation is the one signal
+    /// that means "none of this is wanted any more": work a turn spawned
+    /// outlives the turn otherwise, and a stopped question keeps spending model
+    /// calls on findings nobody will read.
+    public func cancelAll() {
+        for id in Array(handles.keys) {
+            cancel(id: id)
+        }
+    }
+
     /// Drops every finished row from the roster. This is a view, not an erasure:
     /// the runs themselves stay in the store, so a run cleared here is still
     /// there on the next launch — which is also what keeps history from being
