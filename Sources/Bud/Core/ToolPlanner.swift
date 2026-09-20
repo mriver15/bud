@@ -75,7 +75,18 @@ public enum ToolPlanner {
     /// out is how a capability stays invisible even while connected: the query
     /// matches no intent, the plan offers only the recovery tools, and the model
     /// never learns the server exists.
-    public static let alwaysOnCore = ["skill", "recall", "read_stored", "remember", "spawn_subagents"]
+    ///
+    /// `render_ui` and `find_image` are the presentation group. The decision to
+    /// draw a surface is made while the answer is being composed, not while the
+    /// question is being asked: a query asking for a comparison or a status
+    /// report names no "render" word an intent signal could match, so promotion
+    /// can never reliably offer them. They must simply always be there. Their
+    /// schemas are the largest in the inventory — the honest price of an answer
+    /// that can always choose to look like one.
+    public static let alwaysOnCore = [
+        "skill", "recall", "read_stored", "remember", "spawn_subagents",
+        GenUIToolProvider.renderToolName, GenUIToolProvider.findToolName,
+    ]
 
     /// The file-reading tools a dropped attachment may justify. Shell and write
     /// are deliberately absent: dropping a file is a request to read it, not a

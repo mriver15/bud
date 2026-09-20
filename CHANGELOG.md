@@ -12,6 +12,24 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.10.0
+
+### Every turn can end as a surface
+
+The planner held `render_ui` back unless the query named it — and a query
+almost never does, because the decision to draw a surface is made while the
+answer is being composed, not while the question is being asked. "Compare
+these three" got prose from a model that can draw cards, tables and charts,
+because it was never offered the tool.
+
+`render_ui` and `find_image` join the always-on core, alongside the recovery
+tools and `spawn_subagents`: a comparison, dashboard or status report is one
+call away on every turn. The default system prompt now pushes the same way —
+reach for a surface whenever the answer has structure, and use `find_image`
+for its pictures. Cost: 6,254 characters — roughly 1,563 tokens — added to
+each request, the two largest schemas in the inventory. The omitted-note and
+fail-open paths still cover everything else held back.
+
 ## Bud 2.9.0
 
 ### Connected servers stop being invisible

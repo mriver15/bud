@@ -14,13 +14,15 @@ public final class GenUIToolProvider: ToolProvider {
 
     /// The model-facing tool name, run through the same sanitiser as every other
     /// provider so the name it sees can never fail DeepSeek's `^[a-zA-Z0-9_-]{1,64}$`.
-    public static let renderToolName = ToolNaming.sanitize("render_ui")
+    /// `nonisolated` because the planner builds its always-on list outside the
+    /// main actor, and a name is pure data.
+    public nonisolated static let renderToolName = ToolNaming.sanitize("render_ui")
 
     public init() {}
 
     /// The picture lookup, which lives here rather than in a provider of its own
     /// because it exists for one purpose: to have something to put in an image.
-    public static let findToolName = ToolNaming.sanitize("find_image")
+    public nonisolated static let findToolName = ToolNaming.sanitize("find_image")
 
     public func toolDescriptors() async -> [ToolDescriptor] {
         [

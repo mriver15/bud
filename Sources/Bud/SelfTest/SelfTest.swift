@@ -819,17 +819,23 @@ public enum BudSelfTest {
         var inventory = ["skill", "recall", "read_stored", "remember",
                          "read_file", "list_files", "run_shell", "write_file",
                          "search_files", "web_fetch", "spawn_subagents"].map { tool($0, "native") }
+        inventory.append(tool(GenUIToolProvider.renderToolName, "Interface"))
+        inventory.append(tool(GenUIToolProvider.findToolName, "Interface"))
         for i in 0..<200 { inventory.append(tool("mock_\(i)", "mockserver")) }
         for i in 0..<13 { inventory.append(tool("browser_\(i)", "Browser")) }
         for i in 0..<8 { inventory.append(tool("acme_\(i)", "acme")) }
 
-        let core = ["skill", "recall", "read_stored", "remember", "spawn_subagents"]
+        let core = ["skill", "recall", "read_stored", "remember", "spawn_subagents",
+                    GenUIToolProvider.renderToolName, GenUIToolProvider.findToolName]
         let generic = ToolPlanner.plan(
             context: ToolPlanningContext(query: "How are you today?"),
             descriptors: inventory
         )
         c.check("a generic turn keeps the recovery core",
                 core.allSatisfy { name in generic.descriptors.contains { $0.name == name } })
+        c.check("a generic turn offers the presentation tools without being asked",
+                generic.descriptors.contains { $0.name == GenUIToolProvider.renderToolName }
+                && generic.descriptors.contains { $0.name == GenUIToolProvider.findToolName })
         c.check("...and stays inside the twelve-descriptor cap (\(generic.descriptors.count) offered)",
                 generic.descriptors.count <= 12)
         c.check("...and says why the rest was held back",
