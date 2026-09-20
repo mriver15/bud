@@ -2509,6 +2509,15 @@ public enum BudSelfTest {
         c.check("a file with no secrets migrates to completion without touching the store",
                 idle.complete)
 
+        // The keychain gate must name the identity the installer stamps: gated
+        // against a bundle id the shipped app never had, the gate was always
+        // false and no secret ever persisted — the bug that ate the TypeSafe
+        // key as soon as it was pasted.
+        c.equal("the gate names the bundle id build-app.sh stamps",
+                BudConfigLoader.installedBundleID, "com.bud.assistant")
+        c.check("...and a headless binary stays outside the real keychain",
+                !BudConfigLoader.usesKeychain)
+
         return c.report()
     }
 

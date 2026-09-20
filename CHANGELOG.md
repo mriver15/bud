@@ -12,6 +12,27 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.11.5
+
+### Secrets actually persist
+
+The Keychain gate compared the running app's identity against
+`com.mriver15.bud`, but the installer stamps `com.bud.assistant` — so the
+gate was always false and no secret ever landed in the Keychain. Keys
+pasted in Settings (providers, marketplace, update token, TypeSafe) lived
+only in memory and vanished on quit; sessions kept working only because
+keys can come from the environment.
+
+The gate now names the identity the installer actually stamps. Re-enter a
+key once after this update and it stays.
+
+**Jev note:** the engine needs Context compiler v2 on before it runs —
+Settings › Limits, both switches. With a key stored and the flag on, every
+round's decision events appear in the evidence store (`engine: jev
+answered…`), and the shadow trace compares Jev's judgments against the
+deterministic view.
+
+
 ## Bud 2.11.4
 
 ### The Agents panel stops re-rendering per token

@@ -545,6 +545,14 @@ public enum BudConfigLoader {
         set { keychainStoreLock.withLock { _keychainStore = newValue } }
     }
 
+    /// The bundle identifier `Scripts/build-app.sh` stamps into the shipped
+    /// app. The Keychain gate compares against exactly this — the identity of
+    /// the installed binary is what binds a Keychain item's access, so the
+    /// gate must name the identity the installer produces, not a different
+    /// one: gated against `com.mriver15.bud` it was always false for the
+    /// shipped app, and no secret ever persisted.
+    static let installedBundleID = "com.bud.assistant"
+
     /// Whether this process is the installed app, which is the only context that
     /// touches the real Keychain.
     ///
@@ -558,7 +566,7 @@ public enum BudConfigLoader {
     /// must not migrate the real file or block on the consent prompt, both of
     /// which have happened with a looser check. The installed app is the one
     /// place the Keychain is used.
-    static var usesKeychain: Bool { Bundle.main.bundleIdentifier == "com.mriver15.bud" }
+    static var usesKeychain: Bool { Bundle.main.bundleIdentifier == installedBundleID }
 
     public static func ensureDirectory() {
         createOwnerOnlyDirectory(budDirectory)
