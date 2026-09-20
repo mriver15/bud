@@ -23,8 +23,9 @@ fails or answers nonsense). A provider's judgments are compared against the
 deterministic view in the shadow trace, and a future engine value in the
 config degrades safely instead of breaking the load.
 
-Also: the browser-cancel verification now waits longer for WebKit's loading
-flag to settle, fixing the CI flake that failed a couple of main-branch runs.
+Also: the browser-cancel verification now asserts the engine's own loading
+state instead of WebKit's internal flag, which stays true while a stalled
+socket is open — the race that failed a couple of main-branch CI runs.
 
 
 ## Bud 2.11.1
