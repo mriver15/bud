@@ -343,13 +343,17 @@ public final class AgentRuntime {
                 round: shadowRound
             )
             let questions = DecisionQuestions.initial(domains: built.capabilities.map(\.id) + ["none"])
-            let batch = (try? await DeterministicDecisionEngine().evaluate(state: state, questions: questions))
-                ?? DecisionBatch(engineID: "deterministic", answers: [])
-            lastDecisionBatch = batch
+            let evaluation = await DecisionEngineCoordinator.evaluate(
+                selection: env.config.decisionEngine,
+                env: env,
+                state: state,
+                questions: questions
+            )
+            lastDecisionBatch = evaluation.batch
             lastRetrieval = MemoryRetriever.retrieve(query: context.query, budget: 600)
             plan = CapabilityResolver.stageA(
                 state: state,
-                batch: batch,
+                batch: evaluation.batch,
                 descriptors: offered,
                 stickyTools: stickyEvidence.activeTools(currentRound: shadowRound)
             ).plan
@@ -997,6 +1001,15 @@ public final class AgentRuntime {
                 String(format: "decision batch: %d of %d answers in %.2f ms (%@)",
                        batch.answers.count, questions.count, latencyMs, batch.engineID)
             )
+            // The planner's configured-engine batch (when it is not the
+            // deterministic view itself) is compared against this deterministic
+            // one: provider judgments are measured, never confused with the
+            // floor.
+            if let planner = lastDecisionBatch, planner.engineID != batch.engineID {
+                shadowDivergences.append(
+                    contentsOf: DecisionTrace.engineDivergence(configured: planner, deterministic: batch)
+                )
+            }
             for answer in batch.answers {
                 CognitiveStore.recordContextEvent(
                     requestID: map.id.uuidString,

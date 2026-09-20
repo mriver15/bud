@@ -1588,6 +1588,71 @@ public enum BudSelfTest {
                 DecisionTrace.compare(batch: quietBatch!, map: browseMap, plan: ToolPlan(descriptors: [], omitted: [], reason: ""))
                     .contains { $0.contains("needs_browser") })
 
+        // Engine divergence: two engines, one state, named disagreements.
+        let divergent = DecisionBatch(engineID: "provider", answers: [
+            DecisionAnswer(questionID: "needs_browser", kind: .boolean(false), confidence: 0.9, rationale: "provider said no"),
+            DecisionAnswer(questionID: "complexity", kind: .choice("trivial"), confidence: 0.8, rationale: ""),
+        ])
+        let agreement = DecisionBatch(engineID: "deterministic", answers: [
+            DecisionAnswer(questionID: "needs_browser", kind: .boolean(true), confidence: 0.9, rationale: ""),
+            DecisionAnswer(questionID: "complexity", kind: .choice("trivial"), confidence: 0.8, rationale: ""),
+        ])
+        c.check("engine disagreements are named lines",
+                DecisionTrace.engineDivergence(configured: divergent, deterministic: agreement)
+                    .contains { $0.contains("needs_browser") && $0.contains("provider") })
+        c.check("engine agreement is silence",
+                DecisionTrace.engineDivergence(configured: agreement, deterministic: agreement).isEmpty)
+
+        // The coordinator: deterministic is the floor, with no fallback path.
+        let env = AppEnvironment(config: BudConfig())
+        let deterministicEval = await DecisionEngineCoordinator.evaluate(
+            selection: .deterministic,
+            env: env,
+            state: DecisionState(query: "hello"),
+            questions: DecisionQuestions.initial(domains: ["none"])
+        )
+        c.equal("the deterministic selection runs the rules", deterministicEval.batch.engineID, "deterministic")
+        c.check("...with no fallback", !deterministicEval.fellBack)
+
+        // The provider selection fails over to the deterministic batch instead
+        // of degrading the round. The failure is hermetic: a custom provider
+        // pointed at a refused loopback port, so the offline suite never dials
+        // a real provider — and the environment's key cannot make it succeed.
+        var failingConfig = BudConfig()
+        failingConfig.provider = ProviderRegistry.customID
+        failingConfig.providerBaseURLs[ProviderRegistry.customID] = "http://127.0.0.1:1"
+        failingConfig.providerModels[ProviderRegistry.customID] = "test"
+        let failingEnv = AppEnvironment(config: failingConfig)
+        let providerEval = await DecisionEngineCoordinator.evaluate(
+            selection: .provider,
+            env: failingEnv,
+            state: DecisionState(query: "hello"),
+            questions: DecisionQuestions.initial(domains: ["none"])
+        )
+        c.check("a failing provider falls back to the deterministic batch",
+                providerEval.fellBack && providerEval.batch.engineID == "deterministic")
+        // Nine of ten: primary_domain stays silent for a query that names
+        // nothing — the deterministic engine refuses to guess, by contract.
+        c.check("...and the fallback batch is answered, not empty",
+                providerEval.batch.answers.count
+                    == DecisionQuestions.initial(domains: ["none"]).count - 1)
+
+        // The selection round-trips, and a future value written by a newer
+        // build degrades to the floor instead of breaking the load.
+        var selecting = BudConfig()
+        selecting.decisionEngine = .provider
+        if let data = try? JSONEncoder().encode(BudConfigLoader.StoredConfig(from: selecting)),
+           let decoded = try? JSONDecoder().decode(BudConfigLoader.StoredConfig.self, from: data) {
+            c.equal("the engine selection survives a save and a load",
+                    BudConfigLoader.apply(decoded, to: BudConfig()).decisionEngine, .provider)
+        } else {
+            c.check("the engine selection round-trips", false)
+        }
+        var future = BudConfigLoader.StoredConfig()
+        future.decisionEngine = "jev"
+        c.equal("an unknown engine name degrades to the deterministic floor",
+                BudConfigLoader.apply(future, to: BudConfig()).decisionEngine, .deterministic)
+
         return c.report()
     }
 

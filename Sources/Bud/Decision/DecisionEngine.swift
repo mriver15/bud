@@ -142,6 +142,23 @@ public enum DecisionQuestions {
 
 // MARK: - Engine
 
+/// Which engine answers the routing batch, as configured (§11 of the
+/// roadmap). `provider` is the configured-LLM fallback for questions the
+/// deterministic rules do not own; a Jev adapter joins as a case when its
+/// endpoint contract exists. Anything unselected still works: the
+/// deterministic engine is always the floor.
+public enum DecisionEngineID: String, Sendable, Codable, CaseIterable {
+    case deterministic
+    case provider
+
+    public var label: String {
+        switch self {
+        case .deterministic: return "Deterministic (rules, offline)"
+        case .provider: return "Provider (the session model)"
+        }
+    }
+}
+
 /// The seam every decision backend satisfies: a typed batch in, a typed batch
 /// out. The deterministic engine is always available; the provider engine is
 /// the configured-LLM fallback; a future local classifier or Jev adapter slots
@@ -233,6 +250,27 @@ public enum DecisionTrace {
             let mapped = map.intent.ambiguous ? "high" : "low"
             if answer != mapped {
                 lines.append("decision 'ambiguity' scores \(answer) but the map reads \(mapped)")
+            }
+        }
+        return lines
+    }
+
+    /// Divergences between a configured engine's batch and the deterministic
+    /// view of the same state. Agreement is silence; each disagreement names
+    /// the question and both answers. Only called when the two engines differ,
+    /// so the deterministic self-comparison never costs a line.
+    public static func engineDivergence(
+        configured: DecisionBatch,
+        deterministic: DecisionBatch
+    ) -> [String] {
+        var lines: [String] = []
+        for answer in deterministic.answers {
+            guard let other = configured.answer(for: answer.questionID) else { continue }
+            if other.kind != answer.kind {
+                lines.append(
+                    "decision '\(answer.questionID)': \(configured.engineID) said "
+                        + "\(other.kindDescription), deterministic said \(answer.kindDescription)"
+                )
             }
         }
         return lines
