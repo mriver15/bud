@@ -26,13 +26,29 @@ public final class AgentRegistry {
     /// those types could not be built in a test without building the app with them.
     public var source: (@MainActor () -> (skills: [Skill], servers: [MCPServerConfig]))?
 
+    /// Each connected server's tool descriptors, for the capability line in its
+    /// summary. The MCP manager exposes them (`serverTools(id:)`); the app hands
+    /// them here alongside `source` so the registry stays passive while the
+    /// summary is built from what a server actually offers.
+    public var serverTools: (@MainActor (MCPServerConfig) -> [ToolDescriptor])?
+
     public init() {}
 
     /// Rebuilds from whatever the app currently has.
     public func refresh() {
         guard let source else { return }
         let material = source()
-        rebuild(skills: material.skills, servers: material.servers)
+        // Descriptions are gathered at rebuild time from the manager's live cache,
+        // not remembered: a server whose tools change gets a refreshed summary the
+        // next time this runs, because `serverTools` re-reads rather than replaying
+        // a snapshot taken at startup.
+        var toolsByServer: [String: [ToolDescriptor]] = [:]
+        if let serverTools {
+            for server in material.servers {
+                toolsByServer[server.id] = serverTools(server)
+            }
+        }
+        rebuild(skills: material.skills, servers: material.servers, toolsByServer: toolsByServer)
     }
 
     /// Rebuilds the roster from what currently exists.
@@ -41,15 +57,23 @@ public final class AgentRegistry {
     /// enabled or disconnected — the roster is a view of those, not a copy that has
     /// to be remembered to be updated.
     ///
+    /// `toolsByServer` carries each server's tool descriptors, keyed by server id,
+    /// so the summary is built from what the server offers rather than a note
+    /// written before it connected. It defaults to empty, which leaves a server
+    /// described by the fallback wording — the truth that is known before its
+    /// tools have been read.
+    ///
     /// **The first definition of a name wins.** Built-ins are collected first, so
     /// `scout` is always the scout; a skill cannot reach in and redefine one by
     /// taking its name. That is the quieter failure of the two — a skill that
     /// silently replaced a built-in would be discovered only by the agent behaving
     /// unlike itself.
-    public func rebuild(skills: [Skill], servers: [MCPServerConfig]) {
+    public func rebuild(skills: [Skill], servers: [MCPServerConfig], toolsByServer: [String: [ToolDescriptor]] = [:]) {
         var collected: [AgentDefinition] = AgentLibrary.builtins
         collected.append(contentsOf: skills.compactMap(AgentLibrary.from(skill:)))
-        collected.append(contentsOf: servers.filter(\.enabled).map(AgentLibrary.from(server:)))
+        collected.append(contentsOf: servers.filter(\.enabled).map {
+            AgentLibrary.from(server: $0, tools: toolsByServer[$0.id] ?? [])
+        })
 
         var seen: Set<String> = []
         let unique = collected.filter { seen.insert($0.name).inserted }
@@ -93,9 +117,18 @@ public final class AgentRegistry {
     /// than the tokens it costs to send it forever.
     public func roster() -> String {
         guard !agents.isEmpty else { return "" }
-        return agents
-            .map { "- \($0.name) — \(firstSentence($0.summary))" }
-            .joined(separator: "\n")
+        return agents.map { agent in
+            let sentence = firstSentence(agent.summary)
+            // A server agent's summary leads with its own name ("get_competitive: …"),
+            // and the roster already names it, so the lead is dropped rather than
+            // said twice. Built-ins and skills lead with their capability, so their
+            // first sentence is kept whole.
+            let lead = agent.name + ":"
+            let body = sentence.hasPrefix(lead)
+                ? String(sentence.dropFirst(lead.count)).trimmingCharacters(in: .whitespaces)
+                : sentence
+            return "- \(agent.name) — \(body)"
+        }.joined(separator: "\n")
     }
 
     private func firstSentence(_ text: String) -> String {

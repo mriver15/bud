@@ -104,6 +104,7 @@ public enum BudSelfTest {
             toolProvenance,
             budLinks,
             toolConfirmation,
+            agentCapabilities,
             scratchIsolation,
             modelCatalog,
             paletteRanking,
@@ -817,12 +818,12 @@ public enum BudSelfTest {
 
         var inventory = ["skill", "recall", "read_stored", "remember",
                          "read_file", "list_files", "run_shell", "write_file",
-                         "search_files", "web_fetch"].map { tool($0, "native") }
+                         "search_files", "web_fetch", "spawn_subagents"].map { tool($0, "native") }
         for i in 0..<200 { inventory.append(tool("mock_\(i)", "mockserver")) }
         for i in 0..<13 { inventory.append(tool("browser_\(i)", "Browser")) }
         for i in 0..<8 { inventory.append(tool("acme_\(i)", "acme")) }
 
-        let core = ["skill", "recall", "read_stored", "remember"]
+        let core = ["skill", "recall", "read_stored", "remember", "spawn_subagents"]
         let generic = ToolPlanner.plan(
             context: ToolPlanningContext(query: "How are you today?"),
             descriptors: inventory
@@ -1408,6 +1409,59 @@ public enum BudSelfTest {
             "a scratch run's config directory is not the real one",
             BudConfigLoader.budDirectory.path.hasPrefix(FileManager.default.temporaryDirectory.path)
         )
+        return c.report()
+    }
+
+    // MARK: Delegation discovery
+
+    /// A connected server's agent must describe its capability, or a model can
+    /// never connect a request to the server that answers it — the exact failure
+    /// that turned "create a pokemon champions team" into eleven web fetches.
+    @MainActor
+    static func agentCapabilities() -> SelfTestReport {
+        let c = Checker(suite: "capabilities")
+
+        let tools = [
+            ToolDescriptor(
+                name: "get_competitive__search_pokemon",
+                description: "Search for a Pokémon by name or type.",
+                schema: .object(["type": .string("object")]),
+                providerID: "get_competitive",
+                providerName: "Get Competitive"
+            ),
+            ToolDescriptor(
+                name: "get_competitive__get_team",
+                description: "Build a competitive team for Pokémon Champions.",
+                schema: .object(["type": .string("object")]),
+                providerID: "get_competitive",
+                providerName: "Get Competitive"
+            ),
+        ]
+        var server = MCPServerConfig(id: "gc", name: "Get Competitive")
+        server.delegated = true
+
+        let agent = AgentLibrary.from(server: server, tools: tools)
+        c.check("a server agent's summary says what its tools do",
+                agent.summary.contains("Search for a Pokémon by name or type"))
+        c.check("...and names the tools",
+                agent.summary.contains("search_pokemon") && agent.summary.contains("get_team"))
+        c.check("...and a delegated server keeps the routing truth",
+                agent.summary.contains("NOT in your tool list"))
+
+        // No descriptions, no invention: the fallback is the old wording.
+        let bare = AgentLibrary.from(server: server, tools: [])
+        c.check("without tool descriptions nothing is invented",
+                bare.summary.contains("Answers from the Get Competitive server"))
+
+        // The roster line the model actually reads is a capability, and the name
+        // is not said twice.
+        let registry = AgentRegistry()
+        registry.rebuild(skills: [], servers: [server], toolsByServer: ["gc": tools])
+        let roster = registry.roster()
+        c.check("the roster reads as a capability", roster.contains("search_pokemon"))
+        c.check("...and does not say the name twice",
+                !roster.contains("get_competitive — get_competitive"))
+
         return c.report()
     }
 

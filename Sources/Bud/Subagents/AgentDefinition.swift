@@ -235,21 +235,16 @@ public enum AgentLibrary {
     /// hundred rows of JSON is worth handing to something that reads all of it and
     /// comes back with the six lines that mattered — and the tools it may use are
     /// the server's, so it cannot wander off and do something else.
-    public static func from(server: MCPServerConfig) -> AgentDefinition {
+    ///
+    /// The summary is a capability, built from the tools the server actually
+    /// offers: a model answering "what does this agent do" reads the name, the
+    /// tool names, and a concrete sentence from the first tool that described
+    /// itself. Nothing is invented, so a server that has not connected yet — and
+    /// therefore has no descriptions — keeps the routing-note wording.
+    public static func from(server: MCPServerConfig, tools: [ToolDescriptor] = []) -> AgentDefinition {
         AgentDefinition(
             name: ToolNaming.sanitize(server.name.lowercased()),
-            // Said outright when the tools are not in the main agent's list: the
-            // model otherwise spends a round discovering that a tool it expected is
-            // not there, and may conclude the server is not connected.
-            summary: server.delegated
-                ? """
-                    Answers from the \(server.name) server. Its tools are NOT in your tool \
-                    list — delegating to this agent is the only way to reach them.
-                    """
-                : """
-                    Answers from the \(server.name) server, using only its own tools. Use it \
-                    when the server returns more than you want to read.
-                    """,
+            summary: Self.summary(for: server, tools: tools),
             instructions: """
                 You are working with the \(server.name) MCP server, and its tools are the \
                 only ones you have.
@@ -266,5 +261,91 @@ public enum AgentLibrary {
             model: nil,
             symbol: "server.rack"
         )
+    }
+
+    /// The capability line a server agent is described by.
+    ///
+    /// Shaped as the sanitised name, the first few tool names, and the first
+    /// sentence of a tool description that says what it does — a capability, not
+    /// a routing note. When the server is delegated the routing truth is appended,
+    /// but the capability leads, because it is what "what does this agent do" is
+    /// answered from. Kept under a hard budget: the description is paid for on
+    /// every request, and a long one does not earn the tokens it costs.
+    private static func summary(for server: MCPServerConfig, tools: [ToolDescriptor]) -> String {
+        let name = ToolNaming.sanitize(server.name.lowercased())
+        // A server that has not connected yet has no tools to describe. Inventing
+        // a capability from nothing would be fabrication, so the routing-note
+        // wording stays — the truth that is known before the server speaks.
+        guard !tools.isEmpty else {
+            return server.delegated
+                ? "Answers from the \(server.name) server. Its tools are NOT in your tool list — delegating to this agent is the only way to reach them."
+                : "Answers from the \(server.name) server, using only its own tools. Use it when the server returns more than you want to read."
+        }
+
+        let names = tools.prefix(3).map { bareToolName($0.name, namespace: server.namespace) }
+        var line = "\(name): \(names.joined(separator: ", "))"
+        if let sentence = concreteSentence(tools.map(\.description)) {
+            line += " — \(sentence)"
+        }
+        // Said outright when the tools are not in the main agent's list: the
+        // model otherwise spends a round discovering that a tool it expected is
+        // not there, and may conclude the server is not connected. Kept whole
+        // rather than clipped, so the capability part takes the remaining budget.
+        let routing = server.delegated
+            ? " Its tools are NOT in your tool list — delegating to this agent is the only way to reach them."
+            : ""
+        return cap(line, to: summaryBudget - routing.count) + routing
+    }
+
+    /// The hard ceiling on a server summary. "~220" in the brief: short enough
+    /// that a handful of servers never rival a tool schema, long enough for a name,
+    /// three tool names and a sentence.
+    private static let summaryBudget = 220
+
+    /// The bare tool name from a namespaced descriptor name: the server's own
+    /// prefix is dropped because it is already the summary's lead.
+    private static func bareToolName(_ namespaced: String, namespace: String) -> String {
+        let prefix = namespace + "__"
+        guard namespaced.hasPrefix(prefix) else { return namespaced }
+        return String(namespaced.dropFirst(prefix.count))
+    }
+
+    /// The first sentence of the first description that says what a tool does,
+    /// rather than a name repeated or the placeholder the MCP manager substitutes
+    /// for a tool that described itself with nothing.
+    private static func concreteSentence(_ descriptions: [String]) -> String? {
+        for description in descriptions {
+            guard let sentence = firstSentence(of: description) else { continue }
+            let words = sentence.split(whereSeparator: { $0.isWhitespace })
+            guard words.count >= 3 else { continue }
+            if sentence.lowercased().contains("provided by the") { continue }
+            return sentence
+        }
+        return nil
+    }
+
+    /// The first sentence of `text`, or `nil` when there is nothing to say. A
+    /// period within the first few characters is an abbreviation, not the end of
+    /// a sentence.
+    private static func firstSentence(of text: String) -> String? {
+        let flat = text
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .joined(separator: " ")
+        guard !flat.isEmpty else { return nil }
+        guard let stop = flat.firstIndex(of: ".") else { return flat }
+        guard flat.distance(from: flat.startIndex, to: stop) > 8 else { return flat }
+        return String(flat[...stop])
+    }
+
+    /// Clips `text` to `limit` characters on a word boundary, marking the cut.
+    private static func cap(_ text: String, to limit: Int) -> String {
+        guard text.count > limit else { return text }
+        guard limit > 1 else { return String(text.prefix(limit)) + "…" }
+        let end = text.index(text.startIndex, offsetBy: limit)
+        if let space = text[..<end].lastIndex(of: " ") {
+            return String(text[..<space]) + "…"
+        }
+        return String(text[..<end]) + "…"
     }
 }

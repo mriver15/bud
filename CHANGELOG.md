@@ -12,6 +12,44 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.9.0
+
+### Connected servers stop being invisible
+
+Asked to create a Pokémon Champions team, Bud answered with eleven manual web
+fetches — Serebii, Bulbapedia, DuckDuckGo — while the `getcompetitive` server
+sat connected, doing exactly that in one call. The transcript showed why, and
+it was Bud's fault, not the server's:
+
+- A query like that matches no intent signal, so the planner offered only the
+  recovery tools — and **the delegation tool itself, `spawn_subagents`, the one
+  whose schema carries the list of what can be delegated to, was not in the
+  core**. The model could not even see that the server existed.
+- Even if it had, the server's agent line read *"Answers from the getcompetitive
+  server"* — no hint of what it does. No model can connect "pokemon champions"
+  to a name alone.
+
+Two fixes:
+
+- **`spawn_subagents` is in the recovery core.** The spec's own design called it
+  a discovery primitive; omitting it is how a connected capability becomes
+  invisible. Cost: about 500 tokens a turn on the generic plan, growing with
+  the roster — the price of the model always knowing what can be delegated to.
+- **Server agents describe their capability.** The summary is built from the
+  server's own tools: *get_competitive: search_pokemon, get_team,
+  get_team_counter — Search for a Pokémon by name or type.* — with the routing
+  note kept for delegated servers, and the old wording as the honest fallback
+  when a server has no descriptions yet. The roster refreshes when a server's
+  tools change.
+
+```
+--self-test      1094/1094   (+6: the capability summary, the roster line,
+                            the fallback, and the five-name core)
+--verify-ui        25/25     --verify-browser   43/43    --verify-live   151/151
+```
+
+---
+
 ## Bud 2.8.0
 
 ### Pick a model instead of typing one

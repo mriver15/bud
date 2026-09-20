@@ -68,7 +68,14 @@ public enum ToolPlanner {
     /// Recovery and discovery primitives. Always offered, whatever the turn: a
     /// model that loses these cannot find what it has already been told or spill
     /// what it has already read.
-    public static let alwaysOnCore = ["skill", "recall", "read_stored", "remember"]
+    ///
+    /// `spawn_subagents` is the delegation entry point — the one tool whose
+    /// schema carries the roster of what a turn can be handed to. A connected
+    /// MCP server is reachable *only* through its agent, so leaving this tool
+    /// out is how a capability stays invisible even while connected: the query
+    /// matches no intent, the plan offers only the recovery tools, and the model
+    /// never learns the server exists.
+    public static let alwaysOnCore = ["skill", "recall", "read_stored", "remember", "spawn_subagents"]
 
     /// The file-reading tools a dropped attachment may justify. Shell and write
     /// are deliberately absent: dropping a file is a request to read it, not a

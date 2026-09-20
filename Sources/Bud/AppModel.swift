@@ -328,6 +328,14 @@ public final class AppModel {
         agents.source = { [weak self] in
             (SkillStore.installed(), self?.mcp.servers ?? [])
         }
+        // The summary each server agent is described by comes from the tools the
+        // server actually offers, read from the manager's live cache at rebuild
+        // time. `refresh()` re-reads here, so a server whose tools change gets a
+        // refreshed summary on the next rebuild without anyone remembering to
+        // update a snapshot.
+        agents.serverTools = { [weak self] server in
+            self?.mcp.serverTools(id: server.id) ?? []
+        }
         agents.refresh()
         // MCP mutations ask through the same gate as native tools. The manager
         // holds the closure rather than reaching for the model, for the same
