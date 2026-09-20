@@ -379,6 +379,10 @@ public struct SubagentSpec: Sendable {
     /// The named agent this runs as. `nil` is an unnamed workstream that behaves
     /// the way subagents always have: every tool, one prompt, the session model.
     public var agent: String?
+    /// What the task needs, in the model's own words. The contextCompilerV2
+    /// counterpart to `agent`: resolved locally against the roster, so the
+    /// roster itself never has to be sent to the model.
+    public var capability: String?
     /// How deep in the tree this sits. A root run dispatched by the conversation is
     /// 0; work a subagent delegates is 1. Depth is what bounds nesting — see
     /// `SubagentSupervisor.maxDepth`.
@@ -392,6 +396,7 @@ public struct SubagentSpec: Sendable {
         model: String? = nil,
         allowTools: Bool = true,
         agent: String? = nil,
+        capability: String? = nil,
         depth: Int = 0,
         parentID: String? = nil
     ) {
@@ -400,6 +405,7 @@ public struct SubagentSpec: Sendable {
         self.model = model
         self.allowTools = allowTools
         self.agent = agent
+        self.capability = capability
         self.depth = depth
         self.parentID = parentID
     }

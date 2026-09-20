@@ -16,19 +16,15 @@ public nonisolated struct NativeToolsProvider: ToolProvider {
     public let providerName = "Bud"
 
     /// Asked before a tool that changes the machine, and answered by whatever is
-    /// holding the panel. `nil` means there is nobody to ask — the measurement
-    /// CLIs, and checks that are exercising the tool rather than the gate — and
-    /// the tool runs.
-    ///
-    /// Injected rather than reached for, because this provider is `nonisolated`
-    /// and knows nothing about the UI; the policy lives with the thing that can
-    /// show a dialog.
-    public typealias Confirmation = @Sendable (ToolConfirmation) async -> ToolConfirmation.Decision
+    /// holding the panel. Phase 7: the gate lives in the shared harness, so
+    /// native tools and MCP mutations pass through one policy surface rather
+    /// than two closures kept in step by hand. `nil` harness means there is
+    /// nobody to ask — the measurement CLIs, and checks exercising the tool
+    /// rather than the gate — and the tool runs.
+    private let harness: ExecutionHarness?
 
-    private let confirm: Confirmation?
-
-    public init(confirm: Confirmation? = nil) {
-        self.confirm = confirm
+    public init(harness: ExecutionHarness? = nil) {
+        self.harness = harness
     }
 
     /// The refusal a denied tool returns.
@@ -47,7 +43,7 @@ public nonisolated struct NativeToolsProvider: ToolProvider {
     /// Asks, if there is anyone to ask and the tool is one that changes things.
     /// Returns a refusal to return to the model, or `nil` to carry on.
     private func refusalUnlessConfirmed(tool: String, arguments: JSONValue) async -> ToolResult? {
-        guard let confirm,
+        guard let harness,
               let request = ToolConfirmation.request(
                   tool: tool,
                   arguments: arguments,
@@ -55,8 +51,10 @@ public nonisolated struct NativeToolsProvider: ToolProvider {
               )
         else { return nil }
 
-        let decision = await confirm(request)
-        return decision.isAllowed ? nil : Self.refusal(for: request)
+        if case .deny = await harness.resolve(request) {
+            return Self.refusal(for: request)
+        }
+        return nil
     }
 
     public nonisolated func toolDescriptors() async -> [ToolDescriptor] {

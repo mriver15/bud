@@ -324,6 +324,8 @@ public struct ChatView: View {
                 total = total &+ text.count &+ 1
             case .tool(_, _, _, let state, let result, let ui):
                 total = total &+ state.rawValue.count &+ (result?.count ?? 0) &+ (ui == nil ? 0 : 1)
+            case .ui(_, let payload):
+                total = total &+ payload.stringContentLength
             }
         }
         return total

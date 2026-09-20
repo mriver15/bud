@@ -67,32 +67,48 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
 
     nonisolated public static let spawnToolName = ToolNaming.sanitize("spawn_subagents")
 
-    nonisolated private static let spawnSchema: JSONValue = .object([
-        "type": "object",
-        "properties": .object([
-            "tasks": .object([
-                "type": "array",
-                "items": .object([
-                    "type": "object",
-                    "properties": .object([
-                        "title": .object(["type": "string"]),
-                        "prompt": .object(["type": "string"]),
-                        "model": .object(["type": "string"]),
-                        "allow_tools": .object(["type": "boolean"]),
-                        "agent": .object([
-                            "type": "string",
-                            "description": .string(
-                                "The agent to run this task as, by name. Omit for an unnamed "
-                                    + "workstream with every tool available."
-                            ),
-                        ]),
+    nonisolated private static func spawnSchema(compactCapability: Bool) -> JSONValue {
+        var properties: [String: JSONValue] = [
+            "title": .object(["type": "string"]),
+            "prompt": .object(["type": "string"]),
+            "model": .object(["type": "string"]),
+            "allow_tools": .object(["type": "boolean"]),
+            "agent": .object([
+                "type": "string",
+                "description": .string(
+                    compactCapability
+                        ? "The agent to run this task as, by name. Omit both this and 'capability' "
+                            + "for an unnamed workstream with every tool available."
+                        : "The agent to run this task as, by name. Omit for an unnamed "
+                            + "workstream with every tool available."
+                ),
+            ]),
+        ]
+        if compactCapability {
+            properties["capability"] = .object([
+                "type": "string",
+                "description": .string(
+                    "What the task needs, in your own words — e.g. 'competitive pokemon "
+                        + "analysis' or 'reading pdf forms'. Bud resolves this locally to the "
+                        + "matching agent, so the roster does not have to be sent to you."
+                ),
+            ])
+        }
+        return .object([
+            "type": "object",
+            "properties": .object([
+                "tasks": .object([
+                    "type": "array",
+                    "items": .object([
+                        "type": "object",
+                        "properties": .object(properties),
+                        "required": .array(["title", "prompt"]),
                     ]),
-                    "required": .array(["title", "prompt"]),
                 ]),
             ]),
-        ]),
-        "required": .array(["tasks"]),
-    ])
+            "required": .array(["tasks"]),
+        ])
+    }
 
     private let env: AppEnvironment
     /// What this can hand work to. Held rather than passed to `spawn`, because the
@@ -116,11 +132,17 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         // the session started would keep naming an agent that has since been
         // uninstalled, and the model would keep choosing it.
         agents.refresh()
+        // contextCompilerV2 keeps the roster out of the parent prompt: the
+        // description carries the delegation contract and a discovery affordance,
+        // and the model hands tasks over by capability, resolved locally.
+        let compact = env.config.contextCompilerV2
         return [
             ToolDescriptor(
                 name: Self.spawnToolName,
-                description: Self.spawnDescription(roster: agents.roster()),
-                schema: Self.spawnSchema,
+                description: compact
+                    ? Self.spawnDescriptionCompact()
+                    : Self.spawnDescription(roster: agents.roster()),
+                schema: Self.spawnSchema(compactCapability: compact),
                 providerID: providerID,
                 providerName: providerName
             )
@@ -140,7 +162,8 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         }
     }
 
-    /// An agent named that is not there.
+    /// An agent named that is not there, or a capability nothing matches
+    /// confidently.
     ///
     /// Caught here rather than left to run unnamed, because the two failures are
     /// not the same size: a task that quietly loses its agent runs with the wrong
@@ -148,12 +171,32 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
     /// Answering with the names that do exist costs one round trip and fixes it.
     private func refusal(for specs: [SubagentSpec]) -> String? {
         let named = specs.compactMap(\.agent)
-        guard let unknown = named.first(where: { agents.named($0) == nil }) else { return nil }
-        let available = agents.agents.map(\.name)
-        guard !available.isEmpty else {
-            return "There is no agent named '\(unknown)'. None are available in this session."
+        if let unknown = named.first(where: { agents.named($0) == nil }) {
+            let available = agents.agents.map(\.name)
+            guard !available.isEmpty else {
+                return "There is no agent named '\(unknown)'. None are available in this session."
+            }
+            return "There is no agent named '\(unknown)'. Available: \(available.joined(separator: ", "))."
         }
-        return "There is no agent named '\(unknown)'. Available: \(available.joined(separator: ", "))."
+        // Capability wording is resolved locally; a wording nothing matches
+        // confidently is refused with the closest names rather than run with a
+        // guessed agent.
+        for spec in specs where spec.agent == nil {
+            guard let capability = spec.capability, !capability.isEmpty else { continue }
+            let resolution = DelegateResolver.resolve(capability, agents: agents.agents)
+            if resolution.agentID == nil {
+                let available = agents.agents.map(\.name)
+                let hint = resolution.candidates.isEmpty
+                    ? "No agent matches '\(capability)'."
+                    : "No agent clearly matches '\(capability)'. Closest: "
+                        + resolution.candidates.joined(separator: ", ") + "."
+                guard !available.isEmpty else {
+                    return hint + " None are available in this session."
+                }
+                return hint + " Available: \(available.joined(separator: ", "))."
+            }
+        }
+        return nil
     }
 
     /// Reads the task list. Shared with the nested path so a task means the same
@@ -192,6 +235,8 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
             // surface uses and the model reaches for it on the first try.
             let rawAgent = (object["agent"]?.stringValue ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            let rawCapability = (object["capability"]?.stringValue ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             specs.append(
                 SubagentSpec(
                     title: title,
@@ -199,6 +244,7 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
                     model: rawModel.isEmpty ? nil : rawModel,
                     allowTools: allowTools,
                     agent: rawAgent.isEmpty ? nil : rawAgent,
+                    capability: rawCapability.isEmpty ? nil : rawCapability,
                     depth: depth,
                     parentID: parentID
                 )
@@ -254,9 +300,22 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         for spec in specs {
             // Resolved here, on the main actor, so the detached loop is handed a
             // value rather than a registry it would have to reach back for. An
-            // agent the model named and got wrong is refused before this point, so
-            // a spec that names one always resolves.
-            let agent = spec.agent.flatMap { agents.named($0) }
+            // agent the model named and got wrong is refused before this point,
+            // so a spec that names one always resolves. A capability wording
+            // resolves the same way — refused before this point when nothing
+            // matched confidently, so a wording that reached here names an agent.
+            let effectiveAgent: String?
+            var capabilityNote: String?
+            if let agent = spec.agent {
+                effectiveAgent = agent
+            } else if let capability = spec.capability, !capability.isEmpty,
+                      let resolved = DelegateResolver.resolve(capability, agents: agents.agents).agentID {
+                effectiveAgent = resolved
+                capabilityNote = "capability '\(capability)'"
+            } else {
+                effectiveAgent = nil
+            }
+            let agent = effectiveAgent.flatMap { agents.named($0) }
             // An agent may name a model; the task may override it; the session is
             // the floor. In that order, because each is more specific than the last.
             let model = spec.model ?? agent?.model ?? env.config.model
@@ -271,8 +330,10 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
                 depth: spec.depth
             )
             // A named agent that no longer resolves is still worth showing as the
-            // thing that was asked for, rather than as an unnamed run.
-            if run.agent == nil { run.agent = spec.agent }
+            // thing that was asked for, rather than as an unnamed run. The same
+            // for a capability: the resolution is the audit trail of what the
+            // model asked for and what it became.
+            if run.agent == nil { run.agent = spec.agent ?? capabilityNote }
             let runID = run.id
             ids.append(runID)
             runs.insert(run, at: 0)
@@ -486,22 +547,43 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
 
     /// What the model is told about delegating, including who it can delegate to.
     ///
+    /// The delegation contract every spawn description leads with, whichever
+    /// side of the capability-index flag the session is on.
+    nonisolated private static let spawnIntro = """
+        Run independent workstreams concurrently, each in a fresh context that \
+        cannot see this conversation. Use it when a request splits into genuinely \
+        separate slices that can be researched, drafted or computed at the same \
+        time; never to do one thing several times over. Every task must be \
+        self-contained — state what you already know, what the task must establish, \
+        and what it must return. The final message of each task is its deliverable \
+        and comes back to you verbatim, so ask for findings, not pleasantries.
+        """
+
+    /// How to split work across agents, the same under both descriptions: the
+    /// roster is *who* exists, and this is *how to use them*.
+    nonisolated private static let spawnGuidance = """
+
+
+        Several tasks may name the same agent, and often should. An agent is a way \
+        of working, not a thing that can only run once: two tasks both naming a \
+        server agent, each asking it about a different half of the question, run at \
+        the same time and come back separately. Split a wide question that way — \
+        three creatures to one task and three to another, rather than one task \
+        listing all six — and it is answered as quickly as a narrow one. What to \
+        avoid is two tasks given the same job, not two tasks given the same agent.
+
+        So: split the work first, then write each prompt. Say what that task gets, \
+        what it must establish, and what it must return, and give no two of them \
+        the same job.
+        """
+
     /// The roster is generated rather than written down here: a list of agents
     /// hardcoded into a prompt is wrong the moment a skill is installed, and wrong
     /// in the direction that costs a round trip — the model would keep naming an
     /// agent that is no longer there.
     nonisolated static func spawnDescription(roster: String) -> String {
-        var text = """
-            Run independent workstreams concurrently, each in a fresh context that \
-            cannot see this conversation. Use it when a request splits into genuinely \
-            separate slices that can be researched, drafted or computed at the same \
-            time; never to do one thing several times over. Every task must be \
-            self-contained — state what you already know, what the task must establish, \
-            and what it must return. The final message of each task is its deliverable \
-            and comes back to you verbatim, so ask for findings, not pleasantries.
-            """
-        guard !roster.isEmpty else { return text }
-        text += """
+        guard !roster.isEmpty else { return spawnIntro }
+        return spawnIntro + """
 
 
             Hand a task to one of these by naming it in 'agent':
@@ -513,20 +595,26 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
             without the task description having to ask for it. Leave 'agent' out and \
             the task runs unnamed: every tool, the session model, and nothing but the \
             prompt you wrote.
+            """ + spawnGuidance
+    }
 
-            Several tasks may name the same agent, and often should. An agent is a way \
-            of working, not a thing that can only run once: two tasks both naming a \
-            server agent, each asking it about a different half of the question, run at \
-            the same time and come back separately. Split a wide question that way — \
-            three creatures to one task and three to another, rather than one task \
-            listing all six — and it is answered as quickly as a narrow one. What to \
-            avoid is two tasks given the same job, not two tasks given the same agent.
+    /// The contextCompilerV2 description: the contract and the discovery
+    /// affordance, with the roster held back. Prompt cost stops growing with the
+    /// roster; the model names what a task needs and Bud resolves it locally.
+    nonisolated static func spawnDescriptionCompact() -> String {
+        spawnIntro + """
 
-            So: split the work first, then write each prompt. Say what that task gets, \
-            what it must establish, and what it must return, and give no two of them \
-            the same job.
-            """
-        return text
+
+            Agents are available (scouts, skill agents, connected MCP servers), each \
+            with its own instructions and its own tools — a scout cannot change \
+            anything, a server agent can only reach its own server. Hand a task to \
+            one by putting what it needs in 'capability' — e.g. 'competitive pokemon \
+            analysis' — and Bud resolves the matching agent locally. Naming the \
+            agent directly in 'agent' always works too. If a name is wrong or a \
+            capability is unclear, the call answers with the names you can choose \
+            from. Leave both out and the task runs unnamed: every tool, the session \
+            model, and nothing but the prompt you wrote.
+            """ + spawnGuidance
     }
 
     nonisolated static func systemPrompt(_ spec: SubagentSpec, agent: AgentDefinition?) -> String {

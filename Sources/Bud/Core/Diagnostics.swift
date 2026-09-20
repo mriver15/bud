@@ -184,7 +184,7 @@ public enum DiagnosticBundle {
 ///
 /// Rows are measured, not estimated, wherever the request is: the tool figures
 /// come from serialising the same definitions the request sends, and the prompt
-/// and skill figures come from the same strings `AgentRuntime.systemMessage()`
+/// and skill figures come from the same strings `ContextCompiler.compile`
 /// assembles. Only the token figures are estimated — 4 characters per token, the
 /// same deliberately-crude figure `RequestCost` uses to rank rather than bill.
 public struct ContextBudget: Sendable {
@@ -229,7 +229,7 @@ public struct ContextBudget: Sendable {
         let tools = await model.env.registry.descriptors().filter { !$0.agentOnly }
         let latestUser = model.runtime.modelHistory.last { $0.role == .user }?.content ?? ""
         let notes = BudStore.lessonContext(
-            AgentRuntime.conversationTail(of: model.runtime.modelHistory)
+            ContextCompiler.conversationTail(of: model.runtime.modelHistory)
         )
         let skills = SkillContext.catalogue(query: latestUser).text
         let cost = RequestMeasurer.measure(
@@ -268,7 +268,7 @@ public struct ContextBudget: Sendable {
     }
 
     /// The trailing lines the runtime appends to the system prompt — time, model,
-    /// reasoning effort. Mirrors `AgentRuntime.systemMessage()`; the character
+    /// reasoning effort. Mirrors `ContextCompiler.compile`; the character
     /// count is order-independent, so where the "Current time" line sits does not
     /// change this figure.
     private static func liveContext(config: BudConfig) -> String {

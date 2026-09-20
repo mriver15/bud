@@ -195,6 +195,11 @@ public enum ToolPlanner {
     /// mapped to the tool Bud actually has. The fail-open path consults this
     /// before deciding a name is unknown: a guessed name that points at a real
     /// capability should resolve, not hard-fail.
+    ///
+    /// With `capabilities` (the contextCompilerV2 path), capability language
+    /// resolves too: a call naming a concept — "chart", "pokemon" — finds the
+    /// group that holds it and offers that group, the same way a guessed tool
+    /// name does.
     public static let toolAliases: [String: String] = [
         "web_search": "web_fetch",
         "search_web": "web_fetch",
@@ -204,12 +209,28 @@ public enum ToolPlanner {
     public static func expanded(
         for plan: ToolPlan,
         requestedTool: String,
-        allDescriptors: [ToolDescriptor]
+        allDescriptors: [ToolDescriptor],
+        capabilities: CapabilityIndex? = nil
     ) -> ToolPlan? {
         let resolved = toolAliases[requestedTool] ?? requestedTool
-        guard let requested = allDescriptors.first(where: { $0.name == resolved }) else {
-            return nil
+
+        // A guessed tool name or a capability phrase the model reached for:
+        // either way the answer is the group that holds it.
+        let named: ToolDescriptor?
+        var capabilityNote: String?
+        if let requested = allDescriptors.first(where: { $0.name == resolved }) {
+            named = requested
+        } else if let index = capabilities,
+                  let match = index.resolve(resolved, limit: 1).first,
+                  case .toolGroup = match.capability.activation,
+                  match.confidence >= 0.55,
+                  let inGroup = allDescriptors.first(where: { $0.providerName == match.capability.id }) {
+            named = inGroup
+            capabilityNote = "the '\(match.capability.id)' capability (\(match.reason))"
+        } else {
+            named = nil
         }
+        guard let requested = named else { return nil }
         let group = requested.providerName
         let existingNames = Set(plan.descriptors.map(\.name))
         let additions = allDescriptors.filter { $0.providerName == group && !existingNames.contains($0.name) }
@@ -219,10 +240,11 @@ public enum ToolPlanner {
         let stillOmitted = plan.omitted.filter { !addedNames.contains($0.name) }
 
         let called = resolved == requestedTool ? "'\(requestedTool)'" : "'\(requestedTool)' (as \(resolved))"
+        let via = capabilityNote.map { ", which names \($0)" } ?? ""
         return ToolPlan(
             descriptors: plan.descriptors + additions,
             omitted: stillOmitted,
-            reason: "The model called \(called), which was held back; the "
+            reason: "The model called \(called)\(via), which was held back; the "
                 + "'\(group)' group is now offered and the round is retried."
         )
     }
@@ -267,7 +289,7 @@ public enum ToolPlanner {
         return false
     }
 
-    private static func omitReason(for descriptor: ToolDescriptor, browserIntent: Bool) -> String {
+    static func omitReason(for descriptor: ToolDescriptor, browserIntent: Bool) -> String {
         if descriptor.providerName == Self.browserProviderName && !browserIntent {
             return "no browsing intent"
         }
@@ -277,7 +299,7 @@ public enum ToolPlanner {
         return "no intent matched this turn"
     }
 
-    private static func reason(kept: Int, total: Int, omitted: [ToolSummary]) -> String {
+    static func reason(kept: Int, total: Int, omitted: [ToolSummary]) -> String {
         guard !omitted.isEmpty else { return "Offered all \(total) tools." }
         return "\(omitted.count) tools held back this turn — \(grouped(omitted)). Calling one summons its group."
     }

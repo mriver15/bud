@@ -61,6 +61,16 @@ public enum PerformanceProfileCLI {
             return true
         }
 
+        // Phase 9: planner regret from the evidence store, plus the measurable
+        // gain the eval gates care about — what the adaptive resolver pays in
+        // schema characters versus the current planner on representative
+        // queries. Both offline.
+        if arguments.contains("--regret") {
+            print(await regretAndComparisonReport(tools: tools))
+            await mcp.shutdown()
+            return true
+        }
+
         // Phase 1 — request build. Everything the first message carries before a
         // byte leaves the machine; the three lines under the phase table are this
         // same number broken out.
@@ -190,6 +200,53 @@ public enum PerformanceProfileCLI {
         await mcp.shutdown()
         print(out)
         return true
+    }
+
+    /// Phase 9 (EVAL-004): the regret report over stored evidence, followed by
+    /// the resolver-vs-planner schema comparison — the artifact a tuning change
+    /// points at when it claims a measurable gain.
+    private static func regretAndComparisonReport(tools: [ToolDescriptor]) async -> String {
+        var out = PlannerRegretReport.render()
+        out += "\n\nAdaptive planning vs current planner — schema characters per query\n\n"
+
+        let queries = [
+            ("generic", "What time is it?"),
+            ("browse", "Browse https://example.com and summarise what you find"),
+            ("presentation", "Compare these three options in a table"),
+            ("files", "Read src/main.swift and fix the bug it describes"),
+        ]
+        let engine = DeterministicDecisionEngine()
+        let domains = Set(tools.map(\.providerName)).sorted() + ["none"]
+
+        func schemaChars(_ descriptors: [ToolDescriptor]) -> Int {
+            descriptors.reduce(0) {
+                $0 + $1.name.count + $1.description.count + $1.schema.stringContentLength
+            }
+        }
+
+        out += "  " + "query".padding(toLength: 14, withPad: " ", startingAt: 0)
+        out += "planner".padding(toLength: 10, withPad: " ", startingAt: 0)
+        out += "resolver".padding(toLength: 10, withPad: " ", startingAt: 0)
+        out += "delta\n"
+        for (label, query) in queries {
+            let state = DecisionState(query: query)
+            let context = ToolPlanningContext(query: query)
+            let planner = ToolPlanner.plan(context: context, descriptors: tools)
+            let batch = (try? await engine.evaluate(
+                state: state, questions: DecisionQuestions.initial(domains: domains)
+            )) ?? DecisionBatch(engineID: engine.id, answers: [])
+            let stage = CapabilityResolver.stageA(
+                state: state, batch: batch, descriptors: tools, stickyTools: []
+            )
+            let plannerChars = schemaChars(planner.descriptors)
+            let resolverChars = stage.schemaCharacters
+            let delta = plannerChars - resolverChars
+            out += "  " + label.padding(toLength: 14, withPad: " ", startingAt: 0)
+            out += String(plannerChars).padding(toLength: 10, withPad: " ", startingAt: 0)
+            out += String(resolverChars).padding(toLength: 10, withPad: " ", startingAt: 0)
+            out += (delta >= 0 ? "-" : "+") + "\(abs(delta))\n"
+        }
+        return out
     }
 
     /// The system prompt a request carries, minus the clock reading (which a
