@@ -133,6 +133,10 @@ public struct BudConfig: Sendable, Codable, Hashable {
     /// Deterministic is the floor; provider runs the session model and falls
     /// back to deterministic on any failure. A Jev adapter joins later.
     public var decisionEngine: DecisionEngineID
+    /// The TypeSafe API key for the Jev engine. Lives in the Keychain with the
+    /// other secrets; empty until the user pastes one, and an empty key makes
+    /// the coordinator use the deterministic floor.
+    public var typesafeAPIKey: String
     /// How much of the conversation the model is sent, in characters.
     ///
     /// History grew without limit: a tool result is capped at 24,000 characters
@@ -291,6 +295,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         contextCompilerV2: Bool = false,
         uiOutputDialect: Bool = false,
         decisionEngine: DecisionEngineID = .deterministic,
+        typesafeAPIKey: String = "",
         historyBudgetChars: Int = 120_000,
         hasCompletedOnboarding: Bool = false,
         updateRepo: String = BudConfig.defaultUpdateRepo,
@@ -318,6 +323,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         self.contextCompilerV2 = contextCompilerV2
         self.uiOutputDialect = uiOutputDialect
         self.decisionEngine = decisionEngine
+        self.typesafeAPIKey = typesafeAPIKey
         self.historyBudgetChars = historyBudgetChars
         self.hasCompletedOnboarding = hasCompletedOnboarding
         self.updateRepo = updateRepo
@@ -523,6 +529,7 @@ public enum BudConfigLoader {
         static let providerKeys = "providerKeys"
         static let glamaAPIKey = "glamaAPIKey"
         static let updateToken = "updateToken"
+        static let typesafeAPIKey = "typesafeAPIKey"
     }
 
     /// The store the secrets live in. Typed as the protocol so the migration can
@@ -782,6 +789,7 @@ public enum BudConfigLoader {
         }
         keychain.set(SecretAccount.glamaAPIKey, value: config.glamaAPIKey)
         keychain.set(SecretAccount.updateToken, value: config.updateToken)
+        keychain.set(SecretAccount.typesafeAPIKey, value: config.typesafeAPIKey)
     }
 
     private static func encodeProviderKeys(_ keys: [String: String]) -> String? {
@@ -833,6 +841,9 @@ public enum BudConfigLoader {
                 }
                 if let token = keychainStore.get(SecretAccount.updateToken) {
                     config.updateToken = token
+                }
+                if let typesafe = keychainStore.get(SecretAccount.typesafeAPIKey) {
+                    config.typesafeAPIKey = typesafe
                 }
             } else {
                 config = apply(stored, to: config)

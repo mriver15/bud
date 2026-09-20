@@ -41,22 +41,19 @@ public enum DecisionEngineCoordinator {
                 model: config.model,
                 onUsage: { prompt, completion in env.recordUsage(prompt: prompt, completion: completion) }
             )
-            let start = Date()
-            do {
-                let batch = try await engine.evaluate(state: state, questions: questions)
-                let latencyMs = Date().timeIntervalSince(start) * 1000
-                CognitiveStore.recordContextEvent(
-                    requestID: nil,
-                    sourceType: "decision",
-                    sourceID: nil,
-                    action: "engine",
-                    score: nil,
-                    reason: String(format: "provider answered %d of %d in %.2f ms",
-                                   batch.answers.count, questions.count, latencyMs)
-                )
-                return Evaluation(batch: batch, fellBack: false, latencyMs: latencyMs)
-            } catch {
-                let latencyMs = Date().timeIntervalSince(start) * 1000
+            return await runConfigured(
+                engine, label: "provider", env: env, state: state, questions: questions
+            )
+
+        case .jev:
+            let config = env.config
+            // The TypeSafe SDK's own convention as the fallback source, so a
+            // headless run can supply the key without the app having stored one.
+            let stored = config.typesafeAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = stored.isEmpty
+                ? (ProcessInfo.processInfo.environment["TYPESAFE_API_KEY"] ?? "")
+                : stored
+            guard !key.isEmpty else {
                 let batch = await run(
                     DeterministicDecisionEngine(), state: state, questions: questions
                 )
@@ -66,11 +63,58 @@ public enum DecisionEngineCoordinator {
                     sourceID: nil,
                     action: "fallback",
                     score: nil,
-                    reason: "provider failed after " + String(format: "%.2f ms", latencyMs)
-                        + " — deterministic batch used instead"
+                    reason: "jev selected but no TypeSafe API key is set — deterministic batch used"
                 )
-                return Evaluation(batch: batch, fellBack: true, latencyMs: latencyMs)
+                return Evaluation(batch: batch, fellBack: true, latencyMs: nil)
             }
+            let engine = JevDecisionEngine(
+                apiKey: key,
+                onUsage: { prompt, completion in env.recordUsage(prompt: prompt, completion: completion) }
+            )
+            return await runConfigured(
+                engine, label: "jev", env: env, state: state, questions: questions
+            )
+        }
+    }
+
+    /// The shared configured-engine path: run, account, and fall back to the
+    /// deterministic batch with a named event on any failure.
+    private static func runConfigured(
+        _ engine: any DecisionEngine,
+        label: String,
+        env: AppEnvironment,
+        state: DecisionState,
+        questions: [DecisionQuestion]
+    ) async -> Evaluation {
+        let start = Date()
+        do {
+            let batch = try await engine.evaluate(state: state, questions: questions)
+            let latencyMs = Date().timeIntervalSince(start) * 1000
+            CognitiveStore.recordContextEvent(
+                requestID: nil,
+                sourceType: "decision",
+                sourceID: nil,
+                action: "engine",
+                score: nil,
+                reason: String(format: "%@ answered %d of %d in %.2f ms",
+                               label, batch.answers.count, questions.count, latencyMs)
+            )
+            return Evaluation(batch: batch, fellBack: false, latencyMs: latencyMs)
+        } catch {
+            let latencyMs = Date().timeIntervalSince(start) * 1000
+            let batch = await run(
+                DeterministicDecisionEngine(), state: state, questions: questions
+            )
+            CognitiveStore.recordContextEvent(
+                requestID: nil,
+                sourceType: "decision",
+                sourceID: nil,
+                action: "fallback",
+                score: nil,
+                reason: "\(label) failed after " + String(format: "%.2f ms", latencyMs)
+                    + " — deterministic batch used instead"
+            )
+            return Evaluation(batch: batch, fellBack: true, latencyMs: latencyMs)
         }
     }
 

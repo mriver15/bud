@@ -12,6 +12,24 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.11.3
+
+### Ready for Jev
+
+The Decision engine picker gains a third option: **Jev (TypeSafe, typed
+decisions)** — the System One model's `noul`/`choice`/`score` answers mapped
+onto the harness's typed batch, with the API key stored in the Keychain
+(paste it in Settings › Limits whenever access arrives; the
+`TYPESAFE_API_KEY` environment variable also works). Rate-limit and overload
+responses get one delayed retry, the call's tokens join the session
+accounting, and Jev's judgments are compared against the deterministic view
+in the shadow trace.
+
+Until a key is set, selecting Jev behaves exactly like Deterministic — the
+coordinator falls back with an evidence event, so a waitlisted install loses
+nothing. Deterministic remains the default.
+
+
 ## Bud 2.11.2
 
 ### The decision engine becomes selectable
