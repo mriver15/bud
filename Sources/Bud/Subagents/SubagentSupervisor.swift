@@ -38,6 +38,16 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
     /// loops tools forever would hold a pool slot and never report findings.
     nonisolated static let maxRounds = 12
 
+    /// How often a live run's narration may reach the panel.
+    ///
+    /// Reasoning and output stream token by token, and every token used to
+    /// publish — a MainActor hop, a full-string copy, and a roster re-render,
+    /// per token, per parallel run. That is the whole of the panel's
+    /// sluggishness during long reasoning. The throttle bounds the updates to
+    /// a handful per second; the end of every round force-flushes, so nothing
+    /// streamed is ever lost, only batched.
+    nonisolated static let publishInterval: TimeInterval = 0.12
+
     /// How deep delegation may go: a root run may delegate, and what it delegates
     /// to may not.
     ///
@@ -455,8 +465,23 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
             tools.removeAll { $0.name == spawnToolName }
         }
 
-        var answer = ""
         var round = 0
+        // The throttled path to the panel: deltas accumulate locally and the
+        // roster updates at `publishInterval`, with a force flush at every
+        // round boundary so the settled narration is always complete.
+        var lastPublish = ContinuousClock.now
+        func publishMaybe(
+            output: String? = nil,
+            reasoning: String? = nil,
+            force: Bool = false
+        ) async {
+            let now = ContinuousClock.now
+            let elapsed = lastPublish.duration(to: now)
+            guard force || elapsed >= .seconds(Self.publishInterval) else { return }
+            lastPublish = now
+            await publish.publishStream(id, output: output, reasoning: reasoning)
+        }
+
         while round < maxRounds {
             round += 1
             if Task.isCancelled { return }
@@ -480,10 +505,10 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
                     switch event {
                     case .contentDelta(let delta):
                         content += delta
-                        await publish.publishStream(id, output: content, reasoning: nil)
+                        await publishMaybe(output: content)
                     case .reasoningDelta(let delta):
                         reasoning += delta
-                        await publish.publishStream(id, output: nil, reasoning: reasoning)
+                        await publishMaybe(reasoning: reasoning)
                     case .toolCallDelta(let index, let callID, let name, let fragment):
                         var partial = fragments[index] ?? PartialToolCall()
                         // The id and name arrive only on the first fragment of an
@@ -504,7 +529,13 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
                 return
             }
 
-            if !content.isEmpty { answer = content }
+            // The round's narration is complete the moment its stream ended:
+            // flush whatever the throttle was holding back.
+            await publishMaybe(
+                output: content.isEmpty ? nil : content,
+                reasoning: reasoning.isEmpty ? nil : reasoning,
+                force: true
+            )
 
             // An unnamed call cannot be invoked and must not be advertised to the
             // model either: every tool_call needs a matching tool message.
@@ -541,7 +572,6 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
             }
         }
 
-        if !answer.isEmpty { await publish.publishStream(id, output: answer, reasoning: nil) }
         await publish.settle(id, state: .done, error: nil)
     }
 

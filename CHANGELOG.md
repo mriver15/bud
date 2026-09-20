@@ -12,6 +12,20 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.11.4
+
+### The Agents panel stops re-rendering per token
+
+Reasoning and output streamed token by token, and every token published to
+the panel — a main-thread hop, a full-string copy and a roster re-render,
+per token, per parallel run. Long reasoning turned that into visible
+sluggishness on the subagent screen.
+
+Live narration is now throttled to a handful of updates per second, with a
+force flush at the end of every round — the panel animates, and nothing
+streamed is ever lost, only batched.
+
+
 ## Bud 2.11.3
 
 ### Ready for Jev
