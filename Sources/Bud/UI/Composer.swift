@@ -67,18 +67,36 @@ public struct Composer: View {
                 return .handled
             }
             .onKeyPress(keys: [.upArrow, .downArrow, .escape]) { press in
-                guard isCommandMenuVisible else { return .ignored }
+                if isCommandMenuVisible {
+                    switch press.key {
+                    case .upArrow:
+                        highlightedCommand = max(0, highlightedCommand - 1)
+                    case .downArrow:
+                        highlightedCommand = min(max(0, filteredCommands.count - 1), highlightedCommand + 1)
+                    case .escape:
+                        dismissedQuery = slashQuery
+                    default:
+                        return .ignored
+                    }
+                    return .handled
+                }
+                // No menu: up/down walk the command history like a shell, and
+                // Escape clears the composer. When navigation has nothing to do,
+                // the press is ignored so the caret keeps its own up/down.
                 switch press.key {
                 case .upArrow:
-                    highlightedCommand = max(0, highlightedCommand - 1)
+                    return model.navigateComposerHistory(previous: true) ? .handled : .ignored
                 case .downArrow:
-                    highlightedCommand = min(max(0, filteredCommands.count - 1), highlightedCommand + 1)
+                    return model.navigateComposerHistory(previous: false) ? .handled : .ignored
                 case .escape:
-                    dismissedQuery = slashQuery
+                    return model.clearComposer() ? .handled : .ignored
                 default:
                     return .ignored
                 }
-                return .handled
+            }
+            .onKeyPress(.delete, phases: .down) { press in
+                guard press.modifiers.contains(.command) else { return .ignored }
+                return model.clearComposer() ? .handled : .ignored
             }
             .onChange(of: model.composerText) { _, _ in
                 if highlightedCommand >= filteredCommands.count { highlightedCommand = 0 }

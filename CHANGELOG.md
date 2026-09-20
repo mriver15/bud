@@ -12,6 +12,20 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.11.6
+
+### Stop means stop, and the composer remembers
+
+Stopping the conversation now cancels every subagent it spawned — a stopped
+question needs no more findings, and work no longer keeps running in the
+Agents panel after you hit Stop (or rewind, clear, or quit).
+
+The composer grew a shell's memory: **Up** recalls the previous command,
+**Down** walks forward and returns your half-written draft, **Escape** or
+**⌘-Backspace** erases the field. History is shared across chats, skips
+immediate repeats, and caps at fifty entries.
+
+
 ## Bud 2.11.5
 
 ### Secrets actually persist

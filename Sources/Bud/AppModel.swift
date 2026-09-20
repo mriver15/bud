@@ -102,6 +102,20 @@ public final class AppModel {
     // MARK: UI state
 
     public var composerText: String = ""
+    /// Sent commands, oldest first — the composer's history, like a shell's.
+    /// Shared across chats; capped so a long session cannot grow it without
+    /// bound.
+    public var composerHistory: [String] = []
+    /// Where history navigation stands: nil while editing fresh text.
+    public private(set) var historyCursor: Int?
+    /// The draft being edited when navigation began, restored when the cursor
+    /// walks back past the newest entry — so browsing history never eats what
+    /// was half-written.
+    public private(set) var historyDraft = ""
+
+    /// The command-line history's ceiling. Fifty is more than a session of
+    /// retries and tweaks, and small enough to scan by eye.
+    static let composerHistoryLimit = 50
     public var errorMessage: String?
     public var availableTools: [ToolDescriptor] = []
     public var settingsTab: SettingsTab = .general
@@ -290,6 +304,11 @@ public final class AppModel {
             self?.scheduleConversationSave()
             self?.turnFinished()
         }
+        // Stopping the conversation stops the work it spawned: subagents are
+        // its arms, and a stopped question needs no more findings.
+        runtime.onStop = { [weak self] in
+            self?.subagents.cancelAll()
+        }
         harness.setConfirmation { [weak self] request in
             // No model means no panel and nobody to ask. An unasked question
             // is not a yes, so a tool that needs an answer does not get one.
@@ -403,6 +422,64 @@ public final class AppModel {
 
     // MARK: Conversation
 
+    /// Files a sent command into the history: newest last, repeats not
+    /// stacked, capped. Kept as its own method so the cap and dedupe are
+    /// testable without sending a turn.
+    public func recordComposerHistory(_ message: String) {
+        if composerHistory.last != message {
+            composerHistory.append(message)
+            if composerHistory.count > Self.composerHistoryLimit {
+                composerHistory.removeFirst()
+            }
+        }
+        historyCursor = nil
+        historyDraft = ""
+    }
+
+    /// Up/down through the history, shell-style. Returns whether the press did
+    /// anything, so the field can keep the caret's own up/down when there is
+    /// no history to walk.
+    @discardableResult
+    public func navigateComposerHistory(previous: Bool) -> Bool {
+        guard !composerHistory.isEmpty else { return false }
+        if previous {
+            let target: Int
+            switch historyCursor {
+            case nil:
+                historyDraft = composerText
+                target = composerHistory.count - 1
+            case 0:
+                return false
+            case let cursor?:
+                target = cursor - 1
+            }
+            historyCursor = target
+            composerText = composerHistory[target]
+        } else {
+            guard let cursor = historyCursor else { return false }
+            if cursor + 1 < composerHistory.count {
+                historyCursor = cursor + 1
+                composerText = composerHistory[cursor + 1]
+            } else {
+                historyCursor = nil
+                composerText = historyDraft
+                historyDraft = ""
+            }
+        }
+        return true
+    }
+
+    /// Cmd-Backspace and Escape: erase the composer, and forget where history
+    /// navigation stood. Returns whether there was anything to erase.
+    @discardableResult
+    public func clearComposer() -> Bool {
+        historyCursor = nil
+        historyDraft = ""
+        let hadContent = !composerText.isEmpty
+        composerText = ""
+        return hadContent
+    }
+
     public func send(_ text: String? = nil) async {
         let message = (text ?? composerText).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty, !runtime.isStreaming else { return }
@@ -420,6 +497,7 @@ public final class AppModel {
                 + "Raise it in Settings › General, or start a new chat."
             return
         }
+        recordComposerHistory(message)
         composerText = ""
         errorMessage = nil
         turnStarted()
