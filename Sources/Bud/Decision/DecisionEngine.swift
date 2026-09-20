@@ -150,11 +150,13 @@ public enum DecisionQuestions {
 public enum DecisionEngineID: String, Sendable, Codable, CaseIterable {
     case deterministic
     case provider
+    case jev
 
     public var label: String {
         switch self {
         case .deterministic: return "Deterministic (rules, offline)"
         case .provider: return "Provider (the session model)"
+        case .jev: return "Jev (TypeSafe, typed decisions)"
         }
     }
 }

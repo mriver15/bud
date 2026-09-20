@@ -1649,9 +1649,88 @@ public enum BudSelfTest {
             c.check("the engine selection round-trips", false)
         }
         var future = BudConfigLoader.StoredConfig()
-        future.decisionEngine = "jev"
+        future.decisionEngine = "quantum"
         c.equal("an unknown engine name degrades to the deterministic floor",
                 BudConfigLoader.apply(future, to: BudConfig()).decisionEngine, .deterministic)
+        var jevSelecting = BudConfig()
+        jevSelecting.decisionEngine = .jev
+        if let data = try? JSONEncoder().encode(BudConfigLoader.StoredConfig(from: jevSelecting)),
+           let decoded = try? JSONDecoder().decode(BudConfigLoader.StoredConfig.self, from: data) {
+            c.equal("the jev selection round-trips",
+                    BudConfigLoader.apply(decoded, to: BudConfig()).decisionEngine, .jev)
+        } else {
+            c.check("the jev selection round-trips", false)
+        }
+
+        // Jev: the typed mapping against a stubbed TypeSafe endpoint, offline.
+        final class StubProtocol: URLProtocol, @unchecked Sendable {
+            nonisolated(unsafe) static var canned: (status: Int, body: String) = (200, "{}")
+            override class func canInit(with request: URLRequest) -> Bool { true }
+            override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+            override func startLoading() {
+                guard let url = request.url else {
+                    client?.urlProtocol(self, didFailWithError: JevTestError.broken)
+                    return
+                }
+                let response = HTTPURLResponse(
+                    url: url, statusCode: Self.canned.status, httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocol(self, didLoad: Data(Self.canned.body.utf8))
+                client?.urlProtocolDidFinishLoading(self)
+            }
+            override func stopLoading() {}
+        }
+        enum JevTestError: Error { case broken }
+
+        let stubConfig = URLSessionConfiguration.ephemeral
+        stubConfig.protocolClasses = [StubProtocol.self]
+
+        let jevQuestions: [DecisionQuestion] = [
+            .boolean(id: "needs_browser", instructions: ""),
+            .choice(id: "complexity", options: ["trivial", "normal", "complex", "long_horizon"], instructions: ""),
+            .score(id: "ambiguity", levels: ["low", "medium", "high"], instructions: ""),
+        ]
+        StubProtocol.canned = (200, #"{"model":"jev-test","answers":{"needs_browser":{"type":"noul","noul":0.95},"complexity":{"type":"choice","choice":"complex","confidence":0.8},"ambiguity":{"type":"score","score":1.9,"confidence":0.9}},"usage":{"input_tokens":100,"output_tokens":12}}"#)
+        actor UsageBox {
+            private var stored: (Int, Int)?
+            func set(_ value: (Int, Int)) { stored = value }
+            func get() -> (Int, Int)? { stored }
+        }
+        let usageBox = UsageBox()
+        let jev = JevDecisionEngine(
+            apiKey: "test-key",
+            session: URLSession(configuration: stubConfig),
+            onUsage: { input, output in Task { await usageBox.set((input, output)) } }
+        )
+        let jevBatch = try? await jev.evaluate(state: DecisionState(query: "x"), questions: jevQuestions)
+        c.check("jev answers booleans from the noul probability",
+                jevBatch?.answer(for: "needs_browser")?.booleanValue == true)
+        c.check("...with confidence derived from the distance to the boundary",
+                abs((jevBatch?.answer(for: "needs_browser")?.confidence ?? 0) - 0.95) < 0.001)
+        c.equal("...and typed choices", jevBatch?.answer(for: "complexity")?.choiceValue, "complex")
+        c.equal("...and scores rounded to the nearest level",
+                jevBatch?.answer(for: "ambiguity")?.scoreValue, "high")
+        c.equal("...and reports its token usage", await usageBox.get()?.0, 100)
+
+        StubProtocol.canned = (401, #"{"error":"unauthorized"}"#)
+        let rejected = try? await JevDecisionEngine(
+            apiKey: "bad", session: URLSession(configuration: stubConfig)
+        ).evaluate(state: DecisionState(query: "x"), questions: jevQuestions)
+        c.check("an unauthorized Jev call fails the batch", rejected == nil)
+
+        // The coordinator: jev without a key uses the deterministic floor, so a
+        // waitlisted install behaves exactly like today.
+        let keylessEnv = AppEnvironment(config: BudConfig())
+        let keyless = await DecisionEngineCoordinator.evaluate(
+            selection: .jev,
+            env: keylessEnv,
+            state: DecisionState(query: "hello"),
+            questions: DecisionQuestions.initial(domains: ["none"])
+        )
+        c.check("jev without a key falls back to the deterministic batch",
+                keyless.fellBack && keyless.batch.engineID == "deterministic")
 
         return c.report()
     }

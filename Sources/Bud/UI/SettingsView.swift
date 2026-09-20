@@ -851,7 +851,26 @@ private struct GeneralSettingsTab: View {
                         "Who answers the routing questions when Context compiler v2 is on. "
                             + "Deterministic is rules-only and offline; Provider asks the session "
                             + "model and falls back to deterministic when it fails or answers "
-                            + "nonsense."
+                            + "nonsense; Jev asks TypeSafe's typed-decision model when a key is "
+                            + "set, and falls back the same way."
+                    )
+                    .font(Bud.Font.caption)
+                    .foregroundStyle(.tertiary)
+                    HStack(spacing: Bud.Space.sm) {
+                        Text("TypeSafe API key")
+                            .font(Bud.Font.callout)
+                        Spacer(minLength: Bud.Space.sm)
+                        SecureField(
+                            model.config.typesafeAPIKey.isEmpty ? "paste it when access arrives" : "set",
+                            text: typesafeKeyBinding
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 260, alignment: .leading)
+                    }
+                    Text(
+                        "For the Jev engine. Stored in the Keychain, never in the config file; "
+                            + "leave empty until you have access — Jev simply falls back to the "
+                            + "deterministic rules until then."
                     )
                     .font(Bud.Font.caption)
                     .foregroundStyle(.tertiary)
@@ -996,6 +1015,16 @@ private struct GeneralSettingsTab: View {
             get: { model.config.decisionEngine },
             set: { newValue in
                 model.config.decisionEngine = newValue
+                model.persistConfig()
+            }
+        )
+    }
+
+    private var typesafeKeyBinding: Binding<String> {
+        Binding(
+            get: { model.config.typesafeAPIKey },
+            set: { newValue in
+                model.config.typesafeAPIKey = newValue
                 model.persistConfig()
             }
         )
