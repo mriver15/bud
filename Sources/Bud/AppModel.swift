@@ -716,6 +716,9 @@ public final class AppModel {
         errorMessage = nil
         BudStore.setCurrentConversation(currentConversationID)
         conversationQuery = ""
+        // The panel is about this conversation, so it opens on this
+        // conversation's activity — which is nothing, for one just started.
+        subagents.loadRecentRuns()
         refreshConversations()
     }
 
@@ -732,6 +735,9 @@ public final class AppModel {
         )
         currentConversationID = id
         BudStore.setCurrentConversation(id)
+        // Before the transcript is restored, so the panel shows this
+        // conversation's runs rather than the ones just left behind.
+        subagents.loadRecentRuns()
         guard let saved = BudStore.load(id: id) else { return }
         runtime.restore(turns: saved.turns, history: saved.messages)
         errorMessage = nil
@@ -749,6 +755,9 @@ public final class AppModel {
             runtime.clear()
             BudStore.setCurrentConversation(currentConversationID)
         }
+        // The deleted conversation's runs went with it, so the panel is re-read
+        // either way — what it was showing may no longer exist.
+        subagents.loadRecentRuns()
         refreshConversations()
     }
 

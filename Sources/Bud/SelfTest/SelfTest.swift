@@ -1564,6 +1564,33 @@ public enum BudSelfTest {
         c.equal("re-running the migration imports nothing twice",
                 reimport?.episodes, 0)
 
+        // The rows the bug left behind. An episode nothing owns — written
+        // without the lesson link, by an older build or a verification run —
+        // could never be deleted from anywhere, so the first open after this
+        // sweeps them. Once, and guarded: a later build that records an episode
+        // of its own must not find it missing.
+        //
+        // This suite's database has already been opened, which is what ran the
+        // sweep, so the guard is cleared to put it back in the state a person's
+        // database is in the first time they run a build carrying the sweep.
+        BudDatabase.shared.transaction { handle in
+            Statement(handle, "DELETE FROM state WHERE key = 'orphan_episodes_swept';")?.run()
+        }
+        CognitiveStore.recordEpisode(
+            summary: "An orphan from before the fix.", scope: "general", salience: 0.4, source: "smoke"
+        )
+        _ = BudDatabase.shared.transaction { handle in MemoryMigration.migrate(handle) }
+        c.check("an episode no note owns is swept once",
+                !CognitiveStore.episodes(limit: 200).contains { $0.summary == "An orphan from before the fix." })
+        c.check("...and what a note owns is not",
+                CognitiveStore.episodes(limit: 200).contains { $0.source == "lesson:1" })
+        CognitiveStore.recordEpisode(
+            summary: "An episode recorded after the sweep.", scope: "general", salience: 0.4, source: "later"
+        )
+        _ = BudDatabase.shared.transaction { handle in MemoryMigration.migrate(handle) }
+        c.check("...and the sweep does not run again to police later rows",
+                CognitiveStore.episodes(limit: 200).contains { $0.summary == "An episode recorded after the sweep." })
+
         // Versioned facts: supersession marks history, never erases it.
         let first = CognitiveStore.recordFact(subject: "editor", value: "xcode")
         let second = CognitiveStore.recordFact(subject: "editor", value: "xcode 16")
@@ -1761,13 +1788,34 @@ public enum BudSelfTest {
         // Forgetting the lesson clears the cognitive copy too, or retrieval
         // would keep surfacing a note the person deleted.
         if let lesson = BudStore.lessons().first(where: { $0.text.contains("Friday afternoons") }) {
+            // A copy of the same sentence that no note links to — written by a
+            // tool that recorded it directly, or by a verification run. It was
+            // invisible to deletion: the note's own episode went, this one stayed
+            // in the table and in retrieval, with nothing in the interface able
+            // to reach it. `lessons.text` is unique, so a matching unlinked
+            // episode is that note's copy and goes with it.
+            CognitiveStore.recordEpisode(
+                summary: lesson.text, scope: "project", salience: 0.8, source: "smoke"
+            )
             BudStore.forget(id: lesson.id)
             let afterForget = MemoryRetriever.retrieve(query: "friday deploys", budget: 10_000)
             c.check("forgetting the note removes its episode",
                     !afterForget.contains { $0.id.hasPrefix("episode:") && $0.text.contains("Friday") })
+            c.check("...and the unlinked copy of it that nothing owned",
+                    !CognitiveStore.episodes(limit: 200).contains { $0.summary == lesson.text })
         } else {
             c.check("the remembered note is in the lesson store", false)
+            c.check("...and the unlinked copy of it that nothing owned", false)
         }
+
+        // An episode another note owns is not that copy: deleting a note must not
+        // take a sentence someone else still keeps.
+        CognitiveStore.recordEpisode(
+            summary: "Kept by another note.", scope: "general", salience: 0.5, source: "lesson:4242"
+        )
+        CognitiveStore.deleteUnownedEpisodes(matching: "Kept by another note.")
+        c.check("a copy another note owns survives a note being forgotten",
+                CognitiveStore.episodes(limit: 200).contains { $0.summary == "Kept by another note." })
 
         return c.report()
     }
@@ -7073,6 +7121,7 @@ public enum BudSelfTest {
         return png
     }
 
+    @MainActor
     static func conversations() -> SelfTestReport {
         let c = Checker(suite: "conversations")
 
@@ -7386,6 +7435,116 @@ public enum BudSelfTest {
         c.equal("recording the same run again updates it rather than duplicating",
                 BudStore.recentRuns().count, 1)
         c.equal("with the newer state", BudStore.recentRuns().first?.state, .failed)
+
+        // Activity belongs to the conversation it happened in. Asked for one
+        // conversation, the store answers with that one's runs and no others —
+        // which is what the panel reads, so a roster cannot show the work of a
+        // conversation nobody is looking at.
+        BudStore.recordRun(SubagentRun(
+            id: "run_2", title: "elsewhere", prompt: "other work", model: "m",
+            state: .done, output: "different findings", startedAt: Date()
+        ), conversationID: "conv_2")
+        c.equal("a conversation's runs are its own",
+                BudStore.recentRuns(conversationID: "conv_1").map(\.id), ["run_1"])
+        c.equal("...and the other conversation's are not in them",
+                BudStore.recentRuns(conversationID: "conv_2").map(\.id), ["run_2"])
+        c.equal("asking for no conversation in particular still sees every run",
+                BudStore.recentRuns().count, 2)
+
+        // Clearing means clearing. The rows leave the store, so the panel cannot
+        // show them again on the next launch.
+        c.equal("deleting a run removes its row", BudStore.deleteRuns(ids: ["run_2"]), 1)
+        c.equal("...and only its row", BudStore.recentRuns().map(\.id), ["run_1"])
+        c.equal("deleting a run that is not there removes nothing",
+                BudStore.deleteRuns(ids: ["run_2"]), 0)
+
+        // A deleted conversation takes its activity with it: runs carry the
+        // conversation as a plain column, so nothing else would sweep them and
+        // the panel would keep work whose conversation no longer exists.
+        BudStore.recordRun(SubagentRun(
+            id: "run_3", title: "doomed", prompt: "p", model: "m",
+            state: .done, output: "o", startedAt: Date()
+        ), conversationID: "conv_1")
+        BudStore.delete(id: "conv_1")
+        c.equal("deleting a conversation removes its runs",
+                BudStore.recentRuns().map(\.id), [])
+
+        // Retention per conversation, newest kept: history is worth having, but
+        // not without bound in a table nothing else empties.
+        for index in 0..<(BudStore.runHistoryLimit + 3) {
+            BudStore.recordRun(SubagentRun(
+                id: "kept_\(index)", title: "run \(index)", prompt: "p", model: "m",
+                state: .done, output: "o",
+                startedAt: Date(timeIntervalSince1970: TimeInterval(index))
+            ), conversationID: "conv_3")
+        }
+        c.equal("one conversation's history stays inside its bound",
+                BudStore.recentRuns(limit: 1_000, conversationID: "conv_3").count,
+                BudStore.runHistoryLimit)
+        c.equal("...keeping the newest",
+                BudStore.recentRuns(conversationID: "conv_3").first?.id,
+                "kept_\(BudStore.runHistoryLimit + 2)")
+
+        // What a run's text is stored as. Runs are the largest thing Bud writes
+        // and are read once, on the way into the panel — and a stored payload
+        // that cannot be read back is a lost run, so the round trip is the check
+        // that matters, not the ratio.
+        let long = String(repeating: "the shape of a long final message, with provenance. ", count: 400)
+        BudStore.recordRun(SubagentRun(
+            id: "run_big", title: "big", prompt: "p", model: "m",
+            state: .done, output: long,
+            toolCalls: [SubagentToolCall(name: "read_file", succeeded: true, preview: long)],
+            startedAt: Date()
+        ), conversationID: "conv_4")
+        let stored = BudDatabase.shared.read { handle -> (Int, Int) in
+            guard let statement = Statement(handle, "SELECT length(output), length(tool_calls_json) FROM runs WHERE id = 'run_big';"),
+                  statement.next() else { return (0, 0) }
+            return (statement.int(0), statement.int(1))
+        } ?? (0, 0)
+        c.check("a long run payload is stored deflated (\(stored.0) bytes for \(long.utf8.count))",
+                stored.0 > 0 && stored.0 < long.utf8.count / 2)
+        c.check("...and so are the tool calls beside it (\(stored.1) bytes)",
+                stored.1 > 0 && stored.1 < long.utf8.count / 2)
+        let reloaded = BudStore.recentRuns(conversationID: "conv_4").first
+        c.equal("...and inflates back to exactly what was written", reloaded?.output, long)
+        c.equal("...including the tool calls stored beside it",
+                reloaded?.toolCalls.first?.preview, long)
+
+        // Text stored before any of this existed has to keep reading: the marker
+        // is what distinguishes the two, and its absence is the whole check.
+        BudDatabase.shared.transaction { handle in
+            Statement(handle, "UPDATE runs SET output = 'plain, from an older build' WHERE id = 'run_big';")?
+                .run()
+        }
+        c.equal("a payload written before compression still reads",
+                BudStore.recentRuns(conversationID: "conv_4").first?.output,
+                "plain, from an older build")
+
+        // The panel's own path, end to end: the roster follows the conversation
+        // rather than the table, and clearing it clears the store.
+        let scoped = SubagentSupervisor(
+            env: AppEnvironment(config: BudConfig()), agents: AgentRegistry()
+        )
+        for (id, conversation) in [("here", "conv_here"), ("there", "conv_there")] {
+            BudStore.recordRun(SubagentRun(
+                id: id, title: id, prompt: "p", model: "m", state: .done, output: "o",
+                startedAt: Date()
+            ), conversationID: conversation)
+        }
+        BudStore.setCurrentConversation("conv_here")
+        scoped.loadRecentRuns()
+        c.equal("the roster opens on this conversation's activity",
+                scoped.runs.map(\.id), ["here"])
+        BudStore.setCurrentConversation("conv_there")
+        scoped.loadRecentRuns()
+        c.equal("...and follows the conversation when it changes",
+                scoped.runs.map(\.id), ["there"])
+        c.check("...taking back what it loaded from the one before",
+                !scoped.runs.contains { $0.id == "here" })
+        scoped.clearFinished()
+        c.equal("clearing the roster empties it", scoped.runs.count, 0)
+        c.equal("...and empties the store with it",
+                BudStore.recentRuns(conversationID: "conv_there").count, 0)
 
         // MARK: Learned delegation
 

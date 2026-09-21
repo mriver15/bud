@@ -36,6 +36,23 @@ public enum BudLiveVerification {
             }
         }
 
+        // A run of this suite drives real turns, and a real turn files memory:
+        // an episode for a note it was asked to keep, context events for every
+        // round, the conversation itself. Against the real store that is the
+        // user's memory — and rows a turn wrote are not the rows the memory pane
+        // can delete, because they were never notes. The offline suite already
+        // runs against a scratch file; this does the same, so verification
+        // leaves the person's own database exactly as it found it.
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bud-live-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let previousDatabase = BudDatabase.shared
+        BudDatabase.shared = BudDatabase(url: scratch.appendingPathComponent("live.sqlite"))
+        cleanup = {
+            BudDatabase.shared = previousDatabase
+            try? FileManager.default.removeItem(at: scratch)
+        }
+
         let provider = config.activeProvider
         c.check("config: provider is \(provider.name)", !config.provider.isEmpty)
         c.check("config: model resolved (\(config.model))", !config.model.isEmpty)

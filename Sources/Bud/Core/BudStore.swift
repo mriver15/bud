@@ -253,7 +253,11 @@ public enum BudStore {
     }
 
     public static func delete(id: String) {
-        // Foreign keys cascade, so the turns and messages go with it.
+        // Foreign keys cascade, so the turns and messages go with it. Runs carry
+        // their conversation as a plain column rather than a reference, so they
+        // have to be swept here — otherwise a deleted conversation's activity
+        // stays in the panel's table with nothing left to explain it.
+        deleteRuns(conversationID: id)
         db.transaction { handle in
             Statement(handle, "DELETE FROM conversations WHERE id = ?;")?.bind(1, id).run()
         }
@@ -377,6 +381,54 @@ public enum BudStore {
 
     // MARK: - Runs
 
+    /// What a run's own text is stored as.
+    ///
+    /// Runs are the largest thing Bud writes: each keeps its whole final message
+    /// and every tool call it made, and a session leaves dozens behind. They are
+    /// read at most once — when the panel opens on the conversation they belong
+    /// to — so history is stored deflated and inflated on the way back.
+    ///
+    /// Marked rather than flagged, because rows written before this existed have
+    /// to keep reading: anything without the prefix is the text itself. And kept
+    /// only when it actually pays: base64 costs a third back, so a short string
+    /// is stored as it is.
+    enum StoredText {
+        static let marker = "zlib:"
+
+        static func pack(_ text: String) -> String {
+            guard !text.isEmpty, let data = text.data(using: .utf8) else { return text }
+            guard let deflated = try? (data as NSData).compressed(using: .zlib) as Data,
+                  deflated.isEmpty == false
+            else { return text }
+            let encoded = deflated.base64EncodedString()
+            guard marker.count + encoded.count < data.count else { return text }
+            return marker + encoded
+        }
+
+        static func unpack(_ stored: String) -> String {
+            guard stored.hasPrefix(marker) else { return stored }
+            let encoded = String(stored.dropFirst(marker.count))
+            guard let data = Data(base64Encoded: encoded),
+                  let inflated = try? (data as NSData).decompressed(using: .zlib) as Data,
+                  let text = String(data: inflated, encoding: .utf8)
+            else {
+                // Unreadable is not the same as empty: handing back what was
+                // stored keeps the row visible and the failure obvious, where
+                // returning nothing would quietly erase a run from the panel.
+                return stored
+            }
+            return text
+        }
+    }
+
+    /// How many runs one conversation keeps.
+    ///
+    /// History is worth having — that is what the panel is for — but not without
+    /// bound in a table that is never otherwise emptied. Fifty is more than a
+    /// session's work and small enough that the deflated text of a long one stays
+    /// a rounding error next to the conversations themselves.
+    public static let runHistoryLimit = 50
+
     public static func recordRun(_ run: SubagentRun, conversationID: String?) {
         let callsJSON = (try? JSONEncoder().encode(run.toolCalls))
             .flatMap { String(data: $0, encoding: .utf8) }
@@ -399,32 +451,61 @@ public enum BudStore {
                 .bind(4, run.prompt)
                 .bind(5, run.model)
                 .bind(6, run.state.rawValue)
-                .bind(7, run.output)
+                .bind(7, StoredText.pack(run.output))
                 .bind(8, run.toolCallCount)
-                .bind(9, callsJSON)
+                .bind(9, callsJSON.map(StoredText.pack))
                 .bind(10, run.startedAt)
                 .bind(11, run.finishedAt)
                 .bind(12, run.error)
                 .run()
+            pruneRuns(handle, conversationID: conversationID)
         }
     }
 
-    /// Runs from previous sessions, newest first.
+    /// Keeps one conversation's history inside its bound, newest kept.
     ///
-    /// The roster is a live activity feed and only ever held this session's work;
-    /// anything dispatched and finished before a restart left no trace at all.
-    public static func recentRuns(limit: Int = 50) -> [SubagentRun] {
+    /// `IS` rather than `=`, so a run filed before there was a conversation open
+    /// is pruned as its own bucket instead of escaping every sweep that compares
+    /// against a conversation id.
+    private static func pruneRuns(_ handle: OpaquePointer, conversationID: String?) {
+        Statement(handle, """
+            DELETE FROM runs WHERE conversation_id IS ? AND id NOT IN (
+                SELECT id FROM runs WHERE conversation_id IS ? ORDER BY started_at DESC LIMIT ?
+            );
+            """)?
+            .bind(1, conversationID)
+            .bind(2, conversationID)
+            .bind(3, runHistoryLimit)
+            .run()
+    }
+
+    /// Runs filed against one conversation, newest first.
+    ///
+    /// `conversationID` is the panel's whole reason for existing: activity is
+    /// about the work in front of you, and a roster that carried every earlier
+    /// conversation's runs would be a log rather than a panel. Passing `nil`
+    /// asks for all of them, which is what the store's own callers want.
+    public static func recentRuns(limit: Int = 50, conversationID: String? = nil) -> [SubagentRun] {
         db.read { handle -> [SubagentRun] in
-            guard let statement = Statement(handle, """
-                SELECT id, title, prompt, model, state, output, tool_calls,
-                       tool_calls_json, started_at, finished_at, error
-                FROM runs ORDER BY started_at DESC LIMIT ?;
-                """) else { return [] }
-            statement.bind(1, limit)
+            let sql = conversationID == nil
+                ? """
+                    SELECT id, title, prompt, model, state, output, tool_calls,
+                           tool_calls_json, started_at, finished_at, error
+                    FROM runs ORDER BY started_at DESC LIMIT ?;
+                    """
+                : """
+                    SELECT id, title, prompt, model, state, output, tool_calls,
+                           tool_calls_json, started_at, finished_at, error
+                    FROM runs WHERE conversation_id IS ? ORDER BY started_at DESC LIMIT ?;
+                    """
+            guard let statement = Statement(handle, sql) else { return [] }
+            if let conversationID { statement.bind(1, conversationID).bind(2, limit) }
+            else { statement.bind(1, limit) }
 
             var runs: [SubagentRun] = []
             while statement.next() {
                 let calls: [SubagentToolCall] = statement.string(7)
+                    .flatMap(StoredText.unpack)
                     .flatMap { $0.data(using: .utf8) }
                     .flatMap { try? JSONDecoder().decode([SubagentToolCall].self, from: $0) } ?? []
                 runs.append(SubagentRun(
@@ -433,7 +514,7 @@ public enum BudStore {
                     prompt: statement.string(2) ?? "",
                     model: statement.string(3) ?? "",
                     state: SubagentState(rawValue: statement.string(4) ?? "") ?? .failed,
-                    output: statement.string(5) ?? "",
+                    output: StoredText.unpack(statement.string(5) ?? ""),
                     toolCallCount: statement.int(6),
                     toolCalls: calls,
                     startedAt: statement.date(8) ?? Date(),
@@ -443,6 +524,34 @@ public enum BudStore {
             }
             return runs
         } ?? []
+    }
+
+    /// Removes runs by id. What "Clear finished" means when it says it, and what
+    /// a deleted conversation does to the runs it owned.
+    @discardableResult
+    public static func deleteRuns(ids: [String]) -> Int {
+        guard !ids.isEmpty else { return 0 }
+        return db.transaction { handle -> Int in
+            var removed = 0
+            for id in ids {
+                guard let statement = Statement(handle, "DELETE FROM runs WHERE id = ?;") else {
+                    continue
+                }
+                statement.bind(1, id).run()
+                removed += statement.changes
+            }
+            return removed
+        } ?? 0
+    }
+
+    @discardableResult
+    public static func deleteRuns(conversationID: String) -> Int {
+        db.transaction { handle -> Int in
+            guard let statement = Statement(handle, "DELETE FROM runs WHERE conversation_id = ?;")
+            else { return 0 }
+            statement.bind(1, conversationID).run()
+            return statement.changes
+        } ?? 0
     }
 
     // MARK: - Learned delegation
@@ -540,6 +649,9 @@ public enum BudStore {
     }
 
     public static func forget(id: Int) {
+        // Read before the row goes: the cleanup below matches on the note's own
+        // text, which is the only handle an unlinked copy of it has.
+        let text = lessons().first { $0.id == id }?.text
         db.transaction { handle in
             Statement(handle, "DELETE FROM lessons WHERE id = ?;")?.bind(1, id).run()
         }
@@ -547,6 +659,7 @@ public enum BudStore {
         // the lesson forgets both, or retrieval would keep surfacing a note
         // the person deleted.
         CognitiveStore.deleteBySource("lesson:\(id)")
+        if let text { CognitiveStore.deleteUnownedEpisodes(matching: text) }
     }
 
     /// How many notes the block in front of the model may carry.

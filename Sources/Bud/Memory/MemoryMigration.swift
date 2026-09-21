@@ -179,7 +179,51 @@ public enum MemoryMigration {
             """, nil, nil, nil
         )
 
+        sweepOrphanedEpisodes(handle)
+
         return (episodes: Int(episodes), facts: Int(facts))
+    }
+
+    /// Removes the episodes no note owns, once.
+    ///
+    /// Every episode a running Bud writes is written beside the note it came
+    /// from and carries `lesson:<id>`. Anything else is a leftover: an episode
+    /// from a build that recorded the sentence without the link, or from a
+    /// verification run against the real store. Forgetting the note deleted the
+    /// linked copy and left these, so they sat in the table and in retrieval
+    /// with nothing in the interface able to reach them — the report that
+    /// started this was exactly one such row.
+    ///
+    /// Guarded rather than run on every open, because "unowned" is a statement
+    /// about how memory is written today and not a rule to keep enforcing: a
+    /// later feature that records an episode of its own would have its rows
+    /// deleted by a sweep that ran every time.
+    private static func sweepOrphanedEpisodes(_ handle: OpaquePointer) {
+        let swept = "orphan_episodes_swept"
+        var already = false
+        if let statement = Statement(handle, "SELECT 1 FROM state WHERE key = ? LIMIT 1;") {
+            statement.bind(1, swept)
+            already = statement.next()
+        }
+        guard !already else { return }
+
+        sqlite3_exec(
+            handle, """
+            DELETE FROM memory_fts WHERE kind = 'episode' AND ref_id IN (
+                SELECT e.id FROM episodes e
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM lessons l WHERE 'lesson:' || l.id = e.source_id
+                )
+            );
+
+            DELETE FROM episodes WHERE NOT EXISTS (
+                SELECT 1 FROM lessons l WHERE 'lesson:' || l.id = episodes.source_id
+            );
+            """, nil, nil, nil
+        )
+        Statement(handle, "INSERT OR REPLACE INTO state (key, value) VALUES (?, 'done');")?
+            .bind(1, swept)
+            .run()
     }
 
     private static func exec(_ handle: OpaquePointer, _ sql: String) -> Bool {

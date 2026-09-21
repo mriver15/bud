@@ -132,6 +132,9 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
     @ObservationIgnored private var memo = EngineResolutionMemo()
     /// Live handles, so one run can be cancelled without disturbing siblings.
     @ObservationIgnored private var handles: [String: Task<Void, Never>] = [:]
+    /// Ids that came back from the store rather than from this session, so a
+    /// reload can take back what it loaded without touching live work.
+    @ObservationIgnored private var loadedRunIDs: Set<String> = []
 
     public init(env: AppEnvironment, agents: AgentRegistry) {
         self.env = env
@@ -518,18 +521,31 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         }
     }
 
-    /// Drops every finished row from the roster. This is a view, not an erasure:
-    /// the runs themselves stay in the store, so a run cleared here is still
-    /// there on the next launch — which is also what keeps history from being
-    /// thrown away by a click meant for this session's leftovers.
+    /// Clears the finished rows — from the roster *and* from the store.
+    ///
+    /// It used to be a view: the rows left the panel and stayed in the database,
+    /// so they came back on the next launch and no affordance could ever remove
+    /// them. A button that says "Clear finished" and leaves the data behind is
+    /// worse than no button, because the only way to find out is to look at the
+    /// file. Work still running is untouched.
     public func clearFinished() {
+        let cleared = runs.filter(\.state.isTerminal)
+        guard !cleared.isEmpty else { return }
         runs.removeAll { $0.state.isTerminal }
+        loadedRunIDs.subtract(cleared.map(\.id))
+        BudStore.deleteRuns(ids: cleared.map(\.id))
     }
 
     // MARK: - History
 
-    /// Brings back runs from earlier sessions so the roster opens on what Bud has
-    /// already done rather than on an empty list.
+    /// Brings back this conversation's earlier runs, so the panel opens on what
+    /// Bud has already done here rather than on an empty list.
+    ///
+    /// Scoped to the conversation on purpose. Activity is about the work in front
+    /// of you: a roster carrying every earlier conversation's runs is a log, and
+    /// it answers a question nobody asked while hiding the one they did. Called
+    /// again when the open conversation changes, which is why the rows it loaded
+    /// are tracked — they are the only ones it may take back.
     ///
     /// Past runs are appended to `runs` rather than kept in a collection of their
     /// own: the panel and the session statistics both read `runs`, and a second
@@ -539,14 +555,20 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
     /// inserting at the front; `spawn` also looks its own runs up by id, and the
     /// digest is built from the batch it was handed, so neither is disturbed.
     public func loadRecentRuns(limit: Int = 50) {
-        let known = Set(runs.map(\.id))
+        runs.removeAll { loadedRunIDs.contains($0.id) }
+        loadedRunIDs.removeAll()
         // Only terminal rows belong in a roster. Nothing is written before a run
         // settles, so a queued or running row can only be a leftover from a
         // process that died mid-run; showing it would report work that is not
         // happening and inflate the running count above.
-        let past = BudStore.recentRuns(limit: limit)
-            .filter { $0.state.isTerminal && !known.contains($0.id) }
+        let live = Set(runs.map(\.id))
+        let past = BudStore.recentRuns(
+            limit: limit,
+            conversationID: BudStore.currentConversationID()
+        )
+        .filter { $0.state.isTerminal && !live.contains($0.id) }
         guard !past.isEmpty else { return }
+        loadedRunIDs.formUnion(past.map(\.id))
         runs.append(contentsOf: past)
     }
 

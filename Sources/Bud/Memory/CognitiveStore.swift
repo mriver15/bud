@@ -391,6 +391,40 @@ public enum CognitiveStore {
         } ?? false
     }
 
+    /// Removes episodes carrying this text that nothing else owns.
+    ///
+    /// A note's episode is linked by source (`lesson:<id>`), and that link is
+    /// what ``deleteBySource(_:)`` follows. An episode written on another path —
+    /// a harness, a tool that recorded the sentence directly — carries the same
+    /// text with no link, so forgetting the note left it in the table and in
+    /// retrieval for ever, with nothing in the interface able to reach it. The
+    /// text is the note's own, and `lessons.text` is unique, so a matching
+    /// unlinked episode is that note's copy.
+    ///
+    /// Only unlinked rows are touched: an episode another lesson owns is that
+    /// lesson's, and deleting it here would be deleting something the person did
+    /// not ask to forget.
+    @discardableResult
+    public static func deleteUnownedEpisodes(matching text: String) -> Bool {
+        let summary = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !summary.isEmpty else { return false }
+        return db.transaction { handle -> Bool in
+            guard let statement = Statement(handle, """
+                SELECT id FROM episodes
+                WHERE summary = ? AND (source_id IS NULL OR source_id NOT LIKE 'lesson:%');
+                """) else { return false }
+            statement.bind(1, summary)
+            var ids: [Int] = []
+            while statement.next() { ids.append(statement.int(0)) }
+            for id in ids {
+                Statement(handle, "DELETE FROM memory_fts WHERE kind = 'episode' AND ref_id = ?;")?
+                    .bind(1, id).run()
+                Statement(handle, "DELETE FROM episodes WHERE id = ?;")?.bind(1, id).run()
+            }
+            return !ids.isEmpty
+        } ?? false
+    }
+
     /// Records what a connected MCP server is, into the graph the retriever
     /// walks: a server node, a tool node per tool (capped — a 200-tool server
     /// does not become 200 nodes), and the PROJECT_USES_MCP relation from the
