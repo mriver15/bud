@@ -179,9 +179,28 @@ public final class MCPAppBridge: NSObject, WKScriptMessageHandler {
                     "touch": .bool(false),
                     "hover": .bool(true),
                 ]),
+                "styles": .object([
+                    "variables": .object(Self.themeVariables),
+                ]),
             ]),
         ])
     }
+
+    /// The standardized CSS custom properties, in the `light-dark()` form the
+    /// spec expects. Bud is dark glass, so the light half mirrors the dark half;
+    /// apps read these through `applyHostStyleVariables` and fall back on their
+    /// own defaults for anything the host does not send.
+    private static let themeVariables: [String: JSONValue] = [
+        "--color-background-primary": .string("light-dark(#ffffff, #171717)"),
+        "--color-background-secondary": .string("light-dark(#f3f4f6, #242424)"),
+        "--color-background-tertiary": .string("light-dark(#e5e7eb, #2e2e2e)"),
+        "--color-text-primary": .string("light-dark(#111827, #fafafa)"),
+        "--color-text-secondary": .string("light-dark(#4b5563, #d4d4d4)"),
+        "--color-text-tertiary": .string("light-dark(#6b7280, #9ca3af)"),
+        "--color-border-primary": .string("light-dark(#e5e7eb, #3f3f3f)"),
+        "--font-sans": .string("-apple-system, system-ui, sans-serif"),
+        "--font-mono": .string("ui-monospace, SFMono-Regular, monospace"),
+    ]
 
     // MARK: Transport
 

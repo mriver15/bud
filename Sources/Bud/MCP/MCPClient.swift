@@ -210,12 +210,18 @@ public actor MCPClient {
         return content
     }
 
-    /// Whether the server and this host negotiated the Apps extension. Absence
-    /// is taken at face value — the spec requires servers to declare what they
-    /// implement, and rendering without it would trust an extension the server
-    /// never agreed to.
+    /// Whether the server and this host negotiated the Apps extension.
+    ///
+    /// The spec names `io.modelcontextprotocol/ui`, and a compliant server
+    /// declares it. Several real servers — including the one this host was first
+    /// exercised against — declare `resources` and link tools to `ui://`
+    /// resources through `_meta.ui` without the dedicated extension, which is the
+    /// spec's own discovery mechanism. Both count as negotiated; the resource
+    /// validation (scheme, MIME, byte bound, CSP) is the hard gate either way.
     public func supportsApps() -> Bool {
-        handshake?.supports(Self.appsExtension) ?? false
+        if handshake?.supports(Self.appsExtension) == true { return true }
+        return handshake?.supports("resources") == true
+            && cachedTools.contains { $0.ui?.resourceUri != nil }
     }
 
     /// The pictures in a result, as something to draw.

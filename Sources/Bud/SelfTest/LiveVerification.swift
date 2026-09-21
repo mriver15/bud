@@ -1200,6 +1200,62 @@ public enum BudLiveVerification {
             }
         }
 
+        // MARK: MCP Apps — the real getcompetitive
+
+        // The host, driven against the server it was built for: negotiate, read
+        // the declared ui:// resource, validate it, and turn a real app-tool call
+        // into a renderable attachment. The render sandbox itself is exercised in
+        // the browser harness; this is the protocol half, on the real wire.
+        let appsConfig = MCPServerConfig(
+            name: "getcompetitive", transport: .stdio, command: "npx",
+            args: ["-y", "getcompetitive"], confirmMutations: false
+        )
+        let appsClient = MCPClient(config: appsConfig)
+        do {
+            try await appsClient.connect()
+            let supports = await appsClient.supportsApps()
+            let tools = await appsClient.cachedTools
+            // An app tool whose schema has no required arguments is the one a
+            // model can call empty and still render — `analyze_team` in the
+            // current build. The check prefers it, and settles for any app tool.
+            let appTool = tools.first {
+                $0.ui?.resourceUri != nil && ($0.inputSchema["required"]?.arrayValue ?? []).isEmpty
+            } ?? tools.first { $0.ui?.resourceUri != nil }
+            c.check("getcompetitive negotiates MCP Apps", supports)
+            c.check("...and links a tool to a ui:// resource",
+                    appTool?.ui?.resourceUri?.hasPrefix("ui://") == true)
+            if let uri = appTool?.ui?.resourceUri {
+                let content = try await appsClient.readResource(uri: uri)
+                let resource = try MCPAppLoader.validate(content)
+                c.check("...its resource reads and validates (\(resource.html.utf8.count) bytes)",
+                        resource.html.utf8.count > 1_000)
+                c.check("...as an mcp-app document", resource.mimeType.contains("mcp-app"))
+                let full = try await appsClient.callToolFull(name: appTool!.name, arguments: .object([:]))
+                // An empty team is a valid call with a server-side answer — the
+                // app renders that answer. What is under test is that the host
+                // gets the complete result back, error flag included, not that
+                // the server approved the (empty) input.
+                c.check("...and an app-tool call returns a complete result (\(full.isError ? "isError" : "ok"), \(full.content.count) blocks, structured=\(full.structuredContent != nil))",
+                        !full.content.isEmpty || full.structuredContent != nil)
+                let attachment = MCPAppAttachment(
+                    serverID: appsConfig.id,
+                    generation: await appsClient.connectionGeneration,
+                    resourceURI: uri,
+                    toolName: appTool!.name,
+                    arguments: .object([:]),
+                    result: MCPAppLoader.boundedResult(full),
+                    isError: full.isError,
+                    contentHash: resource.contentHash
+                )
+                c.check("...and produces a renderable attachment",
+                        attachment.contentHash == resource.contentHash)
+            }
+            await appsClient.stop()
+        } catch {
+            c.check("getcompetitive MCP Apps (skipped: \(MCPError.wrap(error).errorDescription ?? "unavailable"))",
+                    false)
+        }
+
         // MARK: Cleanup
 
         await cleanup?()

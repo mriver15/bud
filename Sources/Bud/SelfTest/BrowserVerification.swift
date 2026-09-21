@@ -492,11 +492,16 @@ public enum BudBrowserVerification {
 
             // WebKit defers work for a view that is not in a window — the same
             // reason the browser engine parks its page — so the app view is
-            // hosted the way the transcript hosts it.
+            // hosted the way the transcript hosts it. Ordered in but fully
+            // transparent, like the engine's parking window: WebKit composites
+            // it, and nobody sees it.
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 820, height: 640),
                 styleMask: [.borderless], backing: .buffered, defer: false
             )
+            window.alphaValue = 0
+            window.ignoresMouseEvents = true
+            window.hasShadow = false
             window.contentView = coordinator.webView
             window.orderFront(nil)
             defer { window.close() }
