@@ -12,6 +12,23 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.20.3
+
+### The agent no longer loops on render_ui
+
+With the context harness's typed decisions on, the planner held `render_ui` and
+`find_image` back whenever the decision said the answer was not a surface. When
+the model reached for `render_ui` anyway, the host admitted the group for that
+one retry — and then held it back again on the next round, so a turn that wanted
+a surface fail-opened into the same loop round after round, and the model, never
+seeing the schema it was reaching for, called the tool wrong.
+
+A held-back tool the model reaches for is now recorded as intent: it stays
+offered for the following rounds without ever outranking a real success. The
+model reaches for `render_ui` once, and from then on it is offered and answered
+with its schema, so the turn finishes instead of spinning toward the round limit.
+
+
 ## Bud 2.20.2
 
 ### MCP Apps: the accent broke the handshake
