@@ -2618,6 +2618,22 @@ public enum BudSelfTest {
         c.check("sticky evidence activates its group",
                 stickyPlan.plan.descriptors.contains { $0.providerName == "Browser" })
 
+        // Reaching for a held-back tool is intent, not success: it must keep the
+        // group offered for the next round without ever outranking a real success.
+        // This is the fix for the render_ui loop — the model fail-opened to a UI
+        // tool the decision had held back, and every following round re-held it
+        // back and forced the same fail-open.
+        var intent = StickyEvidence()
+        intent.recordIntent(tool: GenUIToolProvider.renderToolName, round: 1)
+        c.equal("a reached-for tool stays offered for the next round",
+                intent.activeTools(currentRound: 2), [GenUIToolProvider.renderToolName])
+        intent.record(tool: "read_file", succeeded: true, round: 1)
+        c.equal("...but a real success outranks a reach",
+                intent.activeTools(currentRound: 2).first, "read_file")
+        let intentPlan = await stageA(for: "What time is it?", sticky: [GenUIToolProvider.renderToolName])
+        c.check("a reached-for UI tool survives a UI-less decision",
+                intentPlan.plan.descriptors.contains { $0.name == GenUIToolProvider.renderToolName })
+
         // The memory resolver gates on the decision and renders a fenced section.
         let candidates = [
             MemoryCandidate(id: "fact:1", characters: 20, reason: "exact subject",

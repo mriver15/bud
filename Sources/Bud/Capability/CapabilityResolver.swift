@@ -23,6 +23,17 @@ public struct StickyEvidence: Sendable, Equatable {
         entries[tool] = entry
     }
 
+    /// Records that the model reached for a tool the planner had held back.
+    /// Reaching is intent, not outcome: the tool has not succeeded, so it must
+    /// never outrank a real success, but it must stay offered for the next round
+    /// or two — otherwise every round re-holds it back and the model fail-opens
+    /// into the same loop forever.
+    public mutating func recordIntent(tool: String, round: Int) {
+        var entry = entries[tool] ?? Entry(lastSuccessRound: 0, successes: 0)
+        entry.lastSuccessRound = round
+        entries[tool] = entry
+    }
+
     /// The tools that succeeded within the window, the most proven first —
     /// success count, then recency. Mirrors the planner's "previous two rounds"
     /// horizon, but only admits what actually worked.

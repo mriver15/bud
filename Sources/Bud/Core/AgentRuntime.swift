@@ -617,6 +617,10 @@ public final class AgentRuntime {
                     index: plan.index
                 )
                 failOpenCount += 1
+                // The model reached for a held-back tool: record the intent so
+                // the next round's plan keeps the group offered, instead of
+                // holding it back again and forcing the same fail-open forever.
+                stickyEvidence.recordIntent(tool: missing.name, round: shadowRound)
                 if expandedPlan.reason.contains("(as ") {
                     aliasRecoveries.append(expandedPlan.reason)
                 }
