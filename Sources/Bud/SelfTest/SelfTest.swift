@@ -1505,6 +1505,57 @@ public enum BudSelfTest {
         c.check("a remembered note is retrievable by a later query",
                 remembered.contains { $0.id.hasPrefix("episode:") && $0.text.contains("Friday") })
 
+        // A second phrasing of the same fact must not land twice. The model
+        // saves one fact once per phrasing it produces; the store has to
+        // recognise the rephrase, not only the exact text.
+        _ = await memoryTools.invoke(
+            tool: "remember",
+            arguments: .object([
+                "text": .string("MCP servers are preferred for data lookup."),
+                "scope": .string("general"),
+            ]),
+            callID: "remember-dup-1"
+        )
+        let rephrased = await memoryTools.invoke(
+            tool: "remember",
+            arguments: .object([
+                "text": .string("The MCP servers are highly preferred for data lookup."),
+                "scope": .string("general"),
+            ]),
+            callID: "remember-dup-2"
+        )
+        c.check("a rephrased duplicate is reported as already known",
+                !rephrased.isError && rephrased.text.contains("Already known"))
+        c.equal("...and the store holds one note, not two",
+                BudStore.lessons().filter { $0.text.contains("data lookup") }.count, 1)
+
+        // Two concurrent remembers of one fact race the duplicate check; the
+        // loser's insert is ignored and it must read back as known, not as a
+        // failure the model would retry.
+        async let raceOne = memoryTools.invoke(
+            tool: "remember",
+            arguments: .object([
+                "text": .string("Concurrent saves land once."),
+                "scope": .string("general"),
+            ]),
+            callID: "remember-race-1"
+        )
+        async let raceTwo = memoryTools.invoke(
+            tool: "remember",
+            arguments: .object([
+                "text": .string("Concurrent saves land once."),
+                "scope": .string("general"),
+            ]),
+            callID: "remember-race-2"
+        )
+        let (raceA, raceB) = await (raceOne, raceTwo)
+        let saved = [raceA, raceB].filter { $0.text.contains("Recorded") }
+        let known = [raceA, raceB].filter { $0.text.contains("Already known") }
+        c.check("one concurrent save records and the other reads back as known",
+                saved.count == 1 && known.count == 1)
+        c.equal("...and exactly one note exists",
+                BudStore.lessons().filter { $0.text == "Concurrent saves land once." }.count, 1)
+
         // Forgetting the lesson clears the cognitive copy too, or retrieval
         // would keep surfacing a note the person deleted.
         if let lesson = BudStore.lessons().first(where: { $0.text.contains("Friday afternoons") }) {

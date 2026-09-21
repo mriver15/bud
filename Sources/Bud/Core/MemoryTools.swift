@@ -122,15 +122,25 @@ public nonisolated struct MemoryToolsProvider: ToolProvider {
         // `INSERT OR IGNORE` reports success when it skips a row — so its return
         // value alone cannot distinguish the two, and a model told it saved
         // something it did not is worse served than one told nothing at all.
+        //
+        // The match is exact or near: a model that saves the same fact twice in
+        // one round rephrases it, and two phrasings of one fact must not land as
+        // two notes. Token containment catches the rephrasing without ever
+        // refusing a genuinely different note.
         let existing = BudStore.lessons(limit: Int.max)
-        if existing.contains(where: { $0.text == text }) {
-            return .ok(
-                "Already known — \"\(summarise(text))\" is in your notes already, so nothing was recorded. "
-                + "It was there before this conversation; do not claim you just saved it."
-            )
+        if let known = knownNote(text, among: existing) {
+            return .ok(alreadyKnownMessage(text, known: known.text))
         }
 
         guard BudStore.remember(text, scope: scope, source: BudStore.currentConversationID()) else {
+            // Two concurrent remembers of one fact race the check above: both
+            // see nothing, one insert wins, the other is ignored. The note IS
+            // saved — report it as known rather than as a failure the model
+            // would retry with yet another phrasing.
+            let after = BudStore.lessons(limit: Int.max)
+            if let known = knownNote(text, among: after) {
+                return .ok(alreadyKnownMessage(text, known: known.text))
+            }
             throw ToolFailure(message: "Bud could not write that note, so it was not saved. Try again.")
         }
 
@@ -151,6 +161,30 @@ public nonisolated struct MemoryToolsProvider: ToolProvider {
             "Recorded \"\(summarise(text))\" as a \(scope) note. It survives this conversation like every "
             + "other note, so there is nothing to confirm to the user."
         )
+    }
+
+    /// The note already holding this fact: the same text, or one whose words
+    /// mostly contain the new note's words. At least three shared words, and
+    /// containment of three quarters or better — loose enough to miss nothing a
+    /// person would call "the same note twice", tight enough that two notes
+    /// merely about the same subject are both kept.
+    private func knownNote(_ text: String, among lessons: [Lesson]) -> Lesson? {
+        let newTokens = Set(TextRanking.tokens(in: text))
+        guard newTokens.count >= 3 else { return nil }
+        return lessons.first { lesson in
+            guard lesson.text != text else { return true }
+            let tokens = Set(TextRanking.tokens(in: lesson.text))
+            guard tokens.count >= 3 else { return false }
+            let shared = tokens.intersection(newTokens).count
+            guard shared >= 3 else { return false }
+            return Double(shared) / Double(max(tokens.count, newTokens.count)) >= 0.75
+        }
+    }
+
+    private func alreadyKnownMessage(_ text: String, known: String) -> String {
+        "Already known — \"\(summarise(text))\" matches your existing note "
+            + "\"\(summarise(known))\", so nothing was recorded. "
+            + "Do not claim you just saved it."
     }
 
     /// The scope the model asked for, defaulted and validated rather than passed
@@ -249,9 +283,9 @@ extension MemoryToolsProvider {
     offer it twice. Notice these on your own initiative and keep them without \
     saying so — nobody has to ask, and nobody needs telling. Do not keep a log of \
     trivia or of anything that only matters now: the task in hand, a file you are \
-    editing, this turn's output, or anything you could read again from the code or \
-    the transcript. A fact already in your notes comes back as already known \
-    rather than being saved again.
+    editing, this turn's output, or anything you could read again from the code \
+    or the transcript. A fact already in your notes — even rephrased — comes back \
+    as already known rather than being saved again.
     """
 
     static let recallDescription = """
