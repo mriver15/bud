@@ -6395,6 +6395,155 @@ public enum BudSelfTest {
         c.check("a tiff is not", !ImageSearch.isRaster("https://x/a.tif"))
         c.check("a page is not", !ImageSearch.isRaster("https://x/File:Thing"))
 
+        // MARK: PokéAPI
+
+        // The slug the API is asked by: words joined with hyphens.
+        c.equal("a name with spaces becomes a slug", ImageSearch.slug(for: "Iron Valiant"), "iron-valiant")
+        c.equal("punctuation becomes a separator", ImageSearch.slug(for: "Mr. Mime"), "mr-mime")
+        c.equal("case and padding do not matter", ImageSearch.slug(for: "  Porygon-Z "), "porygon-z")
+        c.equal("a slug becomes a display name",
+                ImageSearch.displayName("charizard-mega-x"), "Charizard Mega X")
+
+        let poke = json("""
+        {
+          "name": "charizard-mega-x",
+          "species": {"name": "charizard"},
+          "sprites": {
+            "front_default": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/10034.png",
+            "other": {
+              "home": {"front_default": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/home/10034.png"},
+              "official-artwork": {"front_default": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/10034.png"}
+            }
+          }
+        }
+        """)
+        let art = ImageSearch.artwork(from: poke, query: "Charizard Mega X")
+        c.equal("official artwork is preferred over the sprite",
+                art?.url,
+                "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/10034.png")
+        c.equal("...marked as official artwork", art?.source, .artwork)
+        c.equal("...with a human name, not a slug", art?.title, "Charizard Mega X")
+        c.check("...with the species page it can be read at",
+                art?.page?.contains("bulbapedia.bulbagarden.net/wiki/Charizard") == true)
+        c.equal("...credited to where the artwork came from", art?.credit, "Pokémon artwork via PokéAPI")
+
+        // Without official artwork the HOME render answers, and without that the
+        // sprite — all of them are the creature.
+        c.equal("the HOME render stands in for the artwork",
+                ImageSearch.artwork(from: json("""
+                {"sprites": {"other": {"home": {"front_default": "https://x/home.png"}}}}
+                """), query: "x")?.url, "https://x/home.png")
+        c.equal("the game sprite stands in for both",
+                ImageSearch.artwork(from: json("""
+                {"sprites": {"front_default": "https://x/sprite.png"}}
+                """), query: "x")?.url, "https://x/sprite.png")
+        c.check("a Pokémon with no picture is not an answer",
+                ImageSearch.artwork(from: json("""
+                {"name": "missingno", "sprites": null}
+                """), query: "missingno") == nil)
+
+        // MARK: Bulbapedia
+
+        let bulba = json("""
+        {
+          "query": {"pages": {
+            "1": {"index": 3, "title": "Dragon Claw (move)",
+                  "thumbnail": {"source": "https://archives.bulbagarden.net/media/upload/thumb/6/64/Dragon_Claw_IX.png/640px-Dragon_Claw_IX.png"},
+                  "fullurl": "https://bulbapedia.bulbagarden.net/wiki/Dragon_Claw_(move)"},
+            "2": {"index": 1, "title": "Garchomp (Pokémon)",
+                  "thumbnail": {"source": "https://archives.bulbagarden.net/media/upload/thumb/a/a8/0445Garchomp.png/640px-0445Garchomp.png"},
+                  "fullurl": "https://bulbapedia.bulbagarden.net/wiki/Garchomp_(Pokémon)"},
+            "3": {"index": 2, "title": "Cynthia",
+                  "thumbnail": {"source": "https://archives.bulbagarden.net/media/upload/thumb/c/c3/BDSP_Cynthia.png/640px-BDSP_Cynthia.png"},
+                  "fullurl": "https://bulbapedia.bulbagarden.net/wiki/Cynthia"}
+          }}
+        }
+        """)
+        let fromBulba = ImageSearch.article(fromSearch: bulba, query: "Garchomp")
+        c.equal("the hit that is about the query answers, whatever its rank",
+                fromBulba?.title, "Garchomp (Pokémon)")
+        c.equal("...marked as the article", fromBulba?.source, .article)
+        c.equal("...with the page it can be read at",
+                fromBulba?.page, "https://bulbapedia.bulbagarden.net/wiki/Garchomp_(Pokémon)")
+        c.equal("...credited to Bulbapedia", fromBulba?.credit, "Bulbapedia")
+        // A mention is not the thing: the same gate that keeps Wikipedia honest.
+        c.check("a page that merely mentions the query is refused",
+                ImageSearch.article(fromSearch: json("""
+                {"query": {"pages": {"1": {"index": 1, "title": "Sunset Colosseum",
+                 "thumbnail": {"source": "https://archives.bulbagarden.net/x.png"}}}}}
+                """), query: "sunset over mountains") == nil)
+        c.check("a page with no lead image is skipped",
+                ImageSearch.article(fromSearch: json("""
+                {"query": {"pages": {"1": {"index": 1, "title": "Rotom"}}}}
+                """), query: "Rotom") == nil)
+
+        // MARK: Open Library
+
+        let library = json("""
+        {"docs": [
+          {"title": "The Three-Body Problem", "cover_i": 9157544, "key": "/works/OL17267881W"},
+          {"title": "Death's End", "cover_i": 7893958, "key": "/works/OL17610507W"},
+          {"title": "三体", "cover_i": 14632491, "key": "/works/OL26796577W"},
+          {"title": "A cookbook", "cover_i": -1, "key": "/works/OL9W"}
+        ]}
+        """)
+        let covers = ImageSearch.covers(from: library, query: "three body problem")
+        c.equal("a cover whose title mentions the query survives", covers.count, 1)
+        c.equal("...with its address built from the id",
+                covers.first?.url, "https://covers.openlibrary.org/b/id/9157544-L.jpg")
+        c.equal("...and its page on the library",
+                covers.first?.page, "https://openlibrary.org/works/OL17267881W")
+        c.equal("...credited to the library", covers.first?.credit, "Open Library")
+        c.check("a doc with no cover is not a picture", !covers.contains { $0.title == "A cookbook" })
+
+        // MARK: iTunes
+
+        let store = json("""
+        {"results": [
+          {"collectionName": "Donda (Deluxe)",
+           "artworkUrl100": "https://is1-ssl.mzstatic.com/image/thumb/Music116/v4/cf/a7/f9/21UMGIM64738.rgb.jpg/100x100bb.jpg",
+           "collectionViewUrl": "https://music.apple.com/us/album/donda/1593921144"},
+          {"collectionName": "Donda",
+           "artworkUrl100": "https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/62/13/7b/21UMGIM64738.rgb.jpg/100x100bb.jpg",
+           "collectionViewUrl": "https://music.apple.com/us/album/donda/1593921144"},
+          {"collectionName": "Le Menhir d'Or",
+           "artworkUrl100": "https://is1-ssl.mzstatic.com/x/100x100bb.jpg"}
+        ]}
+        """)
+        let albums = ImageSearch.artwork(fromSearch: store, query: "Donda", limit: 3)
+        c.equal("one entry per artwork, not per pressing", albums.count, 1)
+        c.check("...at the size a card draws", albums.first?.url.hasSuffix("600x600bb.jpg") == true)
+        c.equal("...with the page it can be heard at",
+                albums.first?.page, "https://music.apple.com/us/album/donda/1593921144")
+        c.equal("an address without the size marker is left alone",
+                ImageSearch.enlarge("https://x/y.jpg"), "https://x/y.jpg")
+
+        // MARK: Openverse
+
+        let openverse = json("""
+        {"results": [
+          {"title": "Red Panda",
+           "url": "https://live.staticflickr.com/4048/4597717451_08728db720_b.jpg",
+           "foreign_landing_url": "https://www.flickr.com/photos/8488209@N07/4597717451",
+           "license": "by-nd", "license_version": "2.0"},
+          {"title": null,
+           "url": "https://live.staticflickr.com/x.png",
+           "foreign_landing_url": "https://www.flickr.com/x",
+           "license": "cc0"},
+          {"title": "A sound file", "url": "https://x.ogg"}
+        ]}
+        """)
+        let open = ImageSearch.images(fromSearch: openverse, query: "red panda", limit: 3)
+        c.equal("the pictures in the search survive, whatever their licence", open.count, 2)
+        c.equal("...the licence is in words", open.first?.credit, "CC BY-ND")
+        c.equal("...with the page it can be credited at",
+                open.first?.page, "https://www.flickr.com/photos/8488209@N07/4597717451")
+        c.equal("...and CC0 is named for what it is", open[1].credit, "CC0")
+        c.check("a file that is not a picture is left out",
+                !open.contains { $0.url.contains(".ogg") })
+        c.check("an unknown licence code is passed through as-is",
+                ImageSearch.license(from: json(#"{"license": "oddball"}"#)) == "oddball")
+
         return c.report()
     }
 

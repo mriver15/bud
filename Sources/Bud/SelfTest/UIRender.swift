@@ -987,9 +987,15 @@ public enum UIRender {
                     "height": .number(96),
                     "radius": .number(10),
                 ]))
+                let kind: String
+                switch image.source {
+                case .article: kind = "the article"
+                case .artwork: kind = "official artwork"
+                case .search: kind = "a match on the words"
+                }
                 children.append(.object([
                     "type": .string("text"),
-                    "value": .string((image.source == .article ? "the article · " : "a match on the words · ") + image.title),
+                    "value": .string(kind + " · " + image.title),
                     "style": .string("caption"),
                 ]))
             } else {
