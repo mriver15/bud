@@ -20,6 +20,13 @@ public struct MemorySettingsView: View {
     /// a place for a permanent delete on one tap.
     @BudState private var pendingForget: Lesson?
     @BudState private var notes: [Lesson] = []
+    /// The instruction whose removal is waiting to be agreed to.
+    @BudState private var pendingRemove: Directive?
+    @BudState private var directives: [Directive] = []
+    @BudState private var directiveDraft = ""
+    /// Set when the store refused the draft as a duplicate, so the field can
+    /// say why nothing happened.
+    @BudState private var directiveDuplicate = false
 
     public init() {}
 
@@ -49,6 +56,8 @@ public struct MemorySettingsView: View {
                 }
             }
 
+            directivesSection
+
             footer
         }
         .onAppear { refresh() }
@@ -65,6 +74,20 @@ public struct MemorySettingsView: View {
             Button("Cancel", role: .cancel) { pendingForget = nil }
         } message: { _ in
             Text("Bud drops it from what it carries into every conversation. It cannot be recovered.")
+        }
+        .confirmationDialog(
+            pendingRemove.map { "Remove “\(Self.excerpt($0.text))”?" } ?? "Remove this instruction?",
+            isPresented: Binding(
+                get: { pendingRemove != nil },
+                set: { if !$0 { pendingRemove = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingRemove
+        ) { directive in
+            Button("Remove", role: .destructive) { remove(directive) }
+            Button("Cancel", role: .cancel) { pendingRemove = nil }
+        } message: { _ in
+            Text("Bud stops carrying the instruction from then on.")
         }
     }
 
@@ -179,6 +202,84 @@ public struct MemorySettingsView: View {
         }
     }
 
+    // MARK: - Standing instructions
+
+    /// Durable instructions the person wrote down themselves, admitted into
+    /// context whenever the conversation speaks their language. This is the
+    /// writer side of the retrieval path — the model has always read these;
+    /// the way to write them without asking the model to.
+    private var directivesSection: some View {
+        VStack(alignment: .leading, spacing: Bud.Space.sm) {
+            SectionHeader(
+                "Standing instructions",
+                subtitle: "Rules you wrote down. Bud carries the ones a conversation matches into every request.",
+                systemImage: "text.badge.checkmark"
+            )
+            HStack(spacing: Bud.Space.sm) {
+                TextField("e.g. Never run destructive commands without asking", text: $directiveDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { addDirective() }
+                    .onChange(of: directiveDraft) { _, _ in directiveDuplicate = false }
+                Button("Add", action: addDirective)
+                    .buttonStyle(.bordered)
+                    .disabled(trimmedDraft.isEmpty)
+            }
+            if directiveDuplicate {
+                Text("That instruction is already saved.")
+                    .font(Bud.Font.caption)
+                    .foregroundStyle(Bud.Palette.warning)
+            }
+            VStack(spacing: Bud.Space.xs) {
+                ForEach(directives) { directive in
+                    directiveRow(directive)
+                }
+            }
+        }
+    }
+
+    private var trimmedDraft: String {
+        directiveDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func directiveRow(_ directive: Directive) -> some View {
+        GlassCard(cornerRadius: Bud.Radius.control, padding: Bud.Space.sm, surface: .flat) {
+            HStack(alignment: .top, spacing: Bud.Space.sm) {
+                Text(directive.text)
+                    .font(Bud.Font.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                Spacer(minLength: Bud.Space.sm)
+
+                Button {
+                    pendingRemove = directive
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Remove this instruction")
+            }
+        }
+    }
+
+    private func addDirective() {
+        let text = trimmedDraft
+        guard !text.isEmpty else { return }
+        if CognitiveStore.recordDirective(text: text, authority: "user") == nil {
+            // Only one failure mode: the store refused a duplicate.
+            directiveDuplicate = true
+            return
+        }
+        directiveDraft = ""
+        refresh()
+    }
+
+    private func remove(_ directive: Directive) {
+        CognitiveStore.deleteDirective(id: directive.id)
+        pendingRemove = nil
+        refresh()
+    }
+
     // MARK: - Footer
 
     /// What the notes cost and where they live, in two sentences.
@@ -205,6 +306,7 @@ public struct MemorySettingsView: View {
     /// records while this pane is open is picked up the next time it appears.
     private func refresh() {
         notes = BudStore.lessons()
+        directives = CognitiveStore.directives()
     }
 
     private func forget(_ note: Lesson) {

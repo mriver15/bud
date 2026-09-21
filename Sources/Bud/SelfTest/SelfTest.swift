@@ -1483,6 +1483,18 @@ public enum BudSelfTest {
         c.check("directives surface for matching wording",
                 withDirective.contains { $0.id.hasPrefix("directive:") })
 
+        // The writer's remove path: deleted means deleted from retrieval too.
+        if let directive = CognitiveStore.directives().first {
+            CognitiveStore.deleteDirective(id: directive.id)
+            c.check("a removed directive is gone",
+                    !CognitiveStore.directives().contains { $0.id == directive.id })
+            c.check("...and no longer admitted into retrieval",
+                    !MemoryRetriever.retrieve(query: "destructive commands", budget: 10_000)
+                        .contains { $0.id == "directive:\(directive.id)" })
+        } else {
+            c.check("the directive exists to remove", false)
+        }
+
         // Evidence events.
         CognitiveStore.recordContextEvent(
             requestID: "req-1", sourceType: "memory", sourceID: "fact:1",

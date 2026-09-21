@@ -417,6 +417,16 @@ public enum CognitiveStore {
         entity(type: "skill", name: name.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    /// Removes a directive: the row and its FTS entry leave, so retrieval never
+    /// admits an instruction the person took back.
+    public static func deleteDirective(id: Int) {
+        db.transaction { handle in
+            Statement(handle, "DELETE FROM memory_fts WHERE kind = 'directive' AND ref_id = ?;")?
+                .bind(1, id).run()
+            Statement(handle, "DELETE FROM directives WHERE id = ?;")?.bind(1, id).run()
+        }
+    }
+
     // MARK: - Entities and relations
 
     /// Get-or-create: the same `(type, canonical_name)` always returns the same

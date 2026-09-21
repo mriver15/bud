@@ -193,6 +193,25 @@ public enum BudUIVerification {
         c.check("the panel comes back after being hidden", controller.isPanelVisible)
         c.check("the panel can take key focus", panel.canBecomeKey)
 
+        // MARK: The directives writer renders in Memory settings
+
+        // The standing-instructions field is the writer side of the directive
+        // retrieval path. Settings opens as a WindowGroup scene, which this
+        // harness does not run — so the pane is hosted in a scratch window the
+        // same way the render tool hosts surfaces. SwiftUI's TextField is a
+        // real NSTextField on macOS, so the placeholder is checkable in the
+        // view tree once the pane has laid out.
+        let memoryWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 820, height: 640),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        memoryWindow.contentView = NSHostingView(rootView: MemorySettingsView())
+        memoryWindow.contentView?.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+        c.check("the directives field renders in the memory pane",
+                memoryWindow.contentView.map { findDirectiveField(in: $0) } == true)
+        memoryWindow.close()
+
         return c.report()
     }
 
@@ -215,6 +234,12 @@ public enum BudUIVerification {
             if let found = findAnchor(in: sub) { return found }
         }
         return nil
+    }
+
+    private static func findDirectiveField(in view: NSView) -> Bool {
+        if let field = view as? NSTextField,
+           field.placeholderString?.contains("destructive") == true { return true }
+        return view.subviews.contains { findDirectiveField(in: $0) }
     }
 
     /// Counts distinct quantised colours in a coarse sample of a PNG. A flat
