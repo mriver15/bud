@@ -1507,8 +1507,25 @@ public enum BudSelfTest {
             c.check("the rollout flag survives a save and a load",
                     BudConfigLoader.apply(decoded, to: BudConfig()).contextCompilerV2)
         } else {
-            c.check("the rollout flag round-trips", false)
+            c.check("the rollout flag survives a save and a load", false)
         }
+
+        // Shadow recording is off unless someone asks for it: it is measurement
+        // for the planner rework, and none of it reaches the model or the
+        // transcript. A run that never turned it on must not start paying for it
+        // after a restart, and one that did must keep recording.
+        c.check("shadow diagnostics are off by default", !BudConfig().shadowDiagnostics)
+        var recording = BudConfig()
+        recording.shadowDiagnostics = true
+        if let data = try? JSONEncoder().encode(BudConfigLoader.StoredConfig(from: recording)),
+           let decoded = try? JSONDecoder().decode(BudConfigLoader.StoredConfig.self, from: data) {
+            c.check("...and once on, the choice survives a save and a load",
+                    BudConfigLoader.apply(decoded, to: BudConfig()).shadowDiagnostics)
+        } else {
+            c.check("...and once on, the choice survives a save and a load", false)
+        }
+        c.nilValue("...without writing the default into the file",
+                   BudConfigLoader.StoredConfig(from: BudConfig()).shadowDiagnostics)
         c.check("...and stays off by default", !BudConfig().contextCompilerV2)
 
         return c.report()
@@ -5666,6 +5683,27 @@ public enum BudSelfTest {
         c.check("a config from before this setting still loads", decoded != nil)
         c.equal("...with the new field absent rather than fatal", decoded?.reasoningVisibility, nil)
         c.equal("...and the rest of it intact", decoded?.historyBudgetChars, 90_000)
+
+        // MARK: The stream publish gate
+
+        // Streaming used to write the transcript once per token, which re-parsed
+        // and re-laid out the whole message being streamed, per token, over text
+        // that only grows. This gate is what turns that into a display rate, and
+        // its two load-bearing properties are here: the first delta publishes at
+        // once, and a forced flush always passes.
+        var throttle = StreamPublishThrottle(interval: 0.12)
+        let t0 = Date()
+        c.check("the first delta of a round publishes at once", throttle.shouldPublish(now: t0))
+        c.check("...the token right behind it does not",
+                !throttle.shouldPublish(now: t0.addingTimeInterval(0.01)))
+        c.check("...and one past the interval does",
+                throttle.shouldPublish(now: t0.addingTimeInterval(0.13)))
+        c.check("a forced flush ignores the interval",
+                throttle.shouldPublish(now: t0.addingTimeInterval(0.14), force: true))
+        c.check("...and opens a fresh window rather than publishing twice",
+                !throttle.shouldPublish(now: t0.addingTimeInterval(0.15)))
+        c.check("a long silence publishes the next token immediately",
+                throttle.shouldPublish(now: t0.addingTimeInterval(9)))
 
         return c.report()
     }

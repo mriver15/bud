@@ -41,6 +41,14 @@ public enum BudLiveVerification {
         c.check("config: model resolved (\(config.model))", !config.model.isEmpty)
         c.check("config: base URL set", !config.baseURL.isEmpty)
 
+        // The recording this suite is partly here to prove — shadow maps on the
+        // real request path, their provenance and budget, the evidence they file
+        // — is off by default, because nothing in the app reads it. The harness
+        // that asserts on it turns it on, which is also what keeps the switch
+        // honest: if the flag ever stopped being the only gate, the live run
+        // would still record and these checks would pass either way.
+        config.shadowDiagnostics = true
+
         let key = config.resolvedKey(for: provider)
         c.check("config: key resolved for \(provider.name)", !key.isEmpty || !provider.requiresKey)
 

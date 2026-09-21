@@ -7,8 +7,17 @@ import SwiftUI
 /// schedule produces its own first frame and keeps ticking even when the panel
 /// is hosting without a display-linked animation, which is the case for a
 /// non-activating panel that has just been shown.
+///
+/// The tick is a compromise, not a frame rate. Nothing here is moving fast: the
+/// dots ride a 1.2-second sine, so eight steps a second is smooth to the eye
+/// while being a fraction of the work — and each step re-evaluates this view and
+/// re-composites the panel around it for the whole length of every turn.
 public struct StreamingIndicator: View {
     private let label: String?
+
+    /// How often the dots move. See the type's note: the animation is slow
+    /// enough that this is a rendering budget rather than a smoothness one.
+    public static let tick: TimeInterval = 0.12
 
     public init(_ label: String? = nil) {
         self.label = label
@@ -16,7 +25,7 @@ public struct StreamingIndicator: View {
 
     public var body: some View {
         HStack(spacing: Bud.Space.snug) {
-            TimelineView(.periodic(from: .now, by: 0.05)) { context in
+            TimelineView(.periodic(from: .now, by: Self.tick)) { context in
                 HStack(spacing: Bud.Space.xs) {
                     ForEach(0..<3, id: \.self) { index in
                         Circle()
@@ -52,6 +61,10 @@ public struct StreamingIndicator: View {
 
 /// A label with a travelling highlight. Used for "Thinking…" so the reasoning
 /// header itself signals that tokens are still arriving.
+///
+/// On the same tick as the streaming dots, and for the same reason: the sweep
+/// takes 1.6 seconds, so the step size is invisible while the work it saves is
+/// not.
 public struct ShimmerLabel: View {
     private let text: String
 
@@ -60,7 +73,7 @@ public struct ShimmerLabel: View {
     }
 
     public var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.05)) { context in
+        TimelineView(.periodic(from: .now, by: StreamingIndicator.tick)) { context in
             Text(text)
                 .foregroundStyle(
                     LinearGradient(

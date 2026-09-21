@@ -758,6 +758,29 @@ public final class AgentRuntime {
         var pending: [Int: (id: String, name: String, args: String)] = [:]
         var finishReason: String?
 
+        // The transcript is published at a display rate, not once per token.
+        //
+        // Every delta used to write `turns`, which invalidated the whole
+        // transcript view: the streaming message was re-parsed and re-laid out
+        // from scratch, once per token, over text that only ever grows — work
+        // proportional to the answer so far, repeated for each of its tokens.
+        // Accumulating the deltas locally is cheap; handing them to the view is
+        // what costs, so that is the part that is throttled. The first delta
+        // publishes at once so an answer starts appearing immediately, and the
+        // end of the round always flushes, so nothing is left unpainted.
+        let publishInterval: TimeInterval = 0.12
+        var publishThrottle = StreamPublishThrottle(interval: publishInterval)
+
+        /// Commits the round's text so far to the observed transcript.
+        ///
+        /// `force` is for the boundaries: a round that ends must leave
+        /// `turns[turnIndex]` holding everything streamed, because the tool
+        /// execution that follows appends to that same value in place.
+        func publish(force: Bool = false) {
+            guard publishThrottle.shouldPublish(force: force) else { return }
+            turns[turnIndex] = turn
+        }
+
         // Request build ends the moment the provider is handed the request; the
         // first token is the first streamed content after that.
         let providerCalled = Date()
@@ -770,12 +793,12 @@ public final class AgentRuntime {
                 switch event {
                 case .reasoningDelta(let d):
                     turn.appendReasoning(d)
-                    turns[turnIndex] = turn
+                    publish()
 
                 case .contentDelta(let d):
                     if firstTokenAt == nil { firstTokenAt = Date() }
                     turn.appendText(d)
-                    turns[turnIndex] = turn
+                    publish()
 
                 case .toolCallDelta(let index, let id, let name, let fragment):
                     var entry = pending[index] ?? (id: "", name: "", args: "")
@@ -799,6 +822,11 @@ public final class AgentRuntime {
         }
 
         if Task.isCancelled { return .cancelled }
+
+        // Everything streamed is in the transcript before this round hands over:
+        // the tool execution that follows mutates `turns[turnIndex]` in place,
+        // and a value left holding half the answer would lose the rest of it.
+        publish(force: true)
 
         // The phases this round can measure. `synthesis` is left nil: the answer
         // arrives in a later round than the tool results it synthesises, so a
@@ -944,8 +972,16 @@ public final class AgentRuntime {
     /// Phase 1 shadow recording: runs the deterministic analysis over the same
     /// planning inputs the planner saw, with the budget the compiler measured
     /// for the payload that was actually built. Runs once per round, after
-    /// `streamRound` compiled the payload, and writes only to the runtime's own
-    /// diagnostics.
+    /// `streamRound` compiled the payload.
+    ///
+    /// Split by what it is for, because the two halves are not the same size.
+    /// The analysis and the execution posture it carries are cheap and feed
+    /// something the app acts on — the approval note — so they always run. What
+    /// follows them is measurement for the planner rework: a second memory
+    /// retrieval, a capability-index build, a skill-directory walk, a
+    /// deterministic decision batch, and the evidence rows each of them files.
+    /// None of it reaches the payload or the transcript, so it lives behind
+    /// `shadowDiagnostics`, which the harnesses that assert on it turn on.
     private func recordShadowMap(plan: RoundPlan, compiled: CompiledContext) async {
         var map = RequestAnalyzer.analyze(
             inputs: RequestAnalyzer.Inputs(
@@ -962,6 +998,15 @@ public final class AgentRuntime {
             promotedSkills: compiled.metadata.promotedSkills,
             budget: compiled.metadata.ledger
         )
+        // Phase 7: the gate sees the round's posture — advisory context for
+        // whatever the person is asked to approve.
+        harness?.updateAssessment(map.execution)
+
+        // Counting rounds is not diagnostics: sticky evidence weighs what worked
+        // by how recently, so the counter runs either way.
+        shadowRound += 1
+
+        guard env.config.shadowDiagnostics else { return }
 
         // Phase 4 shadow: cognitive-store retrieval joins the map's memory
         // candidates, and each inclusion is filed as an evidence event for the
@@ -986,11 +1031,6 @@ public final class AgentRuntime {
                 reason: candidate.reason
             )
         }
-        // Phase 7: the gate sees the round's posture — advisory context for
-        // whatever the person is asked to approve.
-        harness?.updateAssessment(map.execution)
-
-        shadowRound += 1
         shadowMaps.append(map)
         if shadowMaps.count > 32 { shadowMaps.removeFirst() }
         shadowDivergences.append(contentsOf: ContextMapTrace.divergences(map: map, plan: plan.plan))
@@ -1137,5 +1177,42 @@ public final class AgentRuntime {
             omittedNote: omittedNote,
             now: Date()
         )
+    }
+}
+
+// MARK: - Streaming publication
+
+/// How often a streaming round's text reaches the transcript.
+///
+/// The deltas arrive at the provider's token rate, and every one of them used to
+/// be written to the transcript — which re-parsed and re-laid out the whole
+/// message being streamed, once per token, over text that only ever grows. This
+/// is the gate that turns that into a display rate rather than a token rate.
+///
+/// Two of its properties matter more than the interval itself. The first delta
+/// publishes at once, because an answer has to start appearing when it starts
+/// arriving. And a forced flush always passes, because the end of a round must
+/// leave the transcript holding everything that round streamed: the tool
+/// execution that follows appends to that same value in place, so a transcript
+/// left one window behind would lose the rest of the answer under the tool
+/// segment.
+struct StreamPublishThrottle {
+    /// About eight updates a second. Smooth for text that is arriving
+    /// continuously, and a fraction of the per-token work it replaces.
+    static let defaultInterval: TimeInterval = 0.12
+
+    let interval: TimeInterval
+    private var lastPublished = Date.distantPast
+
+    init(interval: TimeInterval = StreamPublishThrottle.defaultInterval) {
+        self.interval = interval
+    }
+
+    /// Whether a delta arriving now should be published, opening the next window
+    /// when it is.
+    mutating func shouldPublish(now: Date = Date(), force: Bool = false) -> Bool {
+        guard force || now.timeIntervalSince(lastPublished) >= interval else { return false }
+        lastPublished = now
+        return true
     }
 }

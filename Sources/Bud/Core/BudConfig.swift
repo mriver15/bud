@@ -124,6 +124,18 @@ public struct BudConfig: Sendable, Codable, Hashable {
     /// serialized delegate roster, and fail-open expansion resolves capability
     /// language against the index. Off until the harness proves parity.
     public var contextCompilerV2: Bool
+    /// Phase 1 of the context-harness rework as a switch: records the
+    /// deterministic ContextMap shadow, the cognition and decision evidence
+    /// around it, and the planner-vs-map divergences for every round.
+    ///
+    /// Off, because none of it reaches the model or the transcript. The analysis
+    /// itself always runs — the execution posture it carries is the advisory line
+    /// in an approval — but the measurement around it costs a second memory
+    /// retrieval, a second capability-index build, another skill-directory walk
+    /// and a synchronous evidence write per round, and nothing in the app reads
+    /// the result. It is the parity evidence for the planner rework, so the
+    /// harnesses that assert on the shadow turn it on.
+    public var shadowDiagnostics: Bool
     /// Phase 8 experiment: when true, a final answer carrying a `bud-ui`
     /// envelope renders its surface from the answer itself instead of through
     /// the `render_ui` tool. Ships only if the experiment's token/latency and
@@ -302,6 +314,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         confirmDangerousTools: Bool = true,
         compactSchemas: Bool = false,
         contextCompilerV2: Bool = false,
+        shadowDiagnostics: Bool = false,
         uiOutputDialect: Bool = false,
         decisionEngine: DecisionEngineID = .deterministic,
         typesafeAPIKey: String = "",
@@ -331,6 +344,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         self.confirmDangerousTools = confirmDangerousTools
         self.compactSchemas = compactSchemas
         self.contextCompilerV2 = contextCompilerV2
+        self.shadowDiagnostics = shadowDiagnostics
         self.uiOutputDialect = uiOutputDialect
         self.decisionEngine = decisionEngine
         self.typesafeAPIKey = typesafeAPIKey
@@ -734,6 +748,7 @@ public enum BudConfigLoader {
         if let v = stored.confirmDangerousTools { config.confirmDangerousTools = v }
         if let v = stored.compactSchemas { config.compactSchemas = v }
         if let v = stored.contextCompilerV2 { config.contextCompilerV2 = v }
+        if let v = stored.shadowDiagnostics { config.shadowDiagnostics = v }
         if let v = stored.uiOutputDialect { config.uiOutputDialect = v }
         // Stored as a raw string so a future value (e.g. "jev") written by a
         // newer build degrades to the deterministic floor here instead of
@@ -1146,6 +1161,7 @@ public enum BudConfigLoader {
         public var confirmDangerousTools: Bool?
         public var compactSchemas: Bool?
         public var contextCompilerV2: Bool?
+        public var shadowDiagnostics: Bool?
         public var uiOutputDialect: Bool?
         public var decisionEngine: String?
         public var jevModel: String?
@@ -1196,6 +1212,7 @@ public enum BudConfigLoader {
             // install that never turned it on.
             self.compactSchemas = config.compactSchemas ? true : nil
             self.contextCompilerV2 = config.contextCompilerV2 ? true : nil
+            self.shadowDiagnostics = config.shadowDiagnostics ? true : nil
             self.uiOutputDialect = config.uiOutputDialect ? true : nil
             self.decisionEngine = config.decisionEngine == .deterministic
                 ? nil
@@ -1237,6 +1254,7 @@ public enum BudConfigLoader {
             confirmDangerousTools: Bool? = nil,
             compactSchemas: Bool? = nil,
             contextCompilerV2: Bool? = nil,
+            shadowDiagnostics: Bool? = nil,
             uiOutputDialect: Bool? = nil,
             decisionEngine: String? = nil,
             jevModel: String? = nil,
@@ -1266,6 +1284,7 @@ public enum BudConfigLoader {
             self.confirmDangerousTools = confirmDangerousTools
             self.compactSchemas = compactSchemas
             self.contextCompilerV2 = contextCompilerV2
+            self.shadowDiagnostics = shadowDiagnostics
             self.uiOutputDialect = uiOutputDialect
             self.decisionEngine = decisionEngine
             self.jevModel = jevModel

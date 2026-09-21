@@ -418,6 +418,7 @@ ContextTrace {
 | Flag | Default during rollout | Purpose |
 | --- | --- | --- |
 | contextCompilerV2 | off → shadow → on | Build ContextMap/CompiledContext without initially changing requests. |
+| shadowDiagnostics | off | Record the analyzer's ContextMap, its retrieval/decision evidence and the divergences, per round. Nothing in the app reads it: the analysis and the execution posture always run, the measurement around them does not. Harnesses that assert on the shadow turn it on. |
 | decisionEngine | deterministic | Optional `jev` / `provider` backend. |
 | cognitiveMemory | off → migrate → on | SQLite facts/episodes/relations. |
 | capabilityIndex | shadow → on | Compare planned exposure with current ToolPlanner. |

@@ -825,6 +825,19 @@ private struct GeneralSettingsTab: View {
                     .font(Bud.Font.caption)
                     .foregroundStyle(.tertiary)
                     Divider().opacity(0.2)
+                    Toggle("Shadow diagnostics", isOn: shadowDiagnosticsBinding)
+                        .toggleStyle(.switch)
+                    Text(
+                        "Records the analyzer's context map, its retrieval and decision evidence, and "
+                            + "the divergences between them for every round. Nothing in Bud reads it — it "
+                            + "is the parity evidence for the planner rework — and the recording costs a "
+                            + "second memory retrieval, a second capability-index build, another skill "
+                            + "scan and a synchronous evidence write each round. Leave it off unless you "
+                            + "are working on that rework."
+                    )
+                    .font(Bud.Font.caption)
+                    .foregroundStyle(.tertiary)
+                    Divider().opacity(0.2)
                     Toggle("UI output dialect (experiment)", isOn: uiOutputDialectBinding)
                         .toggleStyle(.switch)
                     Text(
@@ -1015,6 +1028,16 @@ private struct GeneralSettingsTab: View {
             get: { model.config.contextCompilerV2 },
             set: { newValue in
                 model.config.contextCompilerV2 = newValue
+                model.persistConfig()
+            }
+        )
+    }
+
+    private var shadowDiagnosticsBinding: Binding<Bool> {
+        Binding(
+            get: { model.config.shadowDiagnostics },
+            set: { newValue in
+                model.config.shadowDiagnostics = newValue
                 model.persistConfig()
             }
         )
