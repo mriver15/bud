@@ -378,15 +378,18 @@ public enum BudStore {
     // MARK: - Runs
 
     public static func recordRun(_ run: SubagentRun, conversationID: String?) {
+        let callsJSON = (try? JSONEncoder().encode(run.toolCalls))
+            .flatMap { String(data: $0, encoding: .utf8) }
         db.transaction { handle in
             Statement(handle, """
                 INSERT INTO runs (id, conversation_id, title, prompt, model, state,
-                                  output, tool_calls, started_at, finished_at, error)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  output, tool_calls, tool_calls_json, started_at, finished_at, error)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     state = excluded.state,
                     output = excluded.output,
                     tool_calls = excluded.tool_calls,
+                    tool_calls_json = excluded.tool_calls_json,
                     finished_at = excluded.finished_at,
                     error = excluded.error;
                 """)?
@@ -398,9 +401,10 @@ public enum BudStore {
                 .bind(6, run.state.rawValue)
                 .bind(7, run.output)
                 .bind(8, run.toolCallCount)
-                .bind(9, run.startedAt)
-                .bind(10, run.finishedAt)
-                .bind(11, run.error)
+                .bind(9, callsJSON)
+                .bind(10, run.startedAt)
+                .bind(11, run.finishedAt)
+                .bind(12, run.error)
                 .run()
         }
     }
@@ -413,13 +417,16 @@ public enum BudStore {
         db.read { handle -> [SubagentRun] in
             guard let statement = Statement(handle, """
                 SELECT id, title, prompt, model, state, output, tool_calls,
-                       started_at, finished_at, error
+                       tool_calls_json, started_at, finished_at, error
                 FROM runs ORDER BY started_at DESC LIMIT ?;
                 """) else { return [] }
             statement.bind(1, limit)
 
             var runs: [SubagentRun] = []
             while statement.next() {
+                let calls: [SubagentToolCall] = statement.string(7)
+                    .flatMap { $0.data(using: .utf8) }
+                    .flatMap { try? JSONDecoder().decode([SubagentToolCall].self, from: $0) } ?? []
                 runs.append(SubagentRun(
                     id: statement.string(0) ?? UUID().uuidString,
                     title: statement.string(1) ?? "",
@@ -428,9 +435,10 @@ public enum BudStore {
                     state: SubagentState(rawValue: statement.string(4) ?? "") ?? .failed,
                     output: statement.string(5) ?? "",
                     toolCallCount: statement.int(6),
-                    startedAt: statement.date(7) ?? Date(),
-                    finishedAt: statement.date(8),
-                    error: statement.string(9)
+                    toolCalls: calls,
+                    startedAt: statement.date(8) ?? Date(),
+                    finishedAt: statement.date(9),
+                    error: statement.string(10)
                 ))
             }
             return runs

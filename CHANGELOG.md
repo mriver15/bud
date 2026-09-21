@@ -14,6 +14,13 @@ that will eventually disagree with the appcast.
 
 ## Unreleased
 
+### Subagent tool calls are visible in the Agents panel
+
+A run's expanded card now lists every tool call the subagent made — name,
+outcome, and the start of what came back — as it happens, and the record
+survives a restart beside the count. The count said how much; the list says
+what.
+
 ### Jev questions ship their evidence as structure
 
 The decision batch now uses the advanced noul/choice criteria shapes:

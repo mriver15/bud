@@ -7220,6 +7220,25 @@ public enum BudSelfTest {
         c.equal("a run is recorded", BudStore.recentRuns().count, 1)
         c.equal("with its output", BudStore.recentRuns().first?.output, "found things")
 
+        // The per-call record survives the store round trip: what the run did,
+        // not just how many calls it made.
+        BudStore.recordRun(SubagentRun(
+            id: "run_1", title: "survey", prompt: "look around", model: "m",
+            state: .done, output: "found things",
+            toolCallCount: 2,
+            toolCalls: [
+                SubagentToolCall(name: "search_pokemon", succeeded: true, preview: "blaziken stats"),
+                SubagentToolCall(name: "read_file", succeeded: false, preview: ""),
+            ],
+            startedAt: Date()
+        ), conversationID: "conv_1")
+        c.equal("the tool calls come back with the run",
+                BudStore.recentRuns().first?.toolCalls.map(\.name), ["search_pokemon", "read_file"])
+        c.equal("...with their outcomes and previews",
+                BudStore.recentRuns().first?.toolCalls.map { "\($0.succeeded):\($0.preview)" },
+                ["true:blaziken stats", "false:"])
+        c.equal("...and the count alongside them", BudStore.recentRuns().first?.toolCallCount, 2)
+
         BudStore.recordRun(SubagentRun(
             id: "run_1", title: "survey", prompt: "look around", model: "m",
             state: .failed, output: "found things", startedAt: Date()

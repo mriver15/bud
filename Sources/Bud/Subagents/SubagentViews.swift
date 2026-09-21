@@ -359,6 +359,30 @@ public struct SubagentPanel: View {
                 }
             }
 
+            if !run.toolCalls.isEmpty {
+                field("Tool calls") {
+                    VStack(alignment: .leading, spacing: Bud.Space.xs) {
+                        ForEach(run.toolCalls) { call in
+                            HStack(alignment: .firstTextBaseline, spacing: Bud.Space.xs) {
+                                Image(systemName: call.succeeded ? "checkmark.circle" : "xmark.circle")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(call.succeeded ? Bud.Palette.success : Bud.Palette.danger)
+                                Text(call.name)
+                                    .font(Bud.Font.caption.weight(.semibold))
+                                    .lineLimit(1)
+                                if !call.preview.isEmpty {
+                                    Text(call.preview)
+                                        .font(Bud.Font.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                        .textSelection(.enabled)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             field("Findings") {
                 if run.output.isEmpty {
                     Text(run.state == .running ? "Still working…" : "No output.")
