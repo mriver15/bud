@@ -632,23 +632,40 @@ public enum BudSelfTest {
             arguments: .object([:]), result: .object(["content": .array([])]),
             isError: false, contentHash: "abc"
         )
-        let withApp = Segment.tool(id: "t", call: call, providerName: "p", state: .succeeded, resultText: "r", ui: nil, app: app)
+        let withApp = Segment.tool(id: "t", call: call, providerName: "p", state: .succeeded, resultText: "r", ui: nil, apps: [app])
         if let data = try? JSONEncoder().encode(withApp),
            let back = try? JSONDecoder().decode(Segment.self, from: data),
            case .tool(_, _, _, _, _, _, let restored) = back {
-            c.equal("an app reference round-trips", restored?.resourceURI, "ui://r")
-            c.equal("...with its generation", restored?.generation, 3)
-            c.equal("...and its content hash", restored?.contentHash, "abc")
+            c.equal("an app reference round-trips", restored.first?.resourceURI, "ui://r")
+            c.equal("...with its generation", restored.first?.generation, 3)
+            c.equal("...and its content hash", restored.first?.contentHash, "abc")
         } else {
             c.check("an app reference round-trips", false)
         }
-        let withoutApp = Segment.tool(id: "t", call: call, providerName: "p", state: .succeeded, resultText: "r", ui: nil, app: nil)
+        let withoutApp = Segment.tool(id: "t", call: call, providerName: "p", state: .succeeded, resultText: "r", ui: nil, apps: [])
         if let data = try? JSONEncoder().encode(withoutApp),
            let back = try? JSONDecoder().decode(Segment.self, from: data),
            case .tool(_, _, _, _, _, _, let restored) = back {
-            c.check("a segment without an app decodes without one", restored == nil)
+            c.check("a segment without an app decodes without one", restored.isEmpty)
         } else {
             c.check("a segment without an app decodes without one", false)
+        }
+
+        // A delegated server's tool call carries its app back to the parent the
+        // same way a direct call does, through the run record.
+        let recorded = SubagentToolCall(name: "analyze_team", succeeded: true, preview: "ok", apps: [app])
+        if let data = try? JSONEncoder().encode(recorded),
+           let back = try? JSONDecoder().decode(SubagentToolCall.self, from: data) {
+            c.equal("a subagent tool call persists its app", back.apps.first?.resourceURI, "ui://r")
+        } else {
+            c.check("a subagent tool call persists its app", false)
+        }
+        let preApp = #"{"id":"x","name":"read_file","succeeded":true,"preview":"ok"}"#
+        if let data = preApp.data(using: .utf8),
+           let back = try? JSONDecoder().decode(SubagentToolCall.self, from: data) {
+            c.check("a subagent record from before apps decodes without them", back.apps.isEmpty)
+        } else {
+            c.check("a subagent record from before apps decodes without them", false)
         }
 
         return c.report()
@@ -7435,7 +7452,7 @@ public enum BudSelfTest {
                 .reasoning(id: "s1", text: "thinking"),
                 .text(id: "s2", text: "here is the answer"),
                 .tool(id: "s3", call: call, providerName: "Files", state: .succeeded,
-                      resultText: "contents", ui: nil, app: nil),
+                      resultText: "contents", ui: nil, apps: []),
                 .notice(id: "s4", text: "heads up", kind: .warning),
             ],
             createdAt: Date(timeIntervalSince1970: 1_700_000_000)
@@ -7506,7 +7523,7 @@ public enum BudSelfTest {
                         id: "s1",
                         call: ToolCall(id: "c9", name: "infra__status", arguments: "{}"),
                         providerName: "Infra", state: .succeeded, resultText: "green", ui: nil,
-                        app: nil
+                        apps: []
                     ),
                 ]),
             ]
@@ -7527,7 +7544,7 @@ public enum BudSelfTest {
                     call: ToolCall(id: "c10", name: "dump", arguments: "{}"),
                     providerName: "Infra", state: .succeeded,
                     resultText: String(repeating: "x", count: 9_000), ui: nil,
-                    app: nil
+                    apps: []
                 ),
             ])]
         ).markdown(now: Date(timeIntervalSince1970: 1_700_000_000))
@@ -7618,7 +7635,7 @@ public enum BudSelfTest {
             Turn(role: .assistant, segments: [
                 .text(id: "t", text: "half an answer"),
                 .tool(id: "u", call: call, providerName: "Files", state: .running,
-                      resultText: nil, ui: nil, app: nil),
+                      resultText: nil, ui: nil, apps: []),
             ], isStreaming: true)
         ]))
         let interrupted = BudStore.load(id: "conv_2")?.turns.first
@@ -7634,7 +7651,7 @@ public enum BudSelfTest {
         BudStore.save(Conversation(id: "conv_3", turns: [
             Turn(role: .assistant, segments: [
                 .tool(id: "v", call: call, providerName: "Shell", state: .succeeded,
-                      resultText: huge, ui: nil, app: nil)
+                      resultText: huge, ui: nil, apps: [])
             ])
         ]))
         if case .tool(_, _, _, _, let result, _, _)? = BudStore.load(id: "conv_3")?.turns.first?.segments[0] {

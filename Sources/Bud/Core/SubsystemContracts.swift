@@ -420,17 +420,37 @@ public struct SubagentToolCall: Sendable, Codable, Equatable, Identifiable {
     public var succeeded: Bool
     /// The first line or so of the result, newlines folded to spaces.
     public var preview: String
+    /// The app(s) this call produced, hoisted to the parent transcript so a
+    /// delegated server's interface is visible where the user is looking.
+    public var apps: [MCPAppAttachment]
 
     public init(
         id: String = UUID().uuidString,
         name: String,
         succeeded: Bool,
-        preview: String
+        preview: String,
+        apps: [MCPAppAttachment] = []
     ) {
         self.id = id
         self.name = name
         self.succeeded = succeeded
         self.preview = preview
+        self.apps = apps
+    }
+
+    /// `apps` is read leniently: a run recorded before apps existed has none,
+    /// and its other fields must survive rather than taking the whole list down.
+    private enum CodingKeys: String, CodingKey {
+        case id, name, succeeded, preview, apps
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(String.self, forKey: .id)
+        self.name = try c.decode(String.self, forKey: .name)
+        self.succeeded = try c.decode(Bool.self, forKey: .succeeded)
+        self.preview = try c.decode(String.self, forKey: .preview)
+        self.apps = (try? c.decode([MCPAppAttachment].self, forKey: .apps)) ?? []
     }
 }
 

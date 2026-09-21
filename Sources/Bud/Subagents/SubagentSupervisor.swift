@@ -176,7 +176,8 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         case .success(let specs):
             let plan = await capabilityPlan(for: specs)
             if let refusal = refusal(for: specs, plan: plan) { return .error(refusal) }
-            return .ok(Self.digest(await spawn(specs, plan: plan)))
+            let runs = await spawn(specs, plan: plan)
+            return ToolResult(text: Self.digest(runs), apps: Self.apps(in: runs))
         }
     }
 
@@ -411,7 +412,8 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
                 ? "\n\n(\(specs.count - capped.count) of \(specs.count) tasks were not started: "
                     + "at most \(Self.maxChildren) can be delegated at a time.)"
                 : ""
-            return .ok(Self.digest(await spawn(capped, plan: plan)) + note)
+            let runs = await spawn(capped, plan: plan)
+            return ToolResult(text: Self.digest(runs) + note, apps: Self.apps(in: runs))
         }
     }
 
@@ -914,7 +916,10 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
             let preview = String((result.text ?? "").prefix(160))
                 .replacingOccurrences(of: "\n", with: " ")
             run.toolCalls.append(
-                SubagentToolCall(name: name, succeeded: !result.isError, preview: preview)
+                SubagentToolCall(
+                    name: name, succeeded: !result.isError, preview: preview,
+                    apps: result.apps
+                )
             )
         }
     }
@@ -955,6 +960,15 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
     }
 
     // MARK: - Digest
+
+    /// The apps every run's calls produced, in the order the runs settled.
+    ///
+    /// Hoisted so a delegated server's interface surfaces in the parent
+    /// transcript instead of living only in the Agents panel — the subagent
+    /// still owns the work; the app is its visible report.
+    nonisolated private static func apps(in runs: [SubagentRun]) -> [MCPAppAttachment] {
+        runs.flatMap { run in run.toolCalls.flatMap(\.apps) }
+    }
 
     private nonisolated static func digest(_ runs: [SubagentRun]) -> String {
         runs.map { run in

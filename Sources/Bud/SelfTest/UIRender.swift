@@ -216,7 +216,7 @@ public enum UIRender {
                         state: .succeeded,
                         resultText: result.text,
                         ui: result.ui,
-                        app: nil
+                        apps: []
                     ),
                 ]
             )
@@ -1160,7 +1160,7 @@ public enum UIRender {
                 state: .succeeded,
                 resultText: "worker  degraded  p95=812ms\napi     healthy   p95=141ms",
                 ui: nil,
-                app: nil
+                apps: []
             )
         )
         tool.segments.append(.text(id: "t2", text: "One service is degraded in `eu-west-1`."))
@@ -1174,7 +1174,7 @@ public enum UIRender {
                 state: .failed,
                 resultText: "The server exited with status 3.\nstderr: permission denied for region eu-west-1",
                 ui: nil,
-                app: nil
+                apps: []
             )
         )
 
@@ -1187,7 +1187,7 @@ public enum UIRender {
                 state: .running,
                 resultText: nil,
                 ui: nil,
-                app: nil
+                apps: []
             )
         )
         running.isStreaming = true

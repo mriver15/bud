@@ -336,13 +336,13 @@ public enum BudStore {
             var turn = turn
             turn.isStreaming = false
             turn.segments = turn.segments.map { segment in
-                guard case .tool(let id, let call, let provider, let state, let result, let ui, let app) = segment
+                guard case .tool(let id, let call, let provider, let state, let result, let ui, let apps) = segment
                 else { return segment }
                 // A tool that was running when the app quit never finished.
                 let settled: ToolRunState = state == .running || state == .queued ? .failed : state
                 return .tool(
                     id: id, call: call, providerName: provider, state: settled,
-                    resultText: result.map(clamp), ui: ui, app: app
+                    resultText: result.map(clamp), ui: ui, apps: apps
                 )
             }
             return turn

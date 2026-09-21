@@ -152,22 +152,22 @@ public struct ToolResult: Sendable {
     /// When present, the transcript renders a generative-UI surface for this
     /// call instead of (or above) the raw text.
     public var ui: JSONValue?
-    /// When the call declared an MCP app, the reference to render it. Carried
-    /// here so the runtime can attach it to the transcript; the HTML itself is
-    /// fetched at render time, never persisted.
-    public var app: MCPAppAttachment?
+    /// The MCP apps this call produced, to render in the transcript. Usually at
+    /// most one — a direct call to an app-backed tool — but a `spawn_subagents`
+    /// result can carry one per run, so it is a list.
+    public var apps: [MCPAppAttachment]
     public var isError: Bool
 
     public init(
         text: String,
         ui: JSONValue? = nil,
         isError: Bool = false,
-        app: MCPAppAttachment? = nil
+        apps: [MCPAppAttachment] = []
     ) {
         self.text = text
         self.ui = ui
         self.isError = isError
-        self.app = app
+        self.apps = apps
     }
 
     public static func ok(_ text: String) -> ToolResult { ToolResult(text: text) }
@@ -281,7 +281,7 @@ public enum Segment: Sendable, Identifiable {
         state: ToolRunState,
         resultText: String?,
         ui: JSONValue?,
-        app: MCPAppAttachment?
+        apps: [MCPAppAttachment]
     )
     /// A surface the model spoke into its answer (the output dialect), rather
     /// than one a tool call produced. Rendered exactly like a tool's UI
@@ -475,7 +475,7 @@ extension Segment: Codable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case kind, id, text, call, providerName, state, resultText, ui, app, noticeKind
+        case kind, id, text, call, providerName, state, resultText, ui, apps, app, noticeKind
     }
 
     public init(from decoder: Decoder) throws {
@@ -488,6 +488,14 @@ extension Segment: Codable {
         case .text:
             self = .text(id: id, text: try c.decode(String.self, forKey: .text))
         case .tool:
+            let apps: [MCPAppAttachment]
+            if let list = try? c.decode([MCPAppAttachment].self, forKey: .apps) {
+                apps = list
+            } else if let legacy = try c.decodeIfPresent(MCPAppAttachment.self, forKey: .app) {
+                apps = [legacy]
+            } else {
+                apps = []
+            }
             self = .tool(
                 id: id,
                 call: try c.decode(ToolCall.self, forKey: .call),
@@ -495,7 +503,7 @@ extension Segment: Codable {
                 state: try c.decode(ToolRunState.self, forKey: .state),
                 resultText: try c.decodeIfPresent(String.self, forKey: .resultText),
                 ui: try c.decodeIfPresent(JSONValue.self, forKey: .ui),
-                app: try c.decodeIfPresent(MCPAppAttachment.self, forKey: .app)
+                apps: apps
             )
         case .ui:
             self = .ui(id: id, payload: try c.decode(JSONValue.self, forKey: .ui))
@@ -519,7 +527,7 @@ extension Segment: Codable {
             try c.encode(Kind.text, forKey: .kind)
             try c.encode(id, forKey: .id)
             try c.encode(text, forKey: .text)
-        case .tool(let id, let call, let providerName, let state, let resultText, let ui, let app):
+        case .tool(let id, let call, let providerName, let state, let resultText, let ui, let apps):
             try c.encode(Kind.tool, forKey: .kind)
             try c.encode(id, forKey: .id)
             try c.encode(call, forKey: .call)
@@ -527,7 +535,7 @@ extension Segment: Codable {
             try c.encode(state, forKey: .state)
             try c.encodeIfPresent(resultText, forKey: .resultText)
             try c.encodeIfPresent(ui, forKey: .ui)
-            try c.encodeIfPresent(app, forKey: .app)
+            try c.encode(apps, forKey: .apps)
         case .ui(let id, let payload):
             try c.encode(Kind.ui, forKey: .kind)
             try c.encode(id, forKey: .id)

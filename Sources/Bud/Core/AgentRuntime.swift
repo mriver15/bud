@@ -882,7 +882,7 @@ public final class AgentRuntime {
                     state: .running,
                     resultText: nil,
                     ui: nil,
-                    app: nil
+                    apps: []
                 )
             )
         }
@@ -968,7 +968,7 @@ public final class AgentRuntime {
             state: state,
             resultText: result.text,
             ui: result.ui,
-            app: result.app
+            apps: result.apps
         )
     }
 

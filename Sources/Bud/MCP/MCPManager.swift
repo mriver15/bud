@@ -275,7 +275,9 @@ public final class MCPManager: MCPManaging, ToolProvider {
                 ui: MCPClient.surface(for: full.content, titled: route.tool),
                 isError: full.isError
             )
-            result.app = await appAttachment(route: route, client: client, arguments: arguments, full: full)
+            if let attachment = await appAttachment(route: route, client: client, arguments: arguments, full: full) {
+                result.apps = [attachment]
+            }
             appendLog(
                 route.serverID,
                 result.isError

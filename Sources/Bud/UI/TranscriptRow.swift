@@ -247,14 +247,14 @@ public struct TranscriptRow: View {
         case .text(let id, let text):
             MarkdownView(text, showsCaret: isTail(id), highlight: highlight)
 
-        case .tool(let id, let call, let providerName, let state, let resultText, let ui, let app):
+        case .tool(let id, let call, let providerName, let state, let resultText, let ui, let apps):
             ToolActivityRow(
                 call: call,
                 providerName: providerName,
                 state: state,
                 resultText: resultText,
                 ui: ui,
-                app: app,
+                apps: apps,
                 model: model,
                 isTail: isTail(id)
             )
@@ -602,7 +602,7 @@ private struct ToolActivityRow: View {
     let state: ToolRunState
     let resultText: String?
     let ui: JSONValue?
-    let app: MCPAppAttachment?
+    let apps: [MCPAppAttachment]
     let model: AppModel
     let isTail: Bool
 
@@ -613,8 +613,8 @@ private struct ToolActivityRow: View {
         VStack(alignment: .leading, spacing: Bud.Space.sm) {
             header
 
-            if let app {
-                appBody(app)
+            if !apps.isEmpty {
+                ForEach(apps) { appBody($0) }
             } else if let ui {
                 UISurfaceBlock(
                     payload: ui,
@@ -771,7 +771,7 @@ private struct ToolActivityRow: View {
     }
 
     private var canExpand: Bool {
-        hasResult && ui == nil && app == nil
+        hasResult && ui == nil && apps.isEmpty
     }
 
     private var hasResult: Bool {
@@ -837,14 +837,14 @@ private struct ToolRoundGroup: View {
         VStack(alignment: .leading, spacing: Bud.Space.xs) {
             roundHeader
             ForEach(segments) { segment in
-                if case .tool(let id, let call, let providerName, let state, let resultText, let ui, let app) = segment {
+                if case .tool(let id, let call, let providerName, let state, let resultText, let ui, let apps) = segment {
                     ToolActivityRow(
                         call: call,
                         providerName: providerName,
                         state: state,
                         resultText: resultText,
                         ui: ui,
-                        app: app,
+                        apps: apps,
                         model: model,
                         isTail: isTail(id)
                     )
