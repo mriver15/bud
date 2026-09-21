@@ -12,6 +12,20 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.20.1
+
+### MCP app chrome: the accent and the height
+
+Two gaps in the host's app chrome, found by looking at what the getcompetitive
+workspace actually renders. The app reads `--color-accent` for its highlighted
+badges and boxes, which the host never sent, so they fell back to a hard-coded
+indigo instead of matching Bud — the host now passes it. And the app reports its
+content height through `ui/notifications/size-changed` (the spec's flexible-
+dimension contract), which the host was ignoring and pinning the frame at a fixed
+height; the shell now grows with the app's own reported size, within the flexible
+bound it declares, so a tall app is no longer clipped at the bottom.
+
+
 ## Bud 2.20.0
 
 ### A delegated server's app is visible in the conversation
