@@ -65,20 +65,21 @@ repository rather than given a fabricated command.
 > commercial licence that waives this.
 
 **A real browser, built in.** Bud ships a native browser — WebKit, not a bundled
-Chromium — with thirteen tools covering what a Playwright install would provide,
-and no Node, no `npx`, no download behind any of it. The page lives in the
-Browser surface; the model reads it as an *outline* — headings, links, buttons,
-fields and checkboxes, each action carrying a ref — and acts through the refs
-(`browser_click`, `browser_type`, `browser_hover`, `browser_select`,
-`browser_press`, `browser_scroll`), so it does what a person does: read the
-labels, click the thing. Every action returns a fresh outline, so there is no
-stale map to click through, and a ref that is stale or invented fails loudly
+Chromium — covering what a Playwright install would provide, with no Node, no
+`npx` and no download behind any of it. Three tools: `browser_open` to go
+somewhere, `browser_read` to look (the outline, the readable text, the console, or
+a screenshot for you), and `browser_act` to do something — click, type, hover,
+select, press, scroll, wait, back. The page lives in the Browser surface; the model
+reads it as an *outline* — headings, links, buttons, fields and checkboxes, each
+action carrying a ref — and acts through the refs, so it does what a person does:
+read the labels, click the thing. Every action returns a fresh outline, so there is
+no stale map to click through, and a ref that is stale or invented fails loudly
 instead of clicking whatever happens to sit at that position now.
 
 Browsing is a session, not a series of lookups. One web view lives for the life
 of the app, so a sign-in survives the tool calls that follow it; a desktop user
 agent keeps mobile layouts out; `file://` URLs open through the read-access path
-WebKit actually allows. `browser_console` returns what the page logged and what
+WebKit actually allows. Reading the console returns what the page logged and what
 it threw — captured by a hook injected at document start, before the page's own
 scripts run, because the error worth having is usually the one thrown while the
 page is still initialising. Every action also captures a screenshot and shows it
@@ -210,7 +211,7 @@ Everything below ships with Bud. MCP servers add their own tools, namespaced
 | Provider | Tools |
 |---|---|
 | **Bud** (native) | `read_file` — text, PDFs, and text out of images · `search_files` — regex search across folders · `write_file` · `list_files` — glob-listed paths · `run_shell` — zsh, bounded timeout · `web_fetch` — HTML to readable text · `read_stored` — search and paged reads of spilled results |
-| **Browser** | `browser_open` · `browser_snapshot` · `browser_read` · `browser_click` · `browser_type` · `browser_hover` · `browser_select` · `browser_wait` · `browser_console` · `browser_press` · `browser_scroll` · `browser_back` · `browser_screenshot` |
+| **Browser** | `browser_open` — go somewhere · `browser_read` — the page as an outline, as text, as its console, or as a screenshot for you · `browser_act` — click, type, hover, select, press, scroll, wait, back |
 | **Memory** | `memory` — one tool, five modes: `remember` · `search` · `list` · `update` · `forget`, over notes filed under `general`, `user` or `project` |
 | **Skills** | `skill` — load a skill's instructions by name |
 | **Interface** | `render_ui` — draw a declarative surface · `find_image` — pictures: Wikipedia and PokéAPI first, then Bulbapedia, Commons, Open Library, iTunes, Openverse |

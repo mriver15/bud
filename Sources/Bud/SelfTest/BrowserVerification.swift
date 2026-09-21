@@ -85,6 +85,19 @@ public enum BudBrowserVerification {
             let afterClick = try await engine.evaluate("return document.getElementById('out').innerText") as? String
             c.equal("clicking a ref runs the page's own handler", afterClick, "clicked")
 
+            // MARK: Pressing a key
+
+            // This is the check that was missing. The press script read an
+            // argument under the wrong name, so every press threw a JavaScript
+            // exception and the tool that exposed it was broken for as long as it
+            // existed — invisible, because nothing drove it.
+            try await engine.press("PageDown")
+            let afterPress = try await engine.evaluate(
+                "return document.getElementById('out').innerText"
+            ) as? String
+            c.equal("a key press reaches the page as the key it was asked for",
+                    afterPress, "key:PageDown")
+
             // MARK: Typing
 
             try await engine.type(ref: emailRef, text: "someone@example.com", submit: false)
@@ -214,7 +227,25 @@ public enum BudBrowserVerification {
             let provider = BrowserToolProvider(engine: toolEngine)
 
             let descriptors = await provider.toolDescriptors()
-            c.check("the provider offers its tools (\(descriptors.count))", descriptors.count >= 8)
+            c.check("the provider offers three tools, not thirteen (\(descriptors.count))",
+                    descriptors.count == 3)
+            c.equal("...one to go somewhere", descriptors.first?.name, "browser_open")
+            c.equal("...one to look", descriptors[1].name, "browser_read")
+            c.equal("...one to act", descriptors[2].name, "browser_act")
+            // The modes are enums in the schema: the model picks from what exists
+            // rather than from names it has to remember, which is what makes the
+            // thirteen-to-three collapse safe.
+            c.equal("the reading modes are the enum",
+                    descriptors[1].schema["properties"]?["mode"]?["enum"]?.arrayValue?
+                        .compactMap(\.stringValue),
+                    ["outline", "text", "console", "screenshot"])
+            c.equal("the actions are the enum",
+                    descriptors[2].schema["properties"]?["action"]?["enum"]?.arrayValue?
+                        .compactMap(\.stringValue),
+                    ["click", "type", "hover", "select", "press", "scroll", "wait", "back"])
+            c.equal("...and acting is the only required field",
+                    descriptors[2].schema["required"]?.arrayValue?.compactMap(\.stringValue),
+                    ["action"])
             c.check(
                 "every tool name is model-legal",
                 descriptors.allSatisfy {
@@ -240,13 +271,140 @@ public enum BudBrowserVerification {
             // can act on. A crash ends the turn; a silent success sends it on with
             // a wrong idea of what happened.
             let stale = await provider.invoke(
-                tool: "browser_click",
-                arguments: .object(["ref": .number(4_242)]),
+                tool: "browser_act",
+                arguments: .object(["action": .string("click"), "ref": .number(4_242)]),
                 callID: "t4"
             )
             c.check("a stale ref is refused", stale.isError)
             c.check("and the refusal says how to fix it",
-                    stale.text.lowercased().contains("snapshot"))
+                    stale.text.lowercased().contains("outline"))
+
+            // MARK: Reading
+
+            let outline = await provider.invoke(
+                tool: "browser_read", arguments: .object([:]), callID: "t5"
+            )
+            c.check("reading with no mode gives the outline — the mode an action needs",
+                    !outline.isError && outline.text.contains("button \"Sign in\""))
+            let readText = await provider.invoke(
+                tool: "browser_read",
+                arguments: .object(["mode": .string("text")]),
+                callID: "t6"
+            )
+            c.check("reading the text gives the prose",
+                    !readText.isError && readText.text.contains("Welcome back")
+                        && !readText.text.contains("heading \""))
+            let console = await provider.invoke(
+                tool: "browser_read",
+                arguments: .object(["mode": .string("console")]),
+                callID: "t7"
+            )
+            c.check("reading the console gives what the page logged",
+                    !console.isError && console.text.contains("fixture ready"))
+            let picture = await provider.invoke(
+                tool: "browser_read",
+                arguments: .object(["mode": .string("screenshot")]),
+                callID: "t8"
+            )
+            c.check("reading a screenshot saves a PNG for the user",
+                    !picture.isError && picture.ui != nil && picture.text.contains(".png"))
+            c.check("...and says the model cannot see it", picture.text.contains("cannot"))
+            let badMode = await provider.invoke(
+                tool: "browser_read",
+                arguments: .object(["mode": .string("readable")]),
+                callID: "t9"
+            )
+            c.check("an unknown reading mode is refused rather than quietly defaulted",
+                    badMode.isError && badMode.text.contains("no 'readable' mode"))
+
+            // MARK: Acting
+
+            // Each action needs different fields, and the refusal has to name the
+            // one it is missing — the teaching the thirteen descriptions used to
+            // do one tool at a time.
+            let noRef = await provider.invoke(
+                tool: "browser_act",
+                arguments: .object(["action": .string("click")]),
+                callID: "t10"
+            )
+            c.check("clicking without a ref is refused, and names it",
+                    noRef.isError && noRef.text.contains("'ref'"))
+            let noKey = await provider.invoke(
+                tool: "browser_act",
+                arguments: .object(["action": .string("press")]),
+                callID: "t11"
+            )
+            c.check("pressing without a key is refused, and names it",
+                    noKey.isError && noKey.text.contains("'key'"))
+            let noWaitFor = await provider.invoke(
+                tool: "browser_act",
+                arguments: .object(["action": .string("wait")]),
+                callID: "t12"
+            )
+            c.check("waiting without anything to wait for is refused",
+                    noWaitFor.isError && noWaitFor.text.contains("'text' or 'selector'"))
+            let badAction = await provider.invoke(
+                tool: "browser_act",
+                arguments: .object(["action": .string("submit")]),
+                callID: "t13"
+            )
+            c.check("an unknown action is refused, listing the ones that exist",
+                    badAction.isError && badAction.text.contains("no 'submit' action")
+                        && badAction.text.contains("scroll"))
+            let scrolled = await provider.invoke(
+                tool: "browser_act",
+                arguments: .object(["action": .string("scroll"), "amount": .number(2_000)]),
+                callID: "t14"
+            )
+            c.check("a scroll works and points at the read that shows the result",
+                    !scrolled.isError && scrolled.text.contains("outline"))
+            let pressed = await provider.invoke(
+                tool: "browser_act",
+                arguments: .object(["action": .string("press"), "key": .string("PageDown")]),
+                callID: "t15"
+            )
+            c.check("a key press reaches the page through the acting tool", !pressed.isError)
+            let waited = await provider.invoke(
+                tool: "browser_act",
+                arguments: .object([
+                    "action": .string("wait"), "text": .string("Welcome back"),
+                    "timeout": .number(5),
+                ]),
+                callID: "t16"
+            )
+            c.check("waiting for text that is there returns", !waited.isError)
+            let neverThere = await provider.invoke(
+                tool: "browser_act",
+                arguments: .object([
+                    "action": .string("wait"), "text": .string("never on this page"),
+                    "timeout": .number(1),
+                ]),
+                callID: "t17"
+            )
+            c.check("...and waiting for what never arrives gives up rather than hanging",
+                    neverThere.isError)
+
+            // Going back needs somewhere to go back to, and says so when there is
+            // not: a refusal the model can act on beats a silent no-op.
+            let backWithNoHistory = await provider.invoke(
+                tool: "browser_act",
+                arguments: .object(["action": .string("back")]),
+                callID: "t18"
+            )
+            c.check("going back with no history is refused, and says why",
+                    backWithNoHistory.isError && backWithNoHistory.text.contains("nowhere to go back"))
+            let second = directory.appendingPathComponent("second.html")
+            try? "<!doctype html><title>Second</title><h1>Second page</h1>".write(
+                to: second, atomically: true, encoding: .utf8
+            )
+            try await toolEngine.open(second.path)
+            let wentBack = await provider.invoke(
+                tool: "browser_act",
+                arguments: .object(["action": .string("back")]),
+                callID: "t19"
+            )
+            c.check("...and goes back once there is history, returning a fresh outline",
+                    !wentBack.isError && wentBack.text.contains("button \"Sign in\""))
         } catch {
             c.check("the browser completed without throwing (\(error.localizedDescription))", false)
         }
@@ -387,6 +545,9 @@ public enum BudBrowserVerification {
         });
         document.getElementById('menu').addEventListener('mouseenter', () => {
           document.getElementById('menuBody').style.display = 'block';
+        });
+        document.addEventListener('keydown', (event) => {
+          document.getElementById('out').innerText = 'key:' + event.key;
         });
 
         console.log('fixture ready');

@@ -651,32 +651,26 @@ public nonisolated struct MemoryToolsProvider: ToolProvider {
 /// standing between the model and five behaviours.
 extension MemoryToolsProvider {
     static let toolDescription = """
-    Your own notes: keep them, find them, correct them, drop them. \
-    mode 'remember' saves what would change how you help next time. The bar is \
-    usefulness rather than interest: how they like to be answered, what they are \
-    working on and how long they have been at it, what they already know so you do \
-    not explain it again, and what they have already turned down, with the reason, \
-    so you do not offer it twice. Notice these on your own initiative and keep them \
-    without saying so — nobody has to ask, and nobody needs telling. Do not keep a \
-    log of trivia, or of anything that only matters now: the task in hand, a file \
-    you are editing, this turn's output, or anything you could read again from the \
-    code or the transcript. A fact already in your notes — even rephrased — comes \
-    back as already known rather than being saved again.
+    Your own notes: keep them, find them, correct them, drop them.
 
-    mode 'search' finds a note by wording and returns the ids that 'update' and \
-    'forget' take; mode 'list' reads them back newest first. The notes that bear \
-    on what you are doing are already in front of you on every request, so reach \
-    for these when you need the rest of them or the exact wording: before asking \
-    the user to repeat a preference they have already given you, or when they \
-    refer to something from an earlier conversation.
+    'remember' saves what would change how you help next time — how they like to be \
+    answered, what they are working on, what they already know, and what they have \
+    turned down and why — noticed on your own initiative and kept without saying so. \
+    Not trivia, and nothing that only matters now: the task in hand, a file you are \
+    editing, this turn's output, or anything you could read again from the code or \
+    the transcript. A fact already in your notes, even rephrased, comes back as \
+    already known rather than being saved twice.
 
-    mode 'update' rewrites a note in place, keeping its id, and mode 'forget' \
-    drops one. Use them when you are the reason the note is wrong — you have \
-    learned better since, or the person has changed their mind — rather than \
-    keeping a stale note and a correction side by side. Both take an id from a \
-    search or a list; there is no way to name a note by its wording, because a \
-    memory removed by approximation is worse than one more call. A note the \
-    person wrote as a standing instruction is theirs, not yours: search reports \
-    those, and changing them is done in Memory settings.
+    'search' finds a note by wording and returns the ids the other modes take; \
+    'list' reads them back newest first. The notes that bear on what you are doing \
+    are already in front of you on every request — reach for these for the rest, or \
+    for exact wording, before asking the user to repeat something they have told you.
+
+    'update' rewrites a note in place, keeping its id, and 'forget' drops it. Use \
+    them when you are the reason the note is wrong: you have learned better since, \
+    or the person has changed their mind. Both take an id from a search or a list — \
+    there is no way to name a note by its wording, because a memory removed by \
+    approximation is worse than one more call. Standing instructions are the \
+    person's own: search reports them, and changing them happens in Memory settings.
     """
 }

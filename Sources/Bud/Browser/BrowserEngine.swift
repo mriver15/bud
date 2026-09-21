@@ -328,7 +328,7 @@ public final class BrowserEngine: NSObject {
     }
 
     public func press(_ key: String) async throws {
-        _ = try await evaluate(Self.pressScript, arguments: ["key": key])
+        _ = try await evaluate(Self.pressScript, arguments: ["pressedKey": key])
         try await settleAfterAction()
     }
 
@@ -423,7 +423,7 @@ public final class BrowserEngine: NSObject {
 
     private func requireRef(_ ref: Int) throws {
         guard !knownRefs.isEmpty else {
-            throw BrowserError.script("take a snapshot before acting on the page — it is what assigns refs")
+            throw BrowserError.script("read the outline before acting on the page (browser_read, mode \"outline\") — it is what assigns refs")
         }
         guard knownRefs.contains(ref) else { throw BrowserError.staleRef(ref) }
     }
@@ -642,7 +642,7 @@ public final class BrowserEngine: NSObject {
                     PageDown: 'PageDown', PageUp: 'PageUp', Home: 'Home', End: 'End',
                     ArrowDown: 'ArrowDown', ArrowUp: 'ArrowUp',
                     ArrowLeft: 'ArrowLeft', ArrowRight: 'ArrowRight' };
-    const key = names[keyName] || keyName;
+    const key = names[pressedKey] || pressedKey;
     el.dispatchEvent(new KeyboardEvent('keydown', { key: key, bubbles: true, cancelable: true }));
     el.dispatchEvent(new KeyboardEvent('keyup', { key: key, bubbles: true, cancelable: true }));
     if (key === 'Enter' && el.form && typeof el.form.requestSubmit === 'function') el.form.requestSubmit();
@@ -715,7 +715,7 @@ public enum BrowserError: LocalizedError {
         case .timedOut:
             return "The page did not finish loading."
         case .staleRef(let ref):
-            return "Ref \(ref) is not on the page any more. Take a fresh snapshot — refs are assigned by it."
+            return "Ref \(ref) is not on the page any more. Read the outline again (browser_read, mode \"outline\") — refs are assigned by it, and they do not survive an action you did not take."
         case .script(let detail):
             return "The page script failed: \(detail)"
         case .transport(let detail):

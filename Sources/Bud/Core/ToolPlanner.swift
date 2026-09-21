@@ -204,6 +204,21 @@ public enum ToolPlanner {
         "web_search": "web_fetch",
         "search_web": "web_fetch",
         "web_browse": "web_fetch",
+        // The browser was thirteen tools before it was three. A model that
+        // reaches for one of the old names has the right intent and the wrong
+        // vocabulary, so the alias resolves it to the tool that does the job and
+        // the group is offered rather than the call hard-failing.
+        "browser_snapshot": "browser_read",
+        "browser_click": "browser_act",
+        "browser_type": "browser_act",
+        "browser_hover": "browser_act",
+        "browser_select": "browser_act",
+        "browser_press": "browser_act",
+        "browser_scroll": "browser_act",
+        "browser_wait": "browser_act",
+        "browser_back": "browser_act",
+        "browser_console": "browser_read",
+        "browser_screenshot": "browser_read",
     ]
 
     public static func expanded(
