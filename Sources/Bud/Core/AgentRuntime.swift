@@ -156,7 +156,13 @@ public final class AgentRuntime {
         // A conversation loaded from the archive has no checkpoints: nothing in
         // this session ran it, and the exchange boundaries were not saved.
         checkpoints.removeAll()
-        turns = savedTurns
+        // A turn the process died mid-way through leaves an empty assistant
+        // turn — no segments, no error, nothing the transcript can render but a
+        // stuck "thinking" bubble. Drop those; the user's question and any
+        // completed work stay. The history holds no entry for them (a turn that
+        // wrote nothing also appended nothing to the model context), so the two
+        // stay aligned.
+        turns = savedTurns.filter { !($0.role == .assistant && $0.segments.isEmpty && $0.error == nil) }
         history = savedHistory
         lastError = nil
         statusText = ""
