@@ -341,13 +341,25 @@ public final class AgentRuntime {
             // evidence and explicit intent feeding the resolver.
             let built = CapabilityIndex.build(descriptors: all, alwaysOn: ToolPlanner.alwaysOnCore)
             index = built
+            // Retrieval runs before the decision so the batch can read it: the
+            // memory decision is evidence-driven, not keyword-driven.
+            let retrieval = MemoryRetriever.retrieve(query: context.query, budget: 600)
+            lastRetrieval = retrieval
             let state = DecisionState(
                 query: context.query,
                 surface: context.surface,
                 attachmentPaths: context.attachmentPaths,
                 recentToolNames: context.recentToolNames,
                 connectedServers: context.connectedServers,
-                round: shadowRound
+                round: shadowRound,
+                directCapabilities: CapabilityResolver.directMatches(
+                    query: context.query,
+                    index: built,
+                    descriptors: all,
+                    skills: SkillStore.installed(),
+                    connectedServers: context.connectedServers
+                ),
+                memoryCandidates: retrieval.count
             )
             let questions = DecisionQuestions.initial(domains: built.capabilities.map(\.id) + ["none"])
             let evaluation = await DecisionEngineCoordinator.evaluate(
@@ -357,7 +369,6 @@ public final class AgentRuntime {
                 questions: questions
             )
             lastDecisionBatch = evaluation.batch
-            lastRetrieval = MemoryRetriever.retrieve(query: context.query, budget: 600)
             plan = CapabilityResolver.stageA(
                 state: state,
                 batch: evaluation.batch,
@@ -994,7 +1005,15 @@ public final class AgentRuntime {
             attachmentPaths: plan.context.attachmentPaths,
             recentToolNames: plan.context.recentToolNames,
             connectedServers: plan.context.connectedServers,
-            round: shadowRound
+            round: shadowRound,
+            directCapabilities: CapabilityResolver.directMatches(
+                query: plan.context.query,
+                index: index,
+                descriptors: plan.fullInventory,
+                skills: SkillStore.installed(),
+                connectedServers: plan.context.connectedServers
+            ),
+            memoryCandidates: retrieval.count
         )
         let engine = DeterministicDecisionEngine()
         let decisionStart = Date()

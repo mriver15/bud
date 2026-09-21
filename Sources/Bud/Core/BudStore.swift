@@ -472,6 +472,10 @@ public enum BudStore {
         db.transaction { handle in
             Statement(handle, "DELETE FROM lessons WHERE id = ?;")?.bind(1, id).run()
         }
+        // The cognitive layer keeps its own copy of the same note; forgetting
+        // the lesson forgets both, or retrieval would keep surfacing a note
+        // the person deleted.
+        CognitiveStore.deleteBySource("lesson:\(id)")
     }
 
     /// How many notes the block in front of the model may carry.

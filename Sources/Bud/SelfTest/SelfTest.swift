@@ -1391,7 +1391,7 @@ public enum BudSelfTest {
     /// migration from the flat lesson store, versioned facts with supersession,
     /// entities and bounded relations, FTS retrieval and the budgeted retriever.
     /// Hermetic: runs against a scratch database, never the real archive.
-    static func cognitiveMemory() -> SelfTestReport {
+    static func cognitiveMemory() async -> SelfTestReport {
         let c = Checker(suite: "cognitive")
 
         let directory = FileManager.default.temporaryDirectory
@@ -1490,6 +1490,32 @@ public enum BudSelfTest {
         )
         c.check("context events are recorded", CognitiveStore.contextEventCount() >= 1)
 
+        // The remember tool feeds the cognitive layer directly: a note recorded
+        // mid-run is retrievable by a later query, no migration needed.
+        let memoryTools = MemoryToolsProvider()
+        _ = await memoryTools.invoke(
+            tool: "remember",
+            arguments: .object([
+                "text": .string("Deploys to production on Friday afternoons."),
+                "scope": .string("project"),
+            ]),
+            callID: "remember-cognitive"
+        )
+        let remembered = MemoryRetriever.retrieve(query: "friday deploys", budget: 10_000)
+        c.check("a remembered note is retrievable by a later query",
+                remembered.contains { $0.id.hasPrefix("episode:") && $0.text.contains("Friday") })
+
+        // Forgetting the lesson clears the cognitive copy too, or retrieval
+        // would keep surfacing a note the person deleted.
+        if let lesson = BudStore.lessons().first(where: { $0.text.contains("Friday afternoons") }) {
+            BudStore.forget(id: lesson.id)
+            let afterForget = MemoryRetriever.retrieve(query: "friday deploys", budget: 10_000)
+            c.check("forgetting the note removes its episode",
+                    !afterForget.contains { $0.id.hasPrefix("episode:") && $0.text.contains("Friday") })
+        } else {
+            c.check("the remembered note is in the lesson store", false)
+        }
+
         return c.report()
     }
 
@@ -1502,9 +1528,21 @@ public enum BudSelfTest {
 
         let engine = DeterministicDecisionEngine()
 
-        func batch(for query: String, attachments: [String] = [], servers: [String] = []) async throws -> DecisionBatch {
+        func batch(
+            for query: String,
+            attachments: [String] = [],
+            servers: [String] = [],
+            direct: [String] = [],
+            memories: Int = 0
+        ) async throws -> DecisionBatch {
             try await engine.evaluate(
-                state: DecisionState(query: query, attachmentPaths: attachments, connectedServers: servers),
+                state: DecisionState(
+                    query: query,
+                    attachmentPaths: attachments,
+                    connectedServers: servers,
+                    directCapabilities: direct,
+                    memoryCandidates: memories
+                ),
                 questions: DecisionQuestions.initial(domains: ["Browser", "Bud", "Interface", "Get Competitive", "none"])
             )
         }
@@ -1522,9 +1560,11 @@ public enum BudSelfTest {
 
         let plain = try? await batch(for: "What time is it?")
         c.check("a plain question activates nothing",
-                ["needs_browser", "needs_web", "needs_ui", "needs_files", "needs_memory", "needs_delegate"]
+                ["needs_browser", "needs_web", "needs_ui", "needs_files", "needs_memory"]
                     .allSatisfy { plain?.answer(for: $0)?.booleanValue == false })
         c.equal("...and reads as trivial", plain?.answer(for: "complexity")?.choiceValue, "trivial")
+        c.check("...but flags delegation: nothing local covers it",
+                plain?.answer(for: "needs_delegate")?.booleanValue == true)
 
         // Files, mutation readings, ambiguity.
         let attached = try? await batch(for: "Summarise this for me", attachments: ["/tmp/report.pdf"])
@@ -1542,11 +1582,26 @@ public enum BudSelfTest {
         c.check("'fix it or roll it back?' scores ambiguous",
                 rollback?.answer(for: "ambiguity")?.scoreValue == "high")
 
-        // Delegation: a named server is a delegation signal.
+        // Delegation is the fallback, not a keyword: positive when nothing the
+        // agent has directly covers the request, or when it asks to hand off.
         let delegated = try? await batch(for: "Ask the get competitive server about smogon",
                                          servers: ["Get Competitive"])
-        c.check("naming a connected server is a delegation signal",
-                delegated?.answer(for: "needs_delegate")?.booleanValue == true)
+        c.check("naming a connected server is a direct capability, not a hand-off",
+                delegated?.answer(for: "needs_delegate")?.booleanValue == false)
+        let handOff = try? await batch(for: "Hand this work off to an agent")
+        c.check("asking to hand work off is a delegation signal",
+                handOff?.answer(for: "needs_delegate")?.booleanValue == true)
+        let covered = try? await batch(for: "Browse https://example.com/docs", direct: ["Browser"])
+        c.check("a directly named capability is no delegation",
+                covered?.answer(for: "needs_delegate")?.booleanValue == false)
+
+        // Memory is evidence-driven: retrieval finding something is the signal,
+        // not the request saying "memory".
+        let evidence = try? await batch(for: "How do we usually deploy?", memories: 3)
+        c.check("retrieval evidence draws memory in",
+                evidence?.answer(for: "needs_memory")?.booleanValue == true)
+        c.check("...and the rationale says why",
+                evidence?.answer(for: "needs_memory")?.rationale.contains("3 candidate") == true)
 
         // Unknown ids stay unanswered rather than guessed.
         let unknown = try? await engine.evaluate(

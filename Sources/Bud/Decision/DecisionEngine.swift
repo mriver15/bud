@@ -12,6 +12,16 @@ public struct DecisionState: Sendable, Equatable {
     public var recentToolNames: [String]
     public var connectedServers: [String]
     public var round: Int
+    /// What the query directly names across skills, tools and subagents.
+    /// Pre-resolved by the runtime against the index, the tool inventory and
+    /// the installed skills — the delegation decision is the complement: a
+    /// request that names nothing local has nowhere to land but an agent.
+    public var directCapabilities: [String]
+    /// How many memory candidates retrieval found for the query. The memory
+    /// decision reads this: a request draws on remembered context when the
+    /// store holds something that speaks to it, not only when the request
+    /// says "memory".
+    public var memoryCandidates: Int
 
     public init(
         query: String,
@@ -19,7 +29,9 @@ public struct DecisionState: Sendable, Equatable {
         attachmentPaths: [String] = [],
         recentToolNames: [String] = [],
         connectedServers: [String] = [],
-        round: Int = 1
+        round: Int = 1,
+        directCapabilities: [String] = [],
+        memoryCandidates: Int = 0
     ) {
         self.query = query
         self.surface = surface
@@ -27,6 +39,8 @@ public struct DecisionState: Sendable, Equatable {
         self.recentToolNames = recentToolNames
         self.connectedServers = connectedServers
         self.round = round
+        self.directCapabilities = directCapabilities
+        self.memoryCandidates = memoryCandidates
     }
 }
 
@@ -127,7 +141,7 @@ public enum DecisionQuestions {
             .boolean(id: "needs_web", instructions: "Whether the request needs fetching from the web."),
             .boolean(id: "needs_memory", instructions: "Whether the request draws on remembered context."),
             .boolean(id: "needs_ui", instructions: "Whether the answer should be a structured surface."),
-            .boolean(id: "needs_delegate", instructions: "Whether the request hands work to an agent."),
+            .boolean(id: "needs_delegate", instructions: "Whether the request has no directly matching skill, subagent, or tool, so the work must be handed to an agent."),
             .choice(id: "complexity", options: ["trivial", "normal", "complex", "long_horizon"],
                     instructions: "How large the task reads."),
             .choice(id: "mutation_intent", options: ["read", "localWrite", "execute", "externalMutation"],

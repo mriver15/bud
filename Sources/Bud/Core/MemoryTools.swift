@@ -122,7 +122,8 @@ public nonisolated struct MemoryToolsProvider: ToolProvider {
         // `INSERT OR IGNORE` reports success when it skips a row — so its return
         // value alone cannot distinguish the two, and a model told it saved
         // something it did not is worse served than one told nothing at all.
-        if BudStore.lessons(limit: Int.max).contains(where: { $0.text == text }) {
+        let existing = BudStore.lessons(limit: Int.max)
+        if existing.contains(where: { $0.text == text }) {
             return .ok(
                 "Already known — \"\(summarise(text))\" is in your notes already, so nothing was recorded. "
                 + "It was there before this conversation; do not claim you just saved it."
@@ -131,6 +132,19 @@ public nonisolated struct MemoryToolsProvider: ToolProvider {
 
         guard BudStore.remember(text, scope: scope, source: BudStore.currentConversationID()) else {
             throw ToolFailure(message: "Bud could not write that note, so it was not saved. Try again.")
+        }
+
+        // The cognitive layer reads the same fact: an episode indexed by FTS, so
+        // later rounds whose wording touches it see it in the memory section
+        // without asking. Salience is high — a fact somebody asked to keep is
+        // exactly the kind retrieval should surface.
+        if let lesson = BudStore.lessons(limit: Int.max).first(where: { $0.text == text }) {
+            CognitiveStore.recordEpisode(
+                summary: text,
+                scope: scope,
+                salience: 0.8,
+                source: "lesson:\(lesson.id)"
+            )
         }
 
         return .ok(

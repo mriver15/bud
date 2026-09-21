@@ -56,11 +56,21 @@ public struct DeterministicDecisionEngine: DecisionEngine {
                             rationale: web ? "a URL or web intent is present" : "no web signal")
 
         case "needs_memory":
+            // Two signals: the request speaking about memory itself, and the
+            // stronger one — retrieval actually found something for the query.
+            // The keyword list alone gates memory out of every round that does
+            // not say "memory", which is almost all of them; remembered context
+            // exists to serve the rounds that do not.
             let memory = contains(query, ["remember", "recall", "note", "notes", "prefer",
                                           "preference", "what you know", "about me"])
+                || state.memoryCandidates > 0
             return .boolean(id: question.id, value: memory,
                             confidence: 0.85,
-                            rationale: memory ? "the request reaches for remembered context" : "no memory signal")
+                            rationale: memory
+                                ? (state.memoryCandidates > 0
+                                    ? "retrieval found \(state.memoryCandidates) candidate(s) for this query"
+                                    : "the request reaches for remembered context")
+                                : "no memory signal")
 
         case "needs_ui":
             let ui = contains(query, ["dashboard", "chart", "table", "compare", "comparison",
@@ -71,15 +81,24 @@ public struct DeterministicDecisionEngine: DecisionEngine {
                             rationale: ui ? "the request names a presentation outcome" : "no presentation signal")
 
         case "needs_delegate":
+            // Delegation is the fallback, not a keyword: the request hands work
+            // to an agent when it explicitly says so, or when nothing the agent
+            // has — skill, subagent, or tool — directly covers it. A connected
+            // server the request names is a direct capability, not a hand-off.
+            let explicit = contains(query, ["delegate", "hand off", "handoff", "in parallel",
+                                            "subagent", "workstream", "split into"])
             let namedServer = state.connectedServers.contains {
                 ToolPlanner.matchesQuery(name: $0, query: query)
             }
-            let delegation = namedServer
-                || contains(query, ["delegate", "hand off", "handoff", "in parallel",
-                                    "subagent", "workstream", "split into"])
+            let hasDirect = namedServer || !state.directCapabilities.isEmpty
+            let delegation = explicit || !hasDirect
             return .boolean(id: question.id, value: delegation,
                             confidence: 0.85,
-                            rationale: delegation ? "a server is named or the request asks to hand work off" : "no delegation signal")
+                            rationale: delegation
+                                ? (explicit
+                                    ? "the request asks to hand work off"
+                                    : "no skill, subagent, or tool directly covers the request")
+                                : "the request directly names \(state.directCapabilities.joined(separator: ", "))")
 
         case "complexity":
             let stepCount = RequestAnalyzer.stepMarkers(in: query)
