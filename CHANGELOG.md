@@ -12,6 +12,35 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.14.0
+
+### Delegation remembers what it was taught, and Jev's model can be pinned
+
+When the decision engine places a capability wording no local match could —
+the case that used to cost a refusal or a wrong guess — that placement is now
+filed away. The next time the same wording arrives it is answered locally,
+without asking anyone: the engine is consulted once per wording rather than
+once per delegation. Its answer also widens what the agent matches, so a
+follow-up phrased like the first one overlaps on evidence instead of going back
+out. Inside a session, answers are kept until the roster changes and are then
+dropped rather than trusted, because a skill installed a minute ago may be the
+right home for a wording the engine placed somewhere else.
+
+A skill's `triggers` — the words its author says people use for it — now travel
+with the skill's agent as names for it, and resolve at the activation band. A
+W-9 is a PDF; nothing in "pdf" or "reads and fills PDF forms" says so, and the
+author is the only party who knows.
+
+The Jev model is now selectable under Limits. It defaults to TypeSafe's
+`jev-latest` alias, which tracks the newest release and can therefore change its
+answers without a change here; when a routing threshold has been tuned against
+one version, pin that version instead. The version that answered each decision
+is recorded either way. Nothing in this release trains the model — TypeSafe
+serves one set of weights to every account, and the request is the only
+per-account input — so the learning in the delegation path is local by
+construction.
+
+
 ## Bud 2.13.2
 
 ### The 2.13.1 work reaches stable
