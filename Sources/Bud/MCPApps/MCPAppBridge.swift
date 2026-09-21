@@ -170,7 +170,7 @@ public final class MCPAppBridge: NSObject, WKScriptMessageHandler {
                 "theme": .string("dark"),
                 "displayMode": .string("inline"),
                 "availableDisplayModes": .array([.string("inline")]),
-                "containerDimensions": .object(["maxHeight": .number(700), "maxWidth": .number(820)]),
+                "containerDimensions": .object(["maxHeight": .number(900), "maxWidth": .number(820)]),
                 "platform": .string("desktop"),
                 "userAgent": .string("Bud"),
                 "locale": .string(Locale.current.identifier),
@@ -198,6 +198,7 @@ public final class MCPAppBridge: NSObject, WKScriptMessageHandler {
         "--color-text-secondary": .string("light-dark(#4b5563, #d4d4d4)"),
         "--color-text-tertiary": .string("light-dark(#6b7280, #9ca3af)"),
         "--color-border-primary": .string("light-dark(#e5e7eb, #3f3f3f)"),
+        "--color-accent": .string("light-dark(#4f46e5, #818cf8)"),
         "--font-sans": .string("-apple-system, system-ui, sans-serif"),
         "--font-mono": .string("ui-monospace, SFMono-Regular, monospace"),
     ]
