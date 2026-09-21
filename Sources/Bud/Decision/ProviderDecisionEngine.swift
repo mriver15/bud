@@ -87,8 +87,12 @@ public struct ProviderDecisionEngine: DecisionEngine {
         ] as [String: Any]
         let questionsJSON = questions.map { question -> [String: Any] in
             switch question {
-            case .boolean(let id, let instructions):
-                return ["id": id, "type": "boolean", "instructions": instructions]
+            case .boolean(let id, let instructions, let criteria):
+                var item: [String: Any] = ["id": id, "type": "boolean", "instructions": instructions]
+                if let criteria {
+                    item["criteria"] = ["true": criteria.yes, "false": criteria.no]
+                }
+                return item
             case .choice(let id, let options, let instructions, let criteria):
                 var item: [String: Any] = [
                     "id": id, "type": "choice", "options": options, "instructions": instructions,

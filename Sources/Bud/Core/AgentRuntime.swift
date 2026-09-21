@@ -361,7 +361,10 @@ public final class AgentRuntime {
                 ),
                 memoryCandidates: retrieval.count
             )
-            let questions = DecisionQuestions.initial(domains: built.capabilities.map(\.id) + ["none"])
+            let questions = DecisionQuestions.initial(
+                domains: built.capabilities.map(\.id) + ["none"],
+                domainCriteria: Dictionary(uniqueKeysWithValues: built.capabilities.map { ($0.id, $0.summary) })
+            )
             let evaluation = await DecisionEngineCoordinator.evaluate(
                 selection: env.config.decisionEngine,
                 env: env,
@@ -1018,7 +1021,8 @@ public final class AgentRuntime {
         let engine = DeterministicDecisionEngine()
         let decisionStart = Date()
         let questions = DecisionQuestions.initial(
-            domains: index.capabilities.map(\.id) + ["none"]
+            domains: index.capabilities.map(\.id) + ["none"],
+            domainCriteria: Dictionary(uniqueKeysWithValues: index.capabilities.map { ($0.id, $0.summary) })
         )
         if let batch = try? await engine.evaluate(state: state, questions: questions) {
             let latencyMs = Date().timeIntervalSince(decisionStart) * 1000

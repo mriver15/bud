@@ -130,11 +130,18 @@ public struct JevDecisionEngine: DecisionEngine {
         var questionMap: [String: JSONValue] = [:]
         for question in questions {
             switch question {
-            case .boolean(let id, let instructions):
-                questionMap[id] = .object([
+            case .boolean(let id, let instructions, let criteria):
+                var map: [String: JSONValue] = [
                     "type": .string("noul"),
                     "instructions": .string(instructions),
-                ])
+                ]
+                if let criteria {
+                    map["criteria"] = .object([
+                        "true": .string(criteria.yes),
+                        "false": .string(criteria.no),
+                    ])
+                }
+                questionMap[id] = .object(map)
             case .choice(let id, let options, let instructions, let criteria):
                 // Criteria maps option to rubric; null means "no extra detail".
                 var criteriaMap: [String: JSONValue] = [:]

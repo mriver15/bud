@@ -14,6 +14,15 @@ that will eventually disagree with the appcast.
 
 ## Unreleased
 
+### Jev questions ship their evidence as structure
+
+The decision batch now uses the advanced noul/choice criteria shapes:
+`primary_domain` carries each capability group's summary as its choice rubric —
+the engine reads what the groups do instead of guessing from bare names — and
+the subtle yes/no boundaries (`needs_delegate`, `needs_memory`) ship `noul`
+`true`/`false` criteria pinning each side. The provider engine sees the same
+criteria, and the wire format is pinned by tests.
+
 ### Delegation learns the roster — and the decision engine picks when words can't
 
 The `spawn_subagents` pipeline stopped asking the model to guess. The compact
