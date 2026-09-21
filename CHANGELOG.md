@@ -12,6 +12,20 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.12.1
+
+### Standing instructions, and memory that stops double-saving
+
+Memory settings gained **Standing instructions**: rules you write down
+yourself. Bud carries the ones a conversation matches into every request, and
+removing one removes it everywhere.
+
+What Bud remembers got sharper: structured notes are retrievable by their
+subject, connected servers and installed skills join the memory graph the
+moment they arrive, and saving the same fact twice — even rephrased — reports
+it as already known instead of filing it twice.
+
+
 ## Bud 2.12.0
 
 ### Smarter context, captured surfaces, faster streaming
