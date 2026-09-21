@@ -7,15 +7,10 @@ import UniformTypeIdentifiers
 public struct ChatView: View {
     private let model: AppModel
 
-    @BudState private var isNearBottom = true
-    @BudState private var isUserScrolling = false
     @BudState private var isDropTargeted = false
     @BudState private var isFinding = false
     @BudState private var findQuery = ""
     @BudState private var findCursor = 0
-    /// The last time the follow scrolled to the bottom, so streaming deltas
-    /// coalesce into ~10 layout passes a second instead of one per token.
-    @BudState private var lastFollowScroll = Date.distantPast
     @FocusState private var isFindFocused: Bool
     /// The report a context compact returned, shown in place of the budget banner
     /// until the next turn or a new chat clears it.
@@ -184,32 +179,15 @@ public struct ChatView: View {
                 .frame(maxWidth: .infinity)
             }
             .scrollContentBackground(.hidden)
-            .onScrollGeometryChange(for: Bool.self) { geometry in
-                // Tolerance, not equality: content grows between frames while
-                // streaming, so an exact bottom test would drop the follow after
-                // a single delta.
-                geometry.contentOffset.y + geometry.containerSize.height
-                    >= geometry.contentSize.height - 140
-            } action: { _, nearBottom in
-                isNearBottom = nearBottom
-            }
-            .onScrollPhaseChange { _, phase in
-                isUserScrolling = phase != .idle
-            }
-            .onChange(of: streamSignature) { _, _ in
-                guard isNearBottom, !isUserScrolling else { return }
-                // A delta per token means a scroll per token; the follow only
-                // needs the bottom pinned, and layout at 10Hz reads identically
-                // while costing a tenth of the passes.
-                let now = Date()
-                guard now.timeIntervalSince(lastFollowScroll) >= 0.1 else { return }
-                lastFollowScroll = now
-                proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
-            }
+            // The native bottom anchor keeps the transcript pinned while content
+            // grows — streamed text and, crucially, an MCP app whose frame grows
+            // when the app reports its size. The manual per-token follow it
+            // replaces read a stale offset once an app resized asynchronously,
+            // which is what overscrolled the transcript.
+            .defaultScrollAnchor(.bottom)
             .onChange(of: model.turns.count) { _, _ in
                 // A new turn only ever follows the reader's own send, so this
                 // one re-engages following even if history was being read.
-                isNearBottom = true
                 Bud.animate(.snappy(duration: 0.2)) {
                     proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
                 }
@@ -320,24 +298,6 @@ public struct ChatView: View {
         Bud.animate(.snappy(duration: 0.2)) {
             proxy.scrollTo(matches[index], anchor: .center)
         }
-    }
-
-    /// Only the trailing turn moves while streaming, so hashing it (plus the turn
-    /// count) is enough to know the transcript's height changed.
-    private var streamSignature: Int {
-        guard let last = model.turns.last else { return 0 }
-        var total = model.turns.count
-        for segment in last.segments {
-            switch segment {
-            case .reasoning(_, let text), .text(_, let text), .notice(_, let text, _):
-                total = total &+ text.count &+ 1
-            case .tool(_, _, _, let state, let result, let ui, _):
-                total = total &+ state.rawValue.count &+ (result?.count ?? 0) &+ (ui == nil ? 0 : 1)
-            case .ui(_, let payload):
-                total = total &+ payload.stringContentLength
-            }
-        }
-        return total
     }
 
     private var statusStrip: some View {
