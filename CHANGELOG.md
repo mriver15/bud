@@ -12,6 +12,48 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.19.0
+
+### Bud is an MCP Apps host
+
+An MCP server can now deliver an interactive interface — not just text and
+pictures — and Bud renders it in the transcript, sandboxed, with the tool's
+complete result handed to the app.
+
+This is the MCP Apps extension (`io.modelcontextprotocol/ui`), negotiated with
+each server at connect. When a server declares a `ui://` resource on a tool and
+the tool runs, Bud fetches the resource, validates it against the spec, and
+renders it in an isolated web view: the app runs in a sandboxed iframe with an
+opaque origin and `allow-scripts` only, a nonpersistent data store, the
+Content-Security-Policy the server declared (with restrictive defaults when it
+declared none), and navigation that cannot leave the host shell. A postMessage
+bridge carries the JSON-RPC handshake — the app sends `ui/initialize`, Bud
+answers with its capabilities and context, and once the app reports it is
+initialized, Bud delivers the tool input and the complete result.
+
+Two boundaries are enforced from day one. Tools whose `visibility` omits
+`"model"` never enter the agent's tool list — they exist only for the app to
+call, on the server connection it came from. And the bridge answers the
+handshake and opens links after a scheme check, and refuses everything else:
+the app's own tool calls, reads and messages are the next milestone, and until
+then they fail closed.
+
+A failed negotiation, a resource that does not validate, or a server that is no
+longer connected all fall back to the plain text result — so a call still
+answers even when the app cannot render, and a stored conversation whose server
+has gone still shows what the call returned. The app reference persisted with a
+tool call is bounded (URI, connection, arguments and result), and the HTML is
+re-fetched at render time, so the transcript file stays small and never pins a
+template the server has changed.
+
+Along the way, a latent bug in the JSON bridge was found and fixed: a numeric
+JSON-RPC request id was being read back as a boolean, which stopped the
+handshake on its first message. The host is exercised end to end in the browser
+harness — a fixture app handshakes, receives its result, reports a size, and its
+top-frame escape attempt is refused — and the validation, policy and persistence
+gates are covered offline.
+
+
 ## Bud 2.18.0
 
 ### The browser is three tools instead of thirteen, and a broken key press is fixed
