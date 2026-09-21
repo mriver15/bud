@@ -1,0 +1,21 @@
+{
+  "name": "Bud",
+  "description": "A native macOS AI assistant that lives as a sparkle in the menu bar and opens a floating Liquid Glass panel. Any provider, any MCP server, subagents, memory, and interfaces the model draws itself. Quiet, friendly, premium Apple-native feel.",
+  "style": "gradient modern, glassmorphism, geometric sparkle star whose top point grows into a small sprouting bud with two leaves, violet to cyan duotone gradient, translucent glossy, rounded",
+  "palette": [
+    "#7F86D1 Sky",
+    "#EBEFF5 Ivory"
+  ],
+  "seed": 1078162049,
+  "files": {
+    "logo": "/Users/river/Projects/comfy/mcp_outputs/brand_bud/logo.png",
+    "transparent": "/Users/river/Projects/comfy/mcp_outputs/brand_bud/logo_transparent.png",
+    "wordmark": "/Users/river/Projects/comfy/mcp_outputs/brand_bud/wordmark.png",
+    "logo_dark": "/Users/river/Projects/comfy/mcp_outputs/brand_bud/logo_dark.png",
+    "wordmark_dark": "/Users/river/Projects/comfy/mcp_outputs/brand_bud/wordmark_dark.png",
+    "wordmark_horizontal": "/Users/river/Projects/comfy/mcp_outputs/brand_bud/wordmark_horizontal.png",
+    "icon": "/Users/river/Projects/comfy/mcp_outputs/brand_bud/icon_src.png",
+    "hero": "/Users/river/Projects/comfy/mcp_outputs/brand_bud/hero.png"
+  },
+  "kit_dir": "/Users/river/Projects/comfy/mcp_outputs/brand_bud"
+}
