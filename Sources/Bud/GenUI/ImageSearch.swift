@@ -6,6 +6,9 @@ public struct FoundImage: Sendable, Equatable {
     public enum Source: Sendable, Equatable {
         /// The article for the thing itself. The strongest answer there is.
         case article
+        /// The official artwork for the thing itself — what PokéAPI holds for
+        /// a creature. The same strength as an article.
+        case artwork
         /// A file whose name matches the words. Often right, and sometimes a
         /// cosplay photograph: "Rotom" reaches this, and so does "red panda".
         case search
@@ -31,19 +34,24 @@ public struct FoundImage: Sendable, Equatable {
 /// that returns sprites", because the same gap appears for a bird, a city, a
 /// product or a diagram.
 ///
-/// So: a lookup. Two keyless sources, in the order that gives the best answer
-/// rather than the most:
+/// So: a lookup. Seven sources, in the order that gives the best answer rather
+/// than the most, and each of them keyless, documented and public:
 ///
 /// 1. **Wikipedia** — for anything with an article. Asked for "Blaziken" it
 ///    returns the species artwork, which is exactly what a team sheet wants and
 ///    what a word search over filenames would never find. When it answers, that is
-///    the answer: it matched the name, where the fallback would only have matched
+///    the answer: it matched the name, where a search would only have matched
 ///    the words.
-/// 2. **Wikimedia Commons** — for everything else. Free images with their
-///    licences attached.
-///
-/// Both are Wikimedia, which means no key, no account, and a documented API that
-/// is not going to close on a whim.
+/// 2. **PokéAPI** — for any Pokémon, including the forms and species too new or
+///    too obscure for an article. Official artwork straight from the games.
+/// 3. **Bulbapedia** — the Pokémon encyclopaedia, gated the same way as
+///    Wikipedia: it answers only when its article is *about* the thing asked.
+/// 4. **Wikimedia Commons** — free images with their licences attached, for
+///    everything else.
+/// 5. **Open Library** — book covers.
+/// 6. **iTunes** — album artwork.
+/// 7. **Openverse** — the open-licensed search, last because it is the broadest
+///    and therefore the weakest match.
 public enum ImageSearch {
     /// Wikimedia asks for a real User-Agent and refuses requests without one — the
     /// first version of this returned nothing at all from Commons for that reason
@@ -87,21 +95,58 @@ public enum ImageSearch {
         }
     }
 
-    /// The best images for one query, article first.
+    /// The best images for one query, strongest source first.
     private static func lookup(_ query: String, perQuery: Int) async -> [FoundImage] {
         if let cached = cache.value(for: query) { return Array(cached.prefix(perQuery)) }
 
-        // An article answers for the thing itself. Falling through to a filename
-        // search on top of that is how a surface ends up showing a photograph of a
-        // person in a costume instead of the creature, so it does not.
+        // A named answer — an article or official artwork — is the thing itself.
+        // Falling through to a search on top of that is how a surface ends up
+        // showing a photograph of a person in a costume instead of the creature,
+        // so it does not.
         if let article = await wikipedia(query) {
             cache.store([article], for: query)
             return [article]
         }
+        if let artwork = await pokeArtwork(query) {
+            cache.store([artwork], for: query)
+            return [artwork]
+        }
+        // Bulbapedia's search matches mentions like any search, but the article it
+        // reaches is gated the same way as Wikipedia's — so when it answers it is
+        // an answer of the same strength, and when it does not the search tier
+        // gets the question.
+        if let article = await bulbapedia(query) {
+            cache.store([article], for: query)
+            return [article]
+        }
 
-        let found = await commons(query, limit: perQuery)
+        // Then the searches, best source first. The archive answers first in
+        // the list, and the title-exact catalogues fill what it could not: a
+        // photograph can answer any query, a cover only answers a book or an
+        // album. Merging their files does not dilute the answer — the strongest
+        // matches still come first, and every one says what it matched.
+        let found = await search(query, perQuery: perQuery)
         cache.store(found, for: query)
         return found
+    }
+
+    /// The search tier, run in order until the budget is full: the photo
+    /// archive first, then the title-exact catalogues, then the broad open
+    /// search last — because the broadest match is the weakest one.
+    private static let searchTier: [@Sendable (String, Int) async -> [FoundImage]] = [
+        commons,
+        openLibrary,
+        itunes,
+        openverse,
+    ]
+
+    private static func search(_ query: String, perQuery: Int) async -> [FoundImage] {
+        var found: [FoundImage] = []
+        for source in searchTier {
+            guard found.count < perQuery else { break }
+            found.append(contentsOf: await source(query, perQuery))
+        }
+        return Array(found.prefix(perQuery))
     }
 
     // MARK: - Wikipedia
@@ -177,6 +222,128 @@ public enum ImageSearch {
             .lowercased()
         let reached = resolved.replacingOccurrences(of: " ", with: "_").lowercased()
         return reached == asked || reached.hasPrefix(asked + "_(")
+    }
+
+    // MARK: - PokéAPI
+
+    /// The name PokéAPI knows a Pokémon by: words lowercased and joined with
+    /// hyphens, which turns "Mr. Mime" into "mr-mime" and "Iron Valiant" into
+    /// "iron-valiant".
+    static func slug(for query: String) -> String {
+        query
+            .lowercased()
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .joined(separator: "-")
+    }
+
+    /// The official artwork, or nil when the API does not know the name.
+    ///
+    /// PokéAPI answers an unknown name with a 404, so this is tried for any
+    /// query: a miss is one cheap round trip, and a hit is the artwork itself —
+    /// the answer a filename search can only hope for. It is what catches the
+    /// creatures no encyclopaedia has an article for.
+    private static func pokeArtwork(_ query: String) async -> FoundImage? {
+        guard var components = URLComponents(string: "https://pokeapi.co/api/v2/pokemon/") else { return nil }
+        components.percentEncodedPath += slug(for: query)
+        guard let url = components.url else { return nil }
+        guard let json = await get(url) else { return nil }
+        return artwork(from: json, query: query)
+    }
+
+    /// The artwork, read out of a PokéAPI response.
+    ///
+    /// Split from the request for the same reason the Wikipedia parser is: the
+    /// shapes that matter can be checked against a fixture without asking the
+    /// API. The official artwork is preferred, then the Pokémon HOME render,
+    /// then the game sprite — all of them are the creature itself.
+    static func artwork(from json: JSONValue, query: String) -> FoundImage? {
+        let sprites = json["sprites"]
+        guard let source = sprites?["other"]?["official-artwork"]?["front_default"]?.stringValue
+                ?? sprites?["other"]?["home"]?["front_default"]?.stringValue
+                ?? sprites?["front_default"]?.stringValue,
+              isRaster(source)
+        else { return nil }
+        let name = json["name"]?.stringValue ?? query
+        let species = json["species"]?["name"]?.stringValue ?? name
+        return FoundImage(
+            query: query,
+            source: .artwork,
+            url: source,
+            title: displayName(name),
+            page: speciesPage(species),
+            credit: "Pokémon artwork via PokéAPI"
+        )
+    }
+
+    /// "charizard-mega-x" as a name rather than a slug.
+    static func displayName(_ slug: String) -> String {
+        slug.split(separator: "-").map { $0.capitalized }.joined(separator: " ")
+    }
+
+    /// The article a Pokémon can be read at: its species' Bulbapedia page,
+    /// which exists for every one of them.
+    private static func speciesPage(_ slug: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~/"))
+        let title = displayName(slug) + " (Pokémon)"
+        var components = URLComponents(string: "https://bulbapedia.bulbagarden.net/wiki/")!
+        components.percentEncodedPath += title.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""
+        return components.url?.absoluteString ?? ""
+    }
+
+    // MARK: - Bulbapedia
+
+    /// A Bulbapedia article about the query, with its lead image.
+    ///
+    /// The File namespace is not searchable there, so this searches the articles
+    /// themselves and takes the lead image of the one that is *about* the query —
+    /// which for a creature is the artwork, exactly what the page itself shows.
+    private static func bulbapedia(_ query: String) async -> FoundImage? {
+        guard var components = URLComponents(string: "https://bulbapedia.bulbagarden.net/w/api.php") else { return nil }
+        components.queryItems = [
+            URLQueryItem(name: "action", value: "query"),
+            URLQueryItem(name: "generator", value: "search"),
+            URLQueryItem(name: "gsrsearch", value: query),
+            URLQueryItem(name: "gsrnamespace", value: "0"),
+            URLQueryItem(name: "gsrlimit", value: "3"),
+            URLQueryItem(name: "prop", value: "pageimages|info"),
+            URLQueryItem(name: "piprop", value: "thumbnail"),
+            URLQueryItem(name: "pithumbsize", value: "640"),
+            URLQueryItem(name: "inprop", value: "url"),
+            URLQueryItem(name: "format", value: "json"),
+        ]
+        guard let url = components.url else { return nil }
+        guard let json = await get(url) else { return nil }
+        return article(fromSearch: json, query: query)
+    }
+
+    /// The lead image of the first search hit that is about the query.
+    ///
+    /// A search matches mentions, so the same gate as Wikipedia applies: the page
+    /// reached has to be the thing asked for. Asked for "Garchomp", "Garchomp
+    /// (Pokémon)" is the artwork; asked for "sunset over mountains", "Sunset
+    /// Colosseum" is a building in a game — the gate refuses it and the search
+    /// tier gets the question instead.
+    static func article(fromSearch json: JSONValue, query: String) -> FoundImage? {
+        guard let pages = json["query"]?["pages"]?.objectValue else { return nil }
+        for page in pages.values.sorted(by: { lhs, rhs in
+            (lhs["index"]?.doubleValue ?? .greatestFiniteMagnitude)
+                < (rhs["index"]?.doubleValue ?? .greatestFiniteMagnitude)
+        }) {
+            guard isAbout(page, query),
+                  let source = page["thumbnail"]?["source"]?.stringValue,
+                  isRaster(source),
+                  let title = page["title"]?.stringValue
+            else { continue }
+            return FoundImage(
+                query: query,
+                source: .article,
+                url: tidy(source),
+                title: title,
+                page: page["fullurl"]?.stringValue ?? page["canonicalurl"]?.stringValue,
+                credit: "Bulbapedia"
+            )
+        }
+        return nil
     }
 
     // MARK: - Commons
@@ -288,6 +455,184 @@ public enum ImageSearch {
     static func tidy(_ url: String) -> String {
         guard let mark = url.firstIndex(of: "?"), url[mark...].contains("utm_") else { return url }
         return String(url[..<mark])
+    }
+
+    // MARK: - Open Library
+
+    private static func openLibrary(_ query: String, limit: Int) async -> [FoundImage] {
+        guard var components = URLComponents(string: "https://openlibrary.org/search.json") else { return [] }
+        components.queryItems = [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "fields", value: "key,title,cover_i"),
+            URLQueryItem(name: "limit", value: "\(limit + 3)"),
+        ]
+        guard let url = components.url else { return [] }
+        guard let json = await get(url) else { return [] }
+
+        // A cover id that has gone stale answers with a blank placeholder, not a
+        // 404 — asked without `default=false` it always renders. So candidates
+        // are checked before they are handed out; a placeholder is a broken
+        // answer in everything but name.
+        var found: [FoundImage] = []
+        for candidate in covers(from: json, query: query) {
+            guard found.count < limit else { break }
+            guard let url = URL(string: candidate.url), await coverExists(url) else { continue }
+            found.append(candidate)
+        }
+        return found
+    }
+
+    /// Book covers, read out of an Open Library search response.
+    ///
+    /// Only covers whose title actually mentions the query: Open Library matches
+    /// fuzzily and across languages, so a miss on the words is a book about
+    /// something else.
+    static func covers(from json: JSONValue, query: String) -> [FoundImage] {
+        guard let docs = json["docs"]?.arrayValue else { return [] }
+        var seen: Set<Int> = []
+        return docs.compactMap { doc -> FoundImage? in
+            guard let cover = doc["cover_i"]?.doubleValue, cover > 0,
+                  let id = Int(exactly: cover), !seen.contains(id),
+                  let title = doc["title"]?.stringValue, !title.isEmpty,
+                  nameMentions(title, query),
+                  let key = doc["key"]?.stringValue
+            else { return nil }
+            seen.insert(id)
+            return FoundImage(
+                query: query,
+                url: "https://covers.openlibrary.org/b/id/\(id)-L.jpg",
+                title: title,
+                page: "https://openlibrary.org" + key,
+                credit: "Open Library"
+            )
+        }
+    }
+
+    /// Whether the cover exists: asked with `default=false`, the library answers
+    /// 404 instead of the blank placeholder it serves for a dead id.
+    private static func coverExists(_ url: URL) async -> Bool {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return false }
+        components.queryItems = [URLQueryItem(name: "default", value: "false")]
+        guard let probe = components.url else { return false }
+        var request = URLRequest(url: probe)
+        request.httpMethod = "HEAD"
+        request.timeoutInterval = 8
+        guard let (_, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200
+        else { return false }
+        return true
+    }
+
+    // MARK: - iTunes
+
+    private static func itunes(_ query: String, limit: Int) async -> [FoundImage] {
+        guard var components = URLComponents(string: "https://itunes.apple.com/search") else { return [] }
+        components.queryItems = [
+            URLQueryItem(name: "term", value: query),
+            // Without a country the store answers with the local catalogue,
+            // which is not the one the question was asked in.
+            URLQueryItem(name: "country", value: "US"),
+            URLQueryItem(name: "media", value: "music"),
+            URLQueryItem(name: "entity", value: "album"),
+            URLQueryItem(name: "limit", value: "\(limit + 3)"),
+        ]
+        guard let url = components.url else { return [] }
+        guard let json = await get(url) else { return [] }
+        return artwork(fromSearch: json, query: query, limit: limit)
+    }
+
+    /// Album artwork, read out of an iTunes search response, one per album.
+    ///
+    /// The same gate as the other searches: an album whose name does not share a
+    /// word with the query is a hit on the prose, not the thing.
+    static func artwork(fromSearch json: JSONValue, query: String, limit: Int) -> [FoundImage] {
+        guard let results = json["results"]?.arrayValue else { return [] }
+        var found: [FoundImage] = []
+        var seen: Set<String> = []
+        for result in results {
+            guard found.count < limit else { break }
+            guard let title = result["collectionName"]?.stringValue, !title.isEmpty,
+                  nameMentions(title, query),
+                  let raw = result["artworkUrl100"]?.stringValue,
+                  !seen.contains(artworkKey(raw))
+            else { continue }
+            seen.insert(artworkKey(raw))
+            found.append(FoundImage(
+                query: query,
+                url: enlarge(raw),
+                title: title,
+                page: result["collectionViewUrl"]?.stringValue,
+                credit: "iTunes"
+            ))
+        }
+        return found
+    }
+
+    /// The identity of an artwork behind its address: the file the store
+    /// serves, which is the same across re-releases even when the hash
+    /// directories differ. Two pressings of one album are one picture.
+    static func artworkKey(_ url: String) -> String {
+        var trimmed = url
+        if let mark = trimmed.lastIndex(of: "/") {
+            trimmed = String(trimmed[..<mark])
+        }
+        return trimmed.components(separatedBy: "/").last ?? trimmed
+    }
+
+    /// The 600-pixel version of an iTunes artwork address: the store serves any
+    /// size by substituting it in the path, and a 100-pixel cover at card size
+    /// is a smear.
+    static func enlarge(_ url: String) -> String {
+        url.replacingOccurrences(of: "100x100", with: "600x600")
+    }
+
+    // MARK: - Openverse
+
+    private static func openverse(_ query: String, limit: Int) async -> [FoundImage] {
+        guard var components = URLComponents(string: "https://api.openverse.org/v1/images/") else { return [] }
+        components.queryItems = [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "page_size", value: "\(limit + 3)"),
+            URLQueryItem(name: "mature", value: "false"),
+        ]
+        guard let url = components.url else { return [] }
+        guard let json = await get(url) else { return [] }
+        return images(fromSearch: json, query: query, limit: limit)
+    }
+
+    /// The images, read out of an Openverse search response, best first.
+    ///
+    /// Ranked by the search itself, so no name gate here: Openverse is a real
+    /// search engine, not a prose match. The picture still has to be a raster
+    /// file, and every result carries its licence.
+    static func images(fromSearch json: JSONValue, query: String, limit: Int) -> [FoundImage] {
+        guard let results = json["results"]?.arrayValue else { return [] }
+        var seen: Set<String> = []
+        return results.compactMap { result -> FoundImage? in
+            guard let url = result["url"]?.stringValue, isRaster(url), !seen.contains(url) else { return nil }
+            seen.insert(url)
+            return FoundImage(
+                query: query,
+                url: url,
+                title: result["title"]?.stringValue ?? "",
+                page: result["foreign_landing_url"]?.stringValue,
+                credit: license(from: result)
+            )
+        }
+        .prefix(limit)
+        .map { $0 }
+    }
+
+    /// The licence in words rather than an API code: "by-nd" is CC BY-ND.
+    static func license(from result: JSONValue) -> String? {
+        let code = result["license"]?.stringValue?.lowercased() ?? ""
+        let readable = [
+            "cc0": "CC0", "pdm": "Public Domain Mark",
+            "by": "CC BY", "by-sa": "CC BY-SA", "by-nc": "CC BY-NC", "by-nd": "CC BY-ND",
+            "by-nc-sa": "CC BY-NC-SA", "by-nc-nd": "CC BY-NC-ND",
+        ]
+        if let name = readable[code] { return name }
+        return code.isEmpty ? nil : code
     }
 
     // MARK: - Plumbing

@@ -173,15 +173,18 @@ Everything it keeps is visible and deletable in Settings → Memory. Memory you
 cannot inspect is indistinguishable from memory that is wrong.
 
 **Pictures, without a picture source.** A surface that needs an image asks
-`find_image` for one — one thing or a whole set in a single call. Wikipedia
-answers for anything with an article, which is what a team sheet, a gallery of
-places or a product comparison actually needs; anything else falls back to a
-search of Wikimedia Commons. Both are keyless. Every result says where it came
-from and under what licence, and says whether it is *the article for the thing*
-or merely *closest file whose name matched* — because those are different
-answers, and a surface showing the wrong picture is worse than one showing none.
-An MCP server can still return images directly, in which case they render under
-the tool row and no lookup happens.
+`find_image` for one — one thing or a whole set in a single call. Seven keyless
+sources answer, in the order that gives the best answer rather than the most:
+Wikipedia for anything with an article, PokéAPI for official Pokémon artwork
+(including the forms no encyclopaedia covers), Bulbapedia for the Pokémon
+universe beyond the articles, and a search tier of Wikimedia Commons, Open
+Library, iTunes and Openverse — free photos with licences first, book covers
+and album art filling what the archives could not. Every result says where it
+came from and under what licence, and says whether it is *the thing itself* —
+an article or official artwork — or merely *closest file whose name matched*:
+those are different answers, and a surface showing the wrong picture is worse
+than one showing none. An MCP server can still return images directly, in which
+case they render under the tool row and no lookup happens.
 
 **Local capabilities out of the box.** `read_file` (text, PDFs, and the text out
 of an image), `search_files`, `write_file`, `list_files`, `run_shell` and
@@ -204,7 +207,7 @@ Everything below ships with Bud. MCP servers add their own tools, namespaced
 | **Browser** | `browser_open` · `browser_snapshot` · `browser_read` · `browser_click` · `browser_type` · `browser_hover` · `browser_select` · `browser_wait` · `browser_console` · `browser_press` · `browser_scroll` · `browser_back` · `browser_screenshot` |
 | **Memory** | `remember` — file a fact under `general`, `user` or `project` · `recall` — bounded, line-cut reads |
 | **Skills** | `skill` — load a skill's instructions by name |
-| **Interface** | `render_ui` — draw a declarative surface · `find_image` — licensed pictures, Wikipedia first, Wikimedia Commons as fallback |
+| **Interface** | `render_ui` — draw a declarative surface · `find_image` — pictures: Wikipedia and PokéAPI first, then Bulbapedia, Commons, Open Library, iTunes, Openverse |
 | **Subagents** | `spawn_subagents` — split work across concurrent, isolated runs |
 
 ---
@@ -484,7 +487,8 @@ Send is the point at which the instruction becomes yours rather than a caller's.
   and [SECURITY.md](SECURITY.md) is the honest accounting of it.
 - **No telemetry.** Nothing is reported anywhere. The only hosts Bud ever
   contacts are the provider you configured, the MCP servers you connected, the
-  marketplace catalogue, GitHub for updates, Wikimedia for `find_image`, and npm
+  marketplace catalogue, GitHub for updates, the `find_image` sources (Wikimedia,
+  PokéAPI, Bulbagarden, Open Library, iTunes and Openverse), and npm
   when resolving a package to install — and you can watch every one of them in
   the tool log.
 

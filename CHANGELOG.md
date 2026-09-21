@@ -12,6 +12,22 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Unreleased
+
+### find_image grows a picture library
+
+The picture lookup now answers from seven keyless sources instead of two.
+Wikipedia still answers first for anything with an article, and it is joined by
+two more sources that answer for the thing itself: PokéAPI, whose official
+artwork covers every Pokémon — including the forms and new species no
+encyclopaedia has an article for — and Bulbapedia, whose articles answer the
+Pokémon universe beyond them. The search tier behind them now fills from
+Wikimedia Commons first, then Open Library book covers, iTunes album artwork
+and the Openverse open-licensed search. An article or official artwork is still
+the thing itself; search results still say which file or title they matched, so
+the difference stays visible.
+
+
 ## Bud 2.12.2
 
 ### The Keychain stops asking

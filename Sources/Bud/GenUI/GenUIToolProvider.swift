@@ -152,11 +152,11 @@ extension GenUIToolProvider {
     /// Looking a picture up, for a surface that would be clearer with one.
     private static let findToolDescription = """
         Find an image for something, to use in render_ui. Ask for one thing or a whole set \
-        at once — six creatures is one call, not six. Wikipedia is tried first, so anything \
-        with an article (a species, a place, a person, a product) comes back as its own \
-        picture; anything else falls back to a search of Wikimedia Commons. Every result \
-        carries the page it came from and its licence where the source states one, so credit \
-        can be given.
+        at once — six creatures is one call, not six. Sources are tried in order: Wikipedia \
+        for anything with an article, PokéAPI for Pokémon artwork, Bulbapedia for the \
+        Pokémon universe beyond the articles, then a search tier of Wikimedia Commons, Open \
+        Library, iTunes and Openverse. Every result carries the page it came from and its \
+        licence where the source states one, so credit can be given.
 
         Use this whenever a surface would read better with a picture in it: a team, a \
         gallery of places, a product comparison, a diagram of something recognisable. Do \
@@ -218,19 +218,20 @@ extension GenUIToolProvider {
             var note = "    "
             switch image.source {
             case .article: note += "the article for it"
+            case .artwork: note += "official artwork for it"
             // Said plainly, because the difference matters when the choice is
             // between a picture of the thing and a picture of someone dressed as it.
             case .search: note += "a match on the words — check the title before using it"
             }
-            note += " · \(image.title)"
+            if !image.title.isEmpty { note += " · \(image.title)" }
             if let credit = image.credit, !credit.isEmpty { note += " · \(credit)" }
             if let page = image.page, !page.isEmpty { note += " · \(page)" }
             lines.append(note)
         }
         let header = """
             Use these URLs directly in an image component — do not retype or shorten them. \
-            An article image is the thing itself; anything else is the closest file whose \
-            name matched, so read its title before putting it in front of someone.
+            An article or official artwork is the thing itself; anything else is the closest \
+            file whose name matched, so read its title before putting it in front of someone.
             """
         return .ok(header + "\n" + lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines))
     }

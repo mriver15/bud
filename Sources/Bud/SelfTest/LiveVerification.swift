@@ -441,6 +441,41 @@ public enum BudLiveVerification {
         )
         c.check("find_image: a hopeless query is an answer, not a failure", !nonsense.isError)
 
+        // A creature no encyclopaedia has an article for answers with the
+        // artwork itself: PokéAPI knows the forms Wikipedia never will.
+        let mega = await genui.invoke(
+            tool: "find_image",
+            arguments: .object(["query": .string("Charizard Mega X")]),
+            callID: "verify-find-6"
+        )
+        let megaText = mega.text ?? ""
+        c.check("find_image: a Pokémon without an article answers with official artwork",
+                megaText.contains("raw.githubusercontent.com/PokeAPI"))
+        c.check("find_image: ...and says it is official artwork", megaText.contains("official artwork"))
+
+        // A Pokémon-universe thing no encyclopaedia knows at all answers from its
+        // own encyclopaedia.
+        let ash = await genui.invoke(
+            tool: "find_image",
+            arguments: .object(["query": .string("Ash's Pikachu")]),
+            callID: "verify-find-7"
+        )
+        let ashText = ash.text ?? ""
+        c.check("find_image: Bulbapedia answers what Wikipedia cannot",
+                ashText.contains("bulbagarden.net"))
+        c.check("find_image: ...credited as the article", ashText.contains("the article for it"))
+
+        // A book no encyclopaedia has an article for answers with its cover:
+        // the photo archive has nothing for it, and the library does.
+        let kaigen = await genui.invoke(
+            tool: "find_image",
+            arguments: .object(["query": .string("The Sword of Kaigen")]),
+            callID: "verify-find-8"
+        )
+        let kaigenText = kaigen.text ?? ""
+        c.check("find_image: the library answers what the archives cannot",
+                kaigenText.contains("covers.openlibrary.org"))
+
         // And the whole point: a URL it returns renders.
         if let first = oneText.split(separator: "\n").first(where: { $0.contains("http") })?
             .trimmingCharacters(in: .whitespaces) {
