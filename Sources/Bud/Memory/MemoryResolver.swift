@@ -7,6 +7,10 @@ import Foundation
 /// reach for remembered context pays nothing for it. The candidates themselves
 /// come from the ranked, budgeted retriever; this resolver is the seam the
 /// decision layer drives.
+///
+/// Only a confident no excludes: an unanswered decision (a provider engine
+/// that fell back mid-batch) lets the retrieval's own judgment stand, so
+/// memory fails open rather than failing silent.
 public enum MemoryResolver {
     /// Renders the section the compiler appends to the system prompt. Empty
     /// unless the decision asked for memory — which keeps the flag-off payload
@@ -16,7 +20,7 @@ public enum MemoryResolver {
         candidates: [MemoryCandidate],
         budget: Int = 800
     ) -> String {
-        guard needsMemory == true, !candidates.isEmpty else { return "" }
+        guard needsMemory != false, !candidates.isEmpty else { return "" }
 
         var lines: [String] = []
         var remaining = budget

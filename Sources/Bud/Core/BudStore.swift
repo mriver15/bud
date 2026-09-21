@@ -163,6 +163,21 @@ public enum BudStore {
         }
     }
 
+    /// The fields a save must preserve — the stored title and creation date —
+    /// without decoding the archive's turns and messages. A save that only
+    /// needed the title used to load the whole conversation to get it, which
+    /// made saving a long chat cost as much as reading it back.
+    public static func header(id: String) -> (title: String, createdAt: Date)? {
+        db.read { handle -> (title: String, createdAt: Date)? in
+            guard let statement = Statement(handle, """
+                SELECT title, created_at FROM conversations WHERE id = ?;
+                """) else { return nil }
+            statement.bind(1, id)
+            guard statement.next(), let title = statement.string(0) else { return nil }
+            return (title, statement.date(1) ?? Date())
+        } ?? nil
+    }
+
     public static func load(id: String) -> Conversation? {
         db.read { handle -> Conversation? in
             guard let header = Statement(handle, """
@@ -472,6 +487,10 @@ public enum BudStore {
         db.transaction { handle in
             Statement(handle, "DELETE FROM lessons WHERE id = ?;")?.bind(1, id).run()
         }
+        // The cognitive layer keeps its own copy of the same note; forgetting
+        // the lesson forgets both, or retrieval would keep surfacing a note
+        // the person deleted.
+        CognitiveStore.deleteBySource("lesson:\(id)")
     }
 
     /// How many notes the block in front of the model may carry.

@@ -335,10 +335,38 @@ private struct MarkdownItem {
     var depth: Int
 }
 
+/// Holds parsed blocks so the cache can store them: Swift enums are not
+/// ObjC objects, and `NSCache` stores objects.
+private final class BlocksBox {
+    let blocks: [MarkdownBlock]
+    init(_ blocks: [MarkdownBlock]) { self.blocks = blocks }
+}
+
 // MARK: - Parser
 
 private enum MarkdownParser {
+    /// One parsed result per distinct text, so a message that has stopped
+    /// streaming is never parsed again. The transcript re-renders on every
+    /// streamed delta and on every find keystroke, and re-parsing stable rows
+    /// was the dominant cost of both. Bounded by count; the streaming tail
+    /// misses by design — its text changes each delta — and only it re-parses.
+    /// Thread-safe by its own contract; all access is from the main actor
+    /// anyway, since only the transcript renders markdown.
+    nonisolated(unsafe) private static let cache: NSCache<NSString, BlocksBox> = {
+        let cache = NSCache<NSString, BlocksBox>()
+        cache.countLimit = 400
+        return cache
+    }()
+
     static func parse(_ text: String) -> [MarkdownBlock] {
+        let key = text as NSString
+        if let box = cache.object(forKey: key) { return box.blocks }
+        let blocks = parseUncached(text)
+        cache.setObject(BlocksBox(blocks), forKey: key)
+        return blocks
+    }
+
+    private static func parseUncached(_ text: String) -> [MarkdownBlock] {
         var blocks: [MarkdownBlock] = []
         let lines = text.components(separatedBy: "\n")
         var index = 0

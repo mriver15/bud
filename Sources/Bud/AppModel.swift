@@ -806,17 +806,43 @@ public final class AppModel {
         BudStore.setCurrentConversation(currentConversationID)
     }
 
-    /// Writes the archive, coalescing bursts.
+    /// Writes the archive, coalescing bursts, off the main actor.
     ///
     /// A turn mutates the transcript dozens of times while it streams, and the
     /// file is rewritten whole, so saving on every change would rewrite the
-    /// entire history for every token.
+    /// entire history for every token. The snapshot is taken before the sleep:
+    /// the encode and the write must agree with each other, and once a
+    /// conversation grows the encode is the slow part — it does not belong on
+    /// the thread the UI is animating on.
     private func scheduleConversationSave() {
         saveTask?.cancel()
-        saveTask = Task { [weak self] in
+        guard let id = currentConversationID else { return }
+        let turns = runtime.turns
+        guard !turns.isEmpty else { return }
+        let snapshot = (
+            id: id,
+            turns: turns,
+            messages: runtime.modelHistory,
+            summary: runtime.contextSummary,
+            prompt: env.conversationUsage.prompt,
+            completion: env.conversationUsage.completion
+        )
+        saveTask = Task.detached(priority: .utility) { [weak self] in
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled else { return }
-            self?.persistConversations()
+            let previous = BudStore.header(id: snapshot.id)
+            BudStore.save(Conversation(
+                id: snapshot.id,
+                title: previous?.title ?? Conversation.title(from: snapshot.turns),
+                createdAt: previous?.createdAt ?? Date(),
+                updatedAt: Date(),
+                turns: snapshot.turns,
+                messages: snapshot.messages,
+                promptTokens: snapshot.prompt,
+                completionTokens: snapshot.completion,
+                contextSummary: snapshot.summary
+            ))
+            await MainActor.run { self?.refreshConversations() }
         }
     }
 
@@ -827,7 +853,10 @@ public final class AppModel {
         // the history with rows that open onto a blank panel.
         guard !turns.isEmpty else { return }
 
-        let previous = BudStore.load(id: id)
+        // The header, not the archive: only the stored title and creation date
+        // are preserved, and decoding the whole conversation to read two fields
+        // made saving cost as much as reading it back.
+        let previous = BudStore.header(id: id)
         let spent = env.conversationUsage
         BudStore.save(Conversation(
             id: id,

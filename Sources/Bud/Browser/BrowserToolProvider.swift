@@ -51,9 +51,8 @@ public final class BrowserToolProvider: ToolProvider {
         return [
             tool(
                 "browser_open",
-                "Open a URL and wait for the page. Returns the page outline, with a ref on "
-                    + "everything you can act on. Nothing needs to follow it — do not call "
-                    + "browser_snapshot afterwards; every action already returns a fresh outline.",
+                "Open a URL and wait for the page. Returns the page outline; every action "
+                    + "returns a fresh outline, so do not snapshot afterwards.",
                 object([
                     "url": [
                         "type": "string",
@@ -63,13 +62,10 @@ public final class BrowserToolProvider: ToolProvider {
             ),
             tool(
                 "browser_snapshot",
-                "The page as an outline: headings, and every link, button, field and checkbox, each "
-                    + "action carrying a ref. Refs come from here and from the outline every action "
-                    + "returns, so call this only when the page has changed without you — one that "
-                    + "loads its own content, or one you have been waiting on. With delta true you "
-                    + "receive only what changed since the last outline you saw — a new or different "
-                    + "URL or title, new, changed or invalidated refs, and changed text regions. The "
-                    + "first delta in a session returns the full outline and arms delta mode.",
+                "The page as an outline: headings, links, buttons, fields and checkboxes, "
+                    + "each actionable item carrying a ref. Call it only when the page changed "
+                    + "without you. With delta, only the changes since the last outline you saw "
+                    + "— the first delta in a session returns the full outline.",
                 object([
                     "delta": [
                         "type": "boolean",
@@ -79,10 +75,9 @@ public final class BrowserToolProvider: ToolProvider {
             ),
             tool(
                 "browser_read",
-                "The page's readable text, for when the outline is not enough and you need the prose. "
-                    + "With delta true you receive only the text regions that changed since the last "
-                    + "read, plus any URL or title change; the first delta returns the full text and "
-                    + "arms delta mode.",
+                "The page's readable text, when the outline is not enough. With delta, only "
+                    + "the text that changed since the last read — the first delta returns the "
+                    + "full text.",
                 object([
                     "max_chars": ["type": "integer", "description": "Default 40000."],
                     "delta": [
@@ -93,20 +88,19 @@ public final class BrowserToolProvider: ToolProvider {
             ),
             tool(
                 "browser_click",
-                "Click an element by the ref an outline gave it. Use for links, buttons, checkboxes "
-                    + "and anything that opens a menu. Returns an updated outline.",
+                "Click a link, button, checkbox or menu by its ref. Returns a fresh outline.",
                 object([
                     "ref": ["type": "integer", "description": "From the latest snapshot."],
                     "snapshot_after": [
                         "type": "boolean",
-                        "description": "Include a fresh outline in the result. Default true, because the page usually changed.",
+                        "description": "Include a fresh outline in the result. Default true.",
                     ],
                 ], required: ["ref"])
             ),
             tool(
                 "browser_type",
-                "Type into a field by its ref. Replaces what is already there and tells the page the "
-                    + "value changed, so frameworks that watch for typing see it.",
+                "Type into a field by its ref, replacing what is there; the page is told the "
+                    + "value changed. submit sends the form.",
                 object([
                     "ref": ["type": "integer"],
                     "text": ["type": "string"],
@@ -118,15 +112,15 @@ public final class BrowserToolProvider: ToolProvider {
             ),
             tool(
                 "browser_hover",
-                "Move the pointer over an element by its ref. For menus, tooltips and anything "
-                    + "that only reveals itself on hover.",
+                "Move the pointer over an element by its ref — for menus, tooltips, anything "
+                    + "revealed on hover.",
                 object([
-                    "ref": ["type": "integer", "description": "From the latest snapshot."],
+                    "ref": ["type": "integer"],
                 ], required: ["ref"])
             ),
             tool(
                 "browser_select",
-                "Choose an option in a dropdown by its ref. Give either the option's value or its "
+                "Choose an option in a dropdown by its ref — the option's value or its "
                     + "visible text.",
                 object([
                     "ref": ["type": "integer"],
@@ -136,8 +130,8 @@ public final class BrowserToolProvider: ToolProvider {
             ),
             tool(
                 "browser_wait",
-                "Wait until some text appears, or an element matching a CSS selector exists. Use "
-                    + "after an action on a page that loads its content late.",
+                "Wait until text appears or an element matching a CSS selector exists — after "
+                    + "an action on a page that loads late.",
                 object([
                     "text": ["type": "string", "description": "Text to wait for."],
                     "selector": ["type": "string", "description": "A CSS selector to wait for."],
@@ -146,7 +140,7 @@ public final class BrowserToolProvider: ToolProvider {
             ),
             tool(
                 "browser_console",
-                "What the page logged and what it threw. Usually the only evidence of why a page "
+                "What the page logged and threw — usually the only evidence of why a page "
                     + "that looks fine is not working.",
                 object([:])
             ),

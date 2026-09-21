@@ -127,6 +127,52 @@ public enum BudUIVerification {
         c.check("a new chat starts an empty transcript", model.turns.isEmpty)
         c.check("a new chat clears the composer", model.composerText.isEmpty)
 
+        // MARK: A generated surface can be screenshotted
+
+        // Seeded through the same restore path a reopened conversation uses,
+        // so the block is drawn by the real transcript rather than a fixture.
+        let surfaceSpec: JSONValue = .object([
+            "title": .string("Screenshot check"),
+            "components": .array([
+                .object([
+                    "type": .string("text"),
+                    "value": .string("This block can be captured to a file."),
+                ]),
+            ]),
+        ])
+        model.runtime.restore(
+            turns: [
+                Turn(role: .assistant, segments: [
+                    .text(id: "surface-prose", text: "Here is the surface:"),
+                    .ui(id: "surface-block", payload: surfaceSpec),
+                ]),
+            ],
+            history: []
+        )
+        RunLoop.current.run(until: Date().addingTimeInterval(1.0))
+
+        if let content = panel.contentView, let anchor = findAnchor(in: content) {
+            c.check("a surface block carries its capture anchor", true)
+            if let png = SurfaceCapture.png(for: surfaceSpec, size: anchor.bounds.size) {
+                c.check("the block captures to real pixels (\(BudFormat.count(png.count)) bytes)",
+                        png.count > 1_000)
+                c.check("...and they decode as a PNG image", NSBitmapImageRep(data: png) != nil)
+                c.check("...with real content, not a blank fill (\(distinctColours(png)) colours)",
+                        distinctColours(png) >= 8)
+                if let url = SurfaceCapture.save(png) {
+                    c.check("...and the capture lands in the screenshots directory",
+                            FileManager.default.fileExists(atPath: url.path))
+                    try? FileManager.default.removeItem(at: url)
+                } else {
+                    c.check("...and the capture lands in the screenshots directory", false)
+                }
+            } else {
+                c.check("the block captures to real pixels", false)
+            }
+        } else {
+            c.check("a surface block carries its capture anchor", false)
+        }
+
         // MARK: Hiding and coming back
 
         // Closing hides Bud and leaves the window object alone, because the way
@@ -161,5 +207,39 @@ public enum BudUIVerification {
         if view.frame.width > 1, view.frame.height > 1 { count += 1 }
         for sub in view.subviews { count += countViewsWithArea(sub) }
         return count
+    }
+
+    private static func findAnchor(in view: NSView) -> NSView? {
+        if view is SurfaceAnchorView { return view }
+        for sub in view.subviews {
+            if let found = findAnchor(in: sub) { return found }
+        }
+        return nil
+    }
+
+    /// Counts distinct quantised colours in a coarse sample of a PNG. A flat
+    /// fill yields one or two; anything real — text, tints, glass edges —
+    /// yields dozens. The same guard `--render-ui` uses before it accepts a
+    /// render as non-blank.
+    private static func distinctColours(_ png: Data) -> Int {
+        guard let rep = NSBitmapImageRep(data: png) else { return 0 }
+        let step = max(1, rep.pixelsWide / 120)
+        var distinct: Set<Int> = []
+        var y = 0
+        while y < rep.pixelsHigh {
+            var x = 0
+            while x < rep.pixelsWide {
+                if let colour = rep.colorAt(x: x, y: y) {
+                    let r = Int(colour.redComponent * 31)
+                    let g = Int(colour.greenComponent * 31)
+                    let b = Int(colour.blueComponent * 31)
+                    let a = Int(colour.alphaComponent * 31)
+                    distinct.insert(r << 15 | g << 10 | b << 5 | a)
+                }
+                x += step
+            }
+            y += step
+        }
+        return distinct.count
     }
 }

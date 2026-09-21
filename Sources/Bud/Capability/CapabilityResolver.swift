@@ -179,4 +179,48 @@ public enum CapabilityResolver {
             schemaCharacters: schemaCharacters
         )
     }
+
+    // MARK: - Direct matches
+
+    /// What the query directly names across tools, skills and subagents — the
+    /// delegation decision's evidence. A request that names something local
+    /// lands on it; one that names nothing has nowhere to land but an agent,
+    /// so "directly related" is a higher bar than "possibly useful":
+    ///
+    /// - a capability the index resolves at the activate band (exact id or
+    ///   alias, or vocabulary overlap over most of the query's words);
+    /// - a tool or server whose name the query speaks;
+    /// - a skill the ranking promotes for it.
+    public static func directMatches(
+        query: String,
+        index: CapabilityIndex,
+        descriptors: [ToolDescriptor],
+        skills: [Skill],
+        connectedServers: [String]
+    ) -> [String] {
+        let query = query.lowercased()
+
+        var names: [String] = []
+        var seen: Set<String> = []
+        func add(_ name: String) {
+            guard !name.isEmpty, seen.insert(name).inserted else { return }
+            names.append(name)
+        }
+
+        for match in index.resolve(query) where match.confidence >= DecisionPolicy.activateThreshold {
+            add(match.capability.id)
+        }
+        for descriptor in descriptors
+        where ToolPlanner.matchesQuery(name: descriptor.name, query: query)
+            || ToolPlanner.matchesQuery(name: descriptor.providerName, query: query) {
+            add(descriptor.providerName)
+        }
+        for name in SkillRanking.rank(query, skills: skills) {
+            add(name)
+        }
+        for server in connectedServers where ToolPlanner.matchesQuery(name: server, query: query) {
+            add(server)
+        }
+        return names
+    }
 }

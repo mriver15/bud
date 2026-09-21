@@ -363,6 +363,32 @@ public enum CognitiveStore {
         } ?? nil
     }
 
+    /// Removes every row one source produced — the episodes and facts a lesson
+    /// became — plus their FTS entries, so a forgotten note is forgotten
+    /// everywhere rather than living on in retrieval.
+    @discardableResult
+    public static func deleteBySource(_ source: String) -> Bool {
+        db.transaction { handle -> Bool in
+            var removed = false
+            for kind in ["episode", "fact"] {
+                let table = kind == "episode" ? "episodes" : "facts"
+                guard let statement = Statement(handle, """
+                    SELECT id FROM \(table) WHERE source_id = ?;
+                    """) else { continue }
+                statement.bind(1, source)
+                var ids: [Int] = []
+                while statement.next() { ids.append(statement.int(0)) }
+                for id in ids {
+                    Statement(handle, "DELETE FROM memory_fts WHERE kind = ? AND ref_id = ?;")?
+                        .bind(1, kind).bind(2, id).run()
+                    Statement(handle, "DELETE FROM \(table) WHERE id = ?;")?.bind(1, id).run()
+                    removed = true
+                }
+            }
+            return removed
+        } ?? false
+    }
+
     // MARK: - Entities and relations
 
     /// Get-or-create: the same `(type, canonical_name)` always returns the same

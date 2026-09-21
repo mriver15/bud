@@ -81,6 +81,8 @@ public struct ProviderDecisionEngine: DecisionEngine {
             "attachments": state.attachmentPaths,
             "recent_tools": state.recentToolNames,
             "connected_servers": state.connectedServers,
+            "direct_capabilities": state.directCapabilities,
+            "memory_candidates": state.memoryCandidates,
             "round": state.round,
         ] as [String: Any]
         let questionsJSON = questions.map { question -> [String: Any] in
