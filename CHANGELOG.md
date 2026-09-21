@@ -12,6 +12,23 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.19.1
+
+### MCP Apps works with the real getcompetitive server
+
+Testing the host against the server it was built for exposed one gap and one
+polish. getcompetitive negotiates through its `resources` capability and links
+tools to `ui://` resources with `_meta.ui`, rather than declaring the dedicated
+`io.modelcontextprotocol/ui` capability — so the host now accepts either signal,
+and the real server's workspace renders where it did not before. The host also
+passes the spec's standardized theme variables through `hostContext.styles`,
+which the app reads to match Bud's dark glass instead of its own defaults. A live
+check connects to getcompetitive and verifies the whole chain — negotiation, the
+resource read and validation, and a tool call that produces a renderable
+attachment — and the workspace itself was rendered in the sandbox and completed
+its handshake.
+
+
 ## Bud 2.19.0
 
 ### Bud is an MCP Apps host
