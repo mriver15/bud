@@ -140,7 +140,20 @@ PLIST
 # Ad-hoc signature. Required for the app to run at all on Apple Silicon: a
 # hand-assembled bundle has no signature of its own, and macOS refuses to launch
 # one it cannot validate. Ad-hoc is also what lets the self-test binaries run.
-echo "==> Signing (ad-hoc)"
-codesign --force --sign - --timestamp=none "$APP" >/dev/null 2>&1
+#
+# When the stable "Bud Development" identity exists it is used instead. An
+# ad-hoc signature is a different identity for every build, so macOS treats each
+# release as a different application — which is what re-prompts for Keychain
+# secrets after every update. One identity, created once by
+# Scripts/bud-signing-identity.sh, keeps the designated requirement stable
+# across releases and stops the prompts for good.
+IDENTITY="Bud Development"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "\"$IDENTITY\""; then
+  echo "==> Signing ($IDENTITY)"
+  codesign --force --sign "$IDENTITY" --timestamp=none "$APP" >/dev/null 2>&1
+else
+  echo "==> Signing (ad-hoc)"
+  codesign --force --sign - --timestamp=none "$APP" >/dev/null 2>&1
+fi
 
 echo "==> Done: $APP"

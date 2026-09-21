@@ -526,10 +526,58 @@ public enum BudConfigLoader {
     /// holds the whole per-provider dictionary as one JSON blob, so a single
     /// account covers every provider.
     enum SecretAccount {
-        static let providerKeys = "providerKeys"
-        static let glamaAPIKey = "glamaAPIKey"
-        static let updateToken = "updateToken"
-        static let typesafeAPIKey = "typesafeAPIKey"
+        /// The one Keychain account every secret lives under. Four accounts
+        /// meant four consent prompts per update; one account means one.
+        static let secrets = "secrets"
+        /// The accounts secrets were filed under before the consolidation.
+        /// Read once, folded, and dropped.
+        static let legacy = ["providerKeys", "glamaAPIKey", "updateToken", "typesafeAPIKey"]
+    }
+
+    /// The blob all four secrets travel in. Decoding is tolerant — missing
+    /// fields read as empty — so a blob written by an older build still loads.
+    struct KeychainSecrets: Codable {
+        /// JSON-encoded `[String: String]` provider keys.
+        var providerKeys: String?
+        var glamaAPIKey: String
+        var updateToken: String
+        var typesafeAPIKey: String
+
+        init(
+            providerKeys: String? = nil,
+            glamaAPIKey: String = "",
+            updateToken: String = "",
+            typesafeAPIKey: String = ""
+        ) {
+            self.providerKeys = providerKeys
+            self.glamaAPIKey = glamaAPIKey
+            self.updateToken = updateToken
+            self.typesafeAPIKey = typesafeAPIKey
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            providerKeys = try container.decodeIfPresent(String.self, forKey: .providerKeys)
+            glamaAPIKey = try container.decodeIfPresent(String.self, forKey: .glamaAPIKey) ?? ""
+            updateToken = try container.decodeIfPresent(String.self, forKey: .updateToken) ?? ""
+            typesafeAPIKey = try container.decodeIfPresent(String.self, forKey: .typesafeAPIKey) ?? ""
+        }
+    }
+
+    private static func encodeSecrets(_ secrets: KeychainSecrets) -> String? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(secrets) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func decodeSecrets(_ json: String) -> KeychainSecrets? {
+        try? JSONDecoder().decode(KeychainSecrets.self, from: Data(json.utf8))
+    }
+
+    private static func readSecrets(from keychain: any KeychainStoring) -> KeychainSecrets? {
+        guard let json = keychain.get(SecretAccount.secrets) else { return nil }
+        return decodeSecrets(json)
     }
 
     /// The store the secrets live in. Typed as the protocol so the migration can
@@ -697,53 +745,60 @@ public enum BudConfigLoader {
         var complete: Bool
     }
 
-    /// Writes each present secret field to the Keychain — only when the account
-    /// is empty — and verifies every write by reading it back. Pure over the
-    /// protocol, so it is exercised against an in-memory fake and never the real
-    /// Keychain.
+    /// Writes the file's present secret fields into the one Keychain account —
+    /// only where the account does not hold them — and verifies the write by
+    /// reading it back. Pure over the protocol, so it is exercised against an
+    /// in-memory fake and never the real Keychain.
     ///
     /// A partial move is never committed: on any failure the whole of the input
     /// is returned unchanged, so the file keeps every secret and the caller keeps
     /// running on the file values.
     static func moveSecrets(from stored: StoredConfig, to keychain: any KeychainStoring) -> SecretMigration {
         var result = stored
-        var complete = true
+        guard stored.providerKeys != nil || stored.glamaAPIKey != nil || stored.updateToken != nil else {
+            return SecretMigration(stored: stored, complete: true)
+        }
 
-        if let providerKeys = stored.providerKeys {
-            if storeSecret(encodeProviderKeys(providerKeys) ?? "", account: SecretAccount.providerKeys, in: keychain) {
-                result.providerKeys = nil
-            } else {
-                complete = false
+        // The file's present fields merge into the one account, over whatever
+        // the Keychain already holds there — an occupied field wins.
+        var blob = readSecrets(from: keychain)
+            ?? KeychainSecrets(providerKeys: nil, glamaAPIKey: "", updateToken: "", typesafeAPIKey: "")
+        var wrote = false
+        if stored.providerKeys != nil {
+            if blob.providerKeys == nil, let json = encodeProviderKeys(stored.providerKeys ?? [:]) {
+                blob.providerKeys = json
+                wrote = true
             }
+            result.providerKeys = nil
         }
         if let glama = stored.glamaAPIKey {
-            if storeSecret(glama, account: SecretAccount.glamaAPIKey, in: keychain) {
-                result.glamaAPIKey = nil
-            } else {
-                complete = false
+            if blob.glamaAPIKey.isEmpty {
+                blob.glamaAPIKey = glama
+                wrote = true
             }
+            result.glamaAPIKey = nil
         }
         if let token = stored.updateToken {
-            if storeSecret(token, account: SecretAccount.updateToken, in: keychain) {
-                result.updateToken = nil
-            } else {
-                complete = false
+            if blob.updateToken.isEmpty {
+                blob.updateToken = token
+                wrote = true
             }
+            result.updateToken = nil
         }
 
-        return SecretMigration(stored: complete ? result : stored, complete: complete)
-    }
-
-    /// Puts `value` in `account` only when the account is empty, and verifies the
-    /// write by reading it back. Returns true when the account now holds `value`
-    /// — whether it was already there or was written intact.
-    private static func storeSecret(_ value: String, account: String, in keychain: any KeychainStoring) -> Bool {
-        // Already present: the Keychain wins, whatever it holds.
-        if keychain.get(account) != nil {
-            return true
+        if !wrote {
+            // Nothing to write: the account already held every present field,
+            // so completion is just that account existing.
+            guard readSecrets(from: keychain) != nil else {
+                return SecretMigration(stored: stored, complete: false)
+            }
+            return SecretMigration(stored: result, complete: true)
         }
-        guard keychain.set(account, value: value) else { return false }
-        return keychain.get(account) == value
+        guard let json = encodeSecrets(blob), keychain.set(SecretAccount.secrets, value: json),
+              readSecrets(from: keychain) != nil else {
+            return SecretMigration(stored: stored, complete: false)
+        }
+        return SecretMigration(stored: result, complete: true)
     }
 
     /// Moves the three secret fields out of the stored config file and into the
@@ -789,15 +844,39 @@ public enum BudConfigLoader {
         return result.stored
     }
 
-    /// Writes the three secret fields to the Keychain. Every save goes here, so
-    /// the file never holds a secret again after migration.
-    static func writeSecrets(_ config: BudConfig, to keychain: any KeychainStoring) {
-        if let json = encodeProviderKeys(config.providerKeys) {
-            keychain.set(SecretAccount.providerKeys, value: json)
+    /// Folds the pre-consolidation accounts into the one account, once. The
+    /// legacy reads are what the consent prompts pay for — one per item, one
+    /// time — after which every future update prompts at most once for the
+    /// whole set. Returns nil when there is nothing legacy to fold.
+    static func consolidateLegacySecrets(into keychain: any KeychainStoring) -> KeychainSecrets? {
+        var blob = KeychainSecrets()
+        var found = false
+        if let value = keychain.get("providerKeys") { blob.providerKeys = value; found = true }
+        if let value = keychain.get("glamaAPIKey") { blob.glamaAPIKey = value; found = true }
+        if let value = keychain.get("updateToken") { blob.updateToken = value; found = true }
+        if let value = keychain.get("typesafeAPIKey") { blob.typesafeAPIKey = value; found = true }
+        guard found, let json = encodeSecrets(blob),
+              keychain.set(SecretAccount.secrets, value: json) else { return nil }
+        // Only drop what actually read: a blind delete would pay a prompt for
+        // an item that never existed.
+        for account in SecretAccount.legacy where keychain.get(account) != nil {
+            _ = keychain.delete(account)
         }
-        keychain.set(SecretAccount.glamaAPIKey, value: config.glamaAPIKey)
-        keychain.set(SecretAccount.updateToken, value: config.updateToken)
-        keychain.set(SecretAccount.typesafeAPIKey, value: config.typesafeAPIKey)
+        return decodeSecrets(json)
+    }
+
+    /// Writes the four secret fields to the Keychain as one item. Every save
+    /// goes here, so the file never holds a secret again after migration.
+    static func writeSecrets(_ config: BudConfig, to keychain: any KeychainStoring) {
+        let blob = KeychainSecrets(
+            providerKeys: encodeProviderKeys(config.providerKeys),
+            glamaAPIKey: config.glamaAPIKey,
+            updateToken: config.updateToken,
+            typesafeAPIKey: config.typesafeAPIKey
+        )
+        if let json = encodeSecrets(blob) {
+            keychain.set(SecretAccount.secrets, value: json)
+        }
     }
 
     private static func encodeProviderKeys(_ keys: [String: String]) -> String? {
@@ -839,19 +918,26 @@ public enum BudConfigLoader {
                 // install that has already migrated loads its secrets from the
                 // Keychain, and one that has not falls back to the file values
                 // `apply` just folded in — a Keychain read that fails therefore
-                // never empties a key.
-                if let json = keychainStore.get(SecretAccount.providerKeys),
-                   let keys = decodeProviderKeys(json) {
-                    config.providerKeys = keys
+                // never empties a key. One account holds all four; legacy
+                // accounts are folded in once, the first run that finds them.
+                var secrets = readSecrets(from: keychainStore)
+                if secrets == nil {
+                    secrets = consolidateLegacySecrets(into: keychainStore)
                 }
-                if let glama = keychainStore.get(SecretAccount.glamaAPIKey) {
-                    config.glamaAPIKey = glama
-                }
-                if let token = keychainStore.get(SecretAccount.updateToken) {
-                    config.updateToken = token
-                }
-                if let typesafe = keychainStore.get(SecretAccount.typesafeAPIKey) {
-                    config.typesafeAPIKey = typesafe
+                if let secrets {
+                    if let keysJSON = secrets.providerKeys,
+                       let keys = decodeProviderKeys(keysJSON) {
+                        config.providerKeys = keys
+                    }
+                    if !secrets.glamaAPIKey.isEmpty {
+                        config.glamaAPIKey = secrets.glamaAPIKey
+                    }
+                    if !secrets.updateToken.isEmpty {
+                        config.updateToken = secrets.updateToken
+                    }
+                    if !secrets.typesafeAPIKey.isEmpty {
+                        config.typesafeAPIKey = secrets.typesafeAPIKey
+                    }
                 }
             } else {
                 config = apply(stored, to: config)

@@ -2681,18 +2681,22 @@ public enum BudSelfTest {
         c.nilValue("...and the file form loses the provider keys", moved.stored.providerKeys)
         c.nilValue("...and the marketplace key", moved.stored.glamaAPIKey)
         c.nilValue("...and the update token", moved.stored.updateToken)
-        c.check("...and the store holds the provider keys",
-                fake.get("providerKeys")?.contains("sk-from-file") == true)
-        c.equal("...and the plain secrets", fake.get("glamaAPIKey"), "glm-from-file")
-        c.equal("...and the token", fake.get("updateToken"), "tok-from-file")
+        let blob = fake.get("secrets") ?? ""
+        c.check("...and the store holds one account with the provider keys",
+                blob.contains("sk-from-file"))
+        c.check("...and the plain secrets in it", blob.contains("glm-from-file"))
+        c.check("...and the token", blob.contains("tok-from-file"))
 
-        // The Keychain wins: an occupied account is not overwritten, and the file
+        // The Keychain wins: an occupied field is not overwritten, and the file
         // field is still dropped, because the value now lives there either way.
         let occupied = InMemoryKeychain()
-        _ = occupied.set("glamaAPIKey", value: "the-keychain-value")
+        _ = occupied.set("secrets", value: #"{"glamaAPIKey":"the-keychain-value"}"#)
         let contested = BudConfigLoader.moveSecrets(from: stored, to: occupied)
-        c.equal("a value already in the Keychain wins",
-                occupied.get("glamaAPIKey"), "the-keychain-value")
+        let contestedBlob = occupied.get("secrets") ?? ""
+        c.check("a value already in the Keychain wins",
+                contestedBlob.contains("the-keychain-value"))
+        c.check("...while the empty fields fill in from the file",
+                contestedBlob.contains("sk-from-file"))
         c.nilValue("...and the file field is still dropped", contested.stored.glamaAPIKey)
 
         // A partial move is never committed: the whole input comes back, so the
@@ -2713,6 +2717,19 @@ public enum BudSelfTest {
         let idle = BudConfigLoader.moveSecrets(from: bare, to: fake)
         c.check("a file with no secrets migrates to completion without touching the store",
                 idle.complete)
+
+        // Legacy accounts fold into the one account, once, and are dropped.
+        let legacy = InMemoryKeychain()
+        _ = legacy.set("providerKeys", value: #"{"deepseek":"sk-legacy"}"#)
+        _ = legacy.set("glamaAPIKey", value: "glm-legacy")
+        let folded = BudConfigLoader.consolidateLegacySecrets(into: legacy)
+        c.equal("legacy secrets fold into one account", folded?.glamaAPIKey, "glm-legacy")
+        c.check("...and the provider keys ride along",
+                folded?.providerKeys?.contains("sk-legacy") == true)
+        c.check("...and the legacy accounts are dropped",
+                legacy.get("providerKeys") == nil && legacy.get("glamaAPIKey") == nil)
+        c.check("...and a second fold finds nothing to do",
+                BudConfigLoader.consolidateLegacySecrets(into: legacy) == nil)
 
         // The keychain gate must name the identity the installer stamps: gated
         // against a bundle id the shipped app never had, the gate was always
