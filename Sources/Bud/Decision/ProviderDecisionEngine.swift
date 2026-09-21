@@ -89,8 +89,14 @@ public struct ProviderDecisionEngine: DecisionEngine {
             switch question {
             case .boolean(let id, let instructions):
                 return ["id": id, "type": "boolean", "instructions": instructions]
-            case .choice(let id, let options, let instructions):
-                return ["id": id, "type": "choice", "options": options, "instructions": instructions]
+            case .choice(let id, let options, let instructions, let criteria):
+                var item: [String: Any] = [
+                    "id": id, "type": "choice", "options": options, "instructions": instructions,
+                ]
+                if let criteria, !criteria.isEmpty {
+                    item["criteria"] = criteria
+                }
+                return item
             case .score(let id, let levels, let instructions):
                 return ["id": id, "type": "score", "levels": levels, "instructions": instructions]
             }
@@ -148,7 +154,7 @@ public struct ProviderDecisionEngine: DecisionEngine {
         switch (question, value) {
         case (.boolean, let flag as Bool):
             return .boolean(flag)
-        case (.choice(_, let options, _), let text as String) where options.contains(text):
+        case (.choice(_, let options, _, _), let text as String) where options.contains(text):
             return .choice(text)
         case (.score(_, let levels, _), let text as String) where levels.contains(text):
             return .score(text)

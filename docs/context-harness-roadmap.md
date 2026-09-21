@@ -262,6 +262,17 @@ spawn_subagents(tasks: [
 - Return the resolved delegate ID in the transcript/trace for auditability.
 - If confidence is low, the harness can expose 2–3 candidate names or ask for clarification instead of serializing the whole roster.
 
+**Implemented, with two revisions.** (1) The compact description carries a
+*bounded* roster digest — each delegate's name and one-line summary, capped at
+12 entries — because a model that cannot see the roster phrases capabilities
+nothing can match ("competitive pokemon analysis" shared no tokens with any
+agent summary and cost a round-trip refusal). Capability summaries were P6's
+plan all along; the digest is that, O(1) rather than roster-sized. (2) When
+local word-overlap still comes up short, the refusal path asks the configured
+decision engine (Jev/provider) a typed `delegate_to` choice over the roster
+instead of answering with names for the model to guess from; below the
+activation band the refusal stands.
+
 ### 6.3 Generated UI as an output capability
 
 **Experiment.** Test whether `render_ui` should remain a tool or become a provider-neutral output dialect. The goal is to avoid paying a large always-on tool schema solely so the model can decide that a table/dashboard would be useful.
