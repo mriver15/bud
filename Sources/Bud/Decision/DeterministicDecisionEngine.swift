@@ -61,7 +61,7 @@ public struct DeterministicDecisionEngine: DecisionEngine {
             // The keyword list alone gates memory out of every round that does
             // not say "memory", which is almost all of them; remembered context
             // exists to serve the rounds that do not.
-            let memory = contains(query, ["remember", "recall", "note", "notes", "prefer",
+            let memory = contains(query, ["remember", "recall", "memory", "memories", "note", "notes", "forget", "prefer",
                                           "preference", "what you know", "about me"])
                 || state.memoryCandidates > 0
             return .boolean(id: question.id, value: memory,

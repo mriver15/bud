@@ -662,6 +662,25 @@ public enum BudStore {
         if let text { CognitiveStore.deleteUnownedEpisodes(matching: text) }
     }
 
+    /// Rewrites a note in place, keeping its id.
+    ///
+    /// The id is the point: a note's cognitive copies are filed under
+    /// `lesson:<id>`, and an edited note that became a new row would leave those
+    /// copies describing something that no longer exists. Returns false when no
+    /// row matched — including when another note already holds the new text,
+    /// which `lessons.text` is unique against.
+    @discardableResult
+    public static func rewrite(id: Int, text: String, scope: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return db.transaction { handle -> Bool in
+            guard let statement = Statement(handle, "UPDATE lessons SET text = ?, scope = ? WHERE id = ?;")
+            else { return false }
+            statement.bind(1, trimmed).bind(2, scope).bind(3, id).run()
+            return statement.changes > 0
+        } ?? false
+    }
+
     /// How many notes the block in front of the model may carry.
     ///
     /// A memory block is re-sent on every request, in every conversation, for as

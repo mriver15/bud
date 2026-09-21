@@ -563,7 +563,7 @@ public final class AgentRuntime {
             lines.append("alias_recovery: \(alias)")
         }
         if recallCalls > 0 {
-            lines.append("memory_miss: the model called recall \(recallCalls) time(s) mid-task")
+            lines.append("memory_miss: the model searched its notes \(recallCalls) time(s) mid-task")
         }
         plannerRegret.append(contentsOf: lines)
         for line in lines {
@@ -922,7 +922,10 @@ public final class AgentRuntime {
         // Sticky evidence and regret bookkeeping: what actually ran, and
         // whether it worked.
         usedToolNames.formUnion(calls.map(\.name))
-        recallCalls += calls.filter { $0.name == "recall" }.count
+        recallCalls += calls.filter {
+            $0.name == MemoryToolsProvider.toolName
+                && $0.parsedArguments["mode"]?.stringValue == MemoryToolsProvider.Mode.search.rawValue
+        }.count
         for call in calls {
             if let result = results[call.id] {
                 stickyEvidence.record(tool: call.name, succeeded: !result.isError, round: shadowRound)

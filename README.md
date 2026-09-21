@@ -157,17 +157,23 @@ and handles are validated as handles — `store_` and eight hex characters — b
 one arrives from a model and becomes a path. The transcript still shows the whole
 result; only the model is bounded.
 
-**Memory that outlives the chat.** `remember` writes something worth carrying out
-of a conversation — a preference, a convention, a fact you are tired of repeating —
-and `recall` reads it back. The scope decides how a note travels: `user` notes are
-who you are and what you care about, and they ride in every request, because a
-colleague does not forget that between sentences. `project` and `general` notes are
-ranked against what you are currently talking about.
+**Memory that outlives the chat.** One tool, `memory`, with the modes that make a
+note a living thing rather than a filing: `remember` writes something worth
+carrying out of a conversation — a preference, a convention, a fact you are tired
+of repeating — `search` finds a note again by wording, `list` reads them back,
+`update` rewrites one in place, and `forget` drops it and the retrieval entries
+filed beside it. That last pair matters: the model that wrote a note is the one
+that finds out it is wrong, and it can now correct or remove it instead of leaving
+a correction sitting next to a stale fact. The scope decides how a note travels:
+`user` notes are who you are and what you care about, and they ride in every
+request, because a colleague does not forget that between sentences. `project` and
+`general` notes are ranked against what you are currently talking about.
 
 Ranked rather than filtered, which is the same argument the skill catalogue makes: a
 note sharing no words with your message may still be the one that matters, and term
 matching cannot know that. So the notes that score are shown in full, and the rest
-are still listed one line each — `recall` reads any of them whole.
+are still listed one line each — `memory` reads any of them whole, and searches
+them by wording when the model needs one it was not handed.
 
 Everything it keeps is visible and deletable in Settings → Memory. Memory you
 cannot inspect is indistinguishable from memory that is wrong.
@@ -205,7 +211,7 @@ Everything below ships with Bud. MCP servers add their own tools, namespaced
 |---|---|
 | **Bud** (native) | `read_file` — text, PDFs, and text out of images · `search_files` — regex search across folders · `write_file` · `list_files` — glob-listed paths · `run_shell` — zsh, bounded timeout · `web_fetch` — HTML to readable text · `read_stored` — search and paged reads of spilled results |
 | **Browser** | `browser_open` · `browser_snapshot` · `browser_read` · `browser_click` · `browser_type` · `browser_hover` · `browser_select` · `browser_wait` · `browser_console` · `browser_press` · `browser_scroll` · `browser_back` · `browser_screenshot` |
-| **Memory** | `remember` — file a fact under `general`, `user` or `project` · `recall` — bounded, line-cut reads |
+| **Memory** | `memory` — one tool, five modes: `remember` · `search` · `list` · `update` · `forget`, over notes filed under `general`, `user` or `project` |
 | **Skills** | `skill` — load a skill's instructions by name |
 | **Interface** | `render_ui` — draw a declarative surface · `find_image` — pictures: Wikipedia and PokéAPI first, then Bulbapedia, Commons, Open Library, iTunes, Openverse |
 | **Subagents** | `spawn_subagents` — split work across concurrent, isolated runs |
@@ -508,7 +514,7 @@ Sources/Bud/
 │   ├── AgentRuntime.swift    the agent loop: stream, call tools, repeat
 │   ├── ToolProvider.swift    tool contract + namespacing registry
 │   ├── NativeTools.swift     file, search, shell, web and stored-result tools
-│   ├── MemoryTools.swift     remember/recall over the SQLite store
+│   ├── MemoryTools.swift     the memory tool: remember/search/list/update/forget
 │   └── StoredResults.swift   overflow store and validated handles
 ├── Providers/
 │   ├── ProviderRegistry.swift          known providers, dialects, env vars

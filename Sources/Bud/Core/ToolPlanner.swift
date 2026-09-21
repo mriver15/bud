@@ -84,7 +84,7 @@ public enum ToolPlanner {
     /// schemas are the largest in the inventory — the honest price of an answer
     /// that can always choose to look like one.
     public static let alwaysOnCore = [
-        "skill", "recall", "read_stored", "remember", "spawn_subagents",
+        "skill", MemoryToolsProvider.toolName, "read_stored", "spawn_subagents",
         GenUIToolProvider.renderToolName, GenUIToolProvider.findToolName,
     ]
 

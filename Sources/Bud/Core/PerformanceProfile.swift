@@ -121,7 +121,7 @@ public enum PerformanceProfileCLI {
         // the request the next message will carry.
         if stopped == nil {
             let roundMs = await measureAsync {
-                let call = ToolCall(id: "call_synthetic", name: "recall", arguments: "{}")
+                let call = ToolCall(id: "call_synthetic", name: MemoryToolsProvider.toolName, arguments: #"{"mode":"list"}"#)
                 let result = await env.registry.invoke(
                     name: call.name, arguments: call.parsedArguments, callID: call.id
                 )
@@ -135,7 +135,7 @@ public enum PerformanceProfileCLI {
         // Phase 4 — synthesis: the second provider call, carrying the tool
         // result, timed to the first token of the answer.
         if stopped == nil {
-            let call = ToolCall(id: "call_synthetic", name: "recall", arguments: "{}")
+            let call = ToolCall(id: "call_synthetic", name: MemoryToolsProvider.toolName, arguments: #"{"mode":"list"}"#)
             let result = await env.registry.invoke(
                 name: call.name, arguments: call.parsedArguments, callID: call.id
             )

@@ -862,7 +862,7 @@ public enum BudSelfTest {
             )
         }
 
-        var inventory = ["skill", "recall", "read_stored", "remember",
+        var inventory = ["skill", MemoryToolsProvider.toolName, "read_stored",
                          "read_file", "list_files", "run_shell", "write_file",
                          "search_files", "web_fetch", "spawn_subagents"].map { tool($0, "native") }
         inventory.append(tool(GenUIToolProvider.renderToolName, "Interface"))
@@ -871,7 +871,7 @@ public enum BudSelfTest {
         for i in 0..<13 { inventory.append(tool("browser_\(i)", "Browser")) }
         for i in 0..<8 { inventory.append(tool("acme_\(i)", "acme")) }
 
-        let core = ["skill", "recall", "read_stored", "remember", "spawn_subagents",
+        let core = ["skill", MemoryToolsProvider.toolName, "read_stored", "spawn_subagents",
                     GenUIToolProvider.renderToolName, GenUIToolProvider.findToolName]
         let generic = ToolPlanner.plan(
             context: ToolPlanningContext(query: "How are you today?"),
@@ -1677,12 +1677,13 @@ public enum BudSelfTest {
         // mid-run is retrievable by a later query, no migration needed.
         let memoryTools = MemoryToolsProvider()
         _ = await memoryTools.invoke(
-            tool: "remember",
+            tool: "memory",
             arguments: .object([
+                "mode": .string("remember"),
                 "text": .string("Deploys to production on Friday afternoons."),
                 "scope": .string("project"),
             ]),
-            callID: "remember-cognitive"
+            callID: "memory-remember-5668"
         )
         let remembered = MemoryRetriever.retrieve(query: "friday deploys", budget: 10_000)
         c.check("a remembered note is retrievable by a later query",
@@ -1692,20 +1693,22 @@ public enum BudSelfTest {
         // saves one fact once per phrasing it produces; the store has to
         // recognise the rephrase, not only the exact text.
         _ = await memoryTools.invoke(
-            tool: "remember",
+            tool: "memory",
             arguments: .object([
+                "mode": .string("remember"),
                 "text": .string("MCP servers are preferred for data lookup."),
                 "scope": .string("general"),
             ]),
-            callID: "remember-dup-1"
+            callID: "memory-remember-5934"
         )
         let rephrased = await memoryTools.invoke(
-            tool: "remember",
+            tool: "memory",
             arguments: .object([
+                "mode": .string("remember"),
                 "text": .string("The MCP servers are highly preferred for data lookup."),
                 "scope": .string("general"),
             ]),
-            callID: "remember-dup-2"
+            callID: "memory-remember-8787"
         )
         c.check("a rephrased duplicate is reported as already known",
                 !rephrased.isError && rephrased.text.contains("Already known"))
@@ -1716,20 +1719,22 @@ public enum BudSelfTest {
         // loser's insert is ignored and it must read back as known, not as a
         // failure the model would retry.
         async let raceOne = memoryTools.invoke(
-            tool: "remember",
+            tool: "memory",
             arguments: .object([
+                "mode": .string("remember"),
                 "text": .string("Concurrent saves land once."),
                 "scope": .string("general"),
             ]),
-            callID: "remember-race-1"
+            callID: "memory-race-1"
         )
         async let raceTwo = memoryTools.invoke(
-            tool: "remember",
+            tool: "memory",
             arguments: .object([
+                "mode": .string("remember"),
                 "text": .string("Concurrent saves land once."),
                 "scope": .string("general"),
             ]),
-            callID: "remember-race-2"
+            callID: "memory-race-2"
         )
         let (raceA, raceB) = await (raceOne, raceTwo)
         let saved = [raceA, raceB].filter { $0.text.contains("Recorded") }
@@ -1742,25 +1747,171 @@ public enum BudSelfTest {
         // A structured note is also a fact, like the migration's promotion:
         // later queries naming the subject retrieve it directly.
         _ = await memoryTools.invoke(
-            tool: "remember",
+            tool: "memory",
             arguments: .object([
+                "mode": .string("remember"),
                 "text": .string("Editor: Xcode 16"),
                 "scope": .string("user"),
             ]),
-            callID: "remember-structured"
+            callID: "memory-remember-5586"
         )
         c.equal("a structured note is also a retrievable fact",
                 CognitiveStore.activeFacts(subject: "editor", scope: "user").first?.value, "Xcode 16")
         _ = await memoryTools.invoke(
-            tool: "remember",
+            tool: "memory",
             arguments: .object([
+                "mode": .string("remember"),
                 "text": .string("Deploy: Fridays"),
                 "scope": .string("general"),
             ]),
-            callID: "remember-general-structured"
+            callID: "memory-remember-1547"
         )
         c.check("a general structured note stays an episode, not a fact",
                 CognitiveStore.activeFacts(subject: "deploy").isEmpty)
+
+        // MARK: Managing what was written
+
+        // The store used to be append-and-read: a model that had learned better
+        // could add a correction beside a stale note but never fix or drop it.
+        // These four modes are that missing half, and the ids are the handle
+        // they take — a memory removed by approximation is worse than one more
+        // call.
+        func call(_ mode: String, _ fields: [String: JSONValue] = [:]) async -> ToolResult {
+            var arguments = fields
+            arguments["mode"] = .string(mode)
+            return await memoryTools.invoke(
+                tool: "memory", arguments: .object(arguments), callID: "memory-\(mode)-test"
+            )
+        }
+
+        // search, three ways in: the words themselves, the note's own words in
+        // another order, and a word that is only nearly one of them.
+        let verbatim = await call("search", ["query": .string("friday afternoons")])
+        c.check("search finds a note by its own words", verbatim.text.contains("Friday afternoons"))
+        c.check("...and says which words matched", verbatim.text.contains("matched:"))
+        let byWords = await call("search", ["query": .string("servers data lookup")])
+        c.check("search finds a note by its words in another order",
+                byWords.text.contains("MCP servers are preferred"))
+        let byPrefix = await call("search", ["query": .string("deployments")])
+        c.check("search finds a note whose word only nearly matches",
+                byPrefix.text.contains("Friday"))
+        let unfindable = await call("search", ["query": .string("quantum chromodynamics")])
+        c.check("a search that matches nothing says so",
+                unfindable.text.contains("No note matches"))
+        c.check("...and points at the mode that lists them", unfindable.text.contains("'list'"))
+        let scopedSearch = await call("search", [
+            "query": .string("friday"), "scope": .string("user"),
+        ])
+        c.check("search honours a scope filter", scopedSearch.text.contains("No note matches"))
+
+        // A search result is the handle 'update' and 'forget' take, so the id has
+        // to be in it.
+        _ = await call("remember", [
+            "text": .string("The nightly build runs at 02:00."), "scope": .string("project"),
+        ])
+        let editable = BudStore.lessons().first { $0.text.contains("nightly build") }
+        let nightly = await call("search", ["query": .string("nightly build runs")])
+        c.check("a search result carries the note's id",
+                editable.map { nightly.text.contains("\($0.id)") } == true)
+
+        // list, with the same ids and the same scope filter.
+        let listed = await call("list")
+        c.check("list reads the notes back with their ids",
+                editable.map { listed.text.contains("\($0.id) [project]") } == true)
+        let userList = await call("list", ["scope": .string("user")])
+        c.check("list filters by scope", userList.text.contains("Editor: Xcode 16"))
+        c.check("...and leaves the others out", !userList.text.contains("MCP servers are preferred"))
+
+        // update: the wording changes, the id does not, and the memory filed
+        // beside the note follows it — a correction that left the old episode in
+        // place would be two memories, one of them wrong.
+        if let note = editable {
+            let rewritten = await call("update", [
+                "id": .number(Double(note.id)),
+                "text": .string("The nightly build runs at 03:30."),
+            ])
+            c.check("update rewrites the note", rewritten.text.contains("03:30"))
+            let after = BudStore.lessons().first { $0.id == note.id }
+            c.equal("...keeping its id", after?.id, note.id)
+            c.equal("...and its scope, when none was given", after?.scope, "project")
+            c.check("...with the old wording gone from the store",
+                    !BudStore.lessons().contains { $0.text.contains("02:00") })
+            c.check("...and the memory filed beside it rewritten too",
+                    CognitiveStore.episodes(limit: 200)
+                        .contains { $0.source == "lesson:\(note.id)" && $0.summary.contains("03:30") })
+            c.check("...with the old copy gone",
+                    !CognitiveStore.episodes(limit: 200)
+                        .contains { $0.source == "lesson:\(note.id)" && $0.summary.contains("02:00") })
+
+            // Rewriting onto another note's wording would leave two notes saying
+            // one thing — the state `remember` refuses to create.
+            let collision = await call("update", [
+                "id": .number(Double(note.id)),
+                "text": .string("MCP servers are preferred for data lookup."),
+            ])
+            c.check("a rewrite that would duplicate another note is refused",
+                    collision.isError && collision.text.contains("already says that"))
+            c.check("...and the note is left as it was",
+                    (BudStore.lessons().first { $0.id == note.id }?.text.contains("03:30") ?? false))
+        } else {
+            c.check("the note to rewrite is in the store", false)
+        }
+        let noSuchNote = await call("update", [
+            "id": .number(999_999), "text": .string("anything"),
+        ])
+        c.check("rewriting a note that does not exist is refused",
+                noSuchNote.isError && noSuchNote.text.contains("There is no note 999"))
+        c.check("...with the way to find the right id", noSuchNote.text.contains("'list'"))
+
+        // forget: the note, and what retrieval kept of it.
+        if let doomed = BudStore.lessons().first(where: { $0.text == "Concurrent saves land once." }) {
+            let forgotten = await call("forget", ["id": .number(Double(doomed.id))])
+            c.check("forget drops the note",
+                    forgotten.text.contains("Forgotten") && !forgotten.isError)
+            c.check("...out of the store",
+                    !BudStore.lessons().contains { $0.id == doomed.id })
+            c.check("...and out of retrieval",
+                    !CognitiveStore.episodes(limit: 200).contains { $0.summary == doomed.text })
+            let again = await call("forget", ["id": .number(Double(doomed.id))])
+            c.check("...and forgetting it twice is refused rather than silently done",
+                    again.isError && again.text.contains("There is no note"))
+        } else {
+            c.check("the note to forget is in the store", false)
+        }
+        let noID = await call("forget")
+        c.check("forget without an id is refused", noID.isError && noID.text.contains("needs 'id'"))
+
+        // The mode is an enum, and an unknown one must not fall through to a
+        // write: the whole reason the modes are named rather than ordered.
+        let misspelt = await call("dele te")
+        c.check("an unknown mode is refused", misspelt.isError && misspelt.text.contains("no 'dele te' mode"))
+        c.check("...listing the modes that exist", misspelt.text.contains("forget"))
+        let modeless = await memoryTools.invoke(
+            tool: "memory", arguments: .object(["text": .string("x")]), callID: "memory-no-mode"
+        )
+        c.check("a call with no mode at all is refused",
+                modeless.isError && modeless.text.contains("requires 'mode'"))
+        let oldName = await memoryTools.invoke(
+            tool: "remember", arguments: .object(["text": .string("x")]), callID: "memory-old-name"
+        )
+        c.check("the tool that used to exist is named in the refusal",
+                oldName.isError && oldName.text.contains("no tool named 'remember'"))
+
+        // The modes are an enum in the schema rather than prose in the
+        // description, because that is what keeps the model choosing from the
+        // modes that exist instead of remembering their names.
+        let descriptors = await memoryTools.toolDescriptors()
+        let described = descriptors.first { $0.name == MemoryToolsProvider.toolName }
+        c.equal("the provider exposes exactly one memory tool", descriptors.count, 1)
+        c.equal("...which needs a mode",
+                described?.schema["required"]?.arrayValue?.first?.stringValue, "mode")
+        let modes = described?.schema["properties"]?["mode"]?["enum"]?.arrayValue?
+            .compactMap(\.stringValue) ?? []
+        c.equal("...offered as an enum of every mode", modes,
+                ["search", "list", "remember", "update", "forget"])
+        c.check("...with the two id-taking modes explained as id-taking",
+                (described?.schema["properties"]?["id"]?["description"]?.stringValue ?? "")
+                    .contains("search or list"))
 
         // The graph learns the moment things connect or install.
         CognitiveStore.recordServerConnection(name: "Get Competitive", tools: ["update_team", "search_pokemon"])
