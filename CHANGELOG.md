@@ -12,6 +12,42 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.16.0
+
+### Deleting means deleting, and activity belongs to its conversation
+
+Two lists in Bud emptied themselves on screen and left everything behind in the
+file. Both now mean what they say.
+
+**Memory.** Forgetting a note removed the note and the copies the store had
+linked to it — but an episode carrying the same sentence without that link, which
+is what a tool or a run that recorded it directly leaves, stayed in the table and
+kept riding into answers with nothing on screen able to reach it. Forgetting a
+note now takes those with it, and a database opened by this build sweeps the ones
+already orphaned, once, so the row that started this is gone from an existing
+install rather than only from new ones. An episode another note owns is never
+touched.
+
+**Activity.** The panel showed the newest fifty runs from every conversation
+ever — a log, answering a question nobody asked while hiding the one they did.
+It now opens on the conversation you are in and follows you when you switch, so
+the work in front of you is what you see. **Clear finished** clears: the rows
+leave the database, not just the roster, so they no longer come back on the next
+launch. Deleting a conversation takes its activity with it — runs carry their
+conversation as a plain column, so nothing else was ever going to sweep them —
+and each conversation keeps the newest fifty of its own.
+
+**Activity is stored deflated.** Runs are the largest thing Bud writes, and each
+one is read once, on the way into the panel. Historical payloads are now stored
+compressed and inflated on load, with a marker so rows written by earlier builds
+keep reading exactly as they did.
+
+**Verification no longer writes to your memory.** The live harness drives real
+turns, and a real turn files episodes and context events. It ran against the
+person's own database. It now uses a scratch file like the offline suite, which
+leaves your store byte-for-byte as it found it.
+
+
 ## Bud 2.15.0
 
 ### Streaming costs a fraction of what it did, and the shadow recording stops running for nobody
