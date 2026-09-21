@@ -98,9 +98,10 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
             properties["capability"] = .object([
                 "type": "string",
                 "description": .string(
-                    "What the task needs, in your own words — e.g. 'competitive pokemon "
-                        + "analysis' or 'reading pdf forms'. Bud resolves this locally to the "
-                        + "matching agent, so the roster does not have to be sent to you."
+                    "Rarely needed — 'agent' names from the roster above. If no listed "
+                        + "agent fits, a few words on what the task needs; Bud matches them "
+                        + "against that same roster and refuses with the real names when "
+                        + "nothing matches."
                 ),
             ])
         }
@@ -719,18 +720,20 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
     /// they would match. Past the cap, resolution is the same local path.
     nonisolated static func spawnDescriptionCompact(agents: [AgentDefinition]) -> String {
         let digest = rosterDigest(agents)
+        let rosterLine = digest.isEmpty
+            ? "No agents are connected this session."
+            : "The list above is the whole roster: put one of those names in 'agent'."
         return spawnIntro + (digest.isEmpty ? "" : "\n\n" + digest) + """
 
 
             Agents are available (scouts, skill agents, connected MCP servers), each \
             with its own instructions and its own tools — a scout cannot change \
-            anything, a server agent can only reach its own server. Hand a task to \
-            one by putting what it needs in 'capability' — e.g. 'competitive pokemon \
-            analysis' — and Bud resolves the matching agent locally. Naming the \
-            agent directly in 'agent' always works too. If a name is wrong or a \
-            capability is unclear, the call answers with the names you can choose \
-            from. Leave both out and the task runs unnamed: every tool, the session \
-            model, and nothing but the prompt you wrote.
+            anything, a server agent can only reach its own server. \(rosterLine) \
+            Never invent one — an unrecognised name is refused with the real names. \
+            Only if none of the listed agents fits, describe the need in 'capability' \
+            and Bud matches it against this same list; an unmatched wording is \
+            refused the same way. With both left out the task runs unnamed: every \
+            tool, the session model, and nothing but the prompt you wrote.
             """ + spawnGuidance
     }
 
