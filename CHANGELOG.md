@@ -12,6 +12,21 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.13.2
+
+### The 2.13.1 work reaches stable
+
+The four updates that shipped on the prerelease channel land on stable in one
+release: the Agents panel lists every tool call a subagent makes as it happens;
+the decision batch ships its evidence to Jev as structure, with capability
+summaries as choice rubrics and pinned yes/no boundaries; delegation reads the
+decision layer — `spawn_subagents` carries a bounded roster digest, is offered
+when `needs_delegate` says so, and a capability the local resolver cannot place
+is answered by a typed `delegate_to` choice instead of a refusal; and spawning
+names the roster rather than echoing an invented agent, with invented names
+refused against the real ones.
+
+
 ## Bud 2.13.1
 
 ### Subagent tool calls are visible in the Agents panel
