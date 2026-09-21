@@ -183,6 +183,9 @@ public enum SkillStore {
         }
         try FileManager.default.copyItem(at: source, to: destination)
         invalidate()
+        // The cognitive graph learns the skill the moment it is installed, so
+        // a later query that names it can walk to what it connects to.
+        _ = CognitiveStore.recordSkill(name: skill.name)
         quarantine(destination)
         if let origin {
             try? origin.write(

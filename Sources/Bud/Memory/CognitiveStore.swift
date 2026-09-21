@@ -173,7 +173,7 @@ public enum CognitiveStore {
             var supersededIDs: [Int] = []
             if let prior = Statement(handle, """
                 SELECT id FROM facts
-                WHERE subject = ? AND key = ? AND scope = ? AND status = 'active';
+                WHERE subject = ? COLLATE NOCASE AND key = ? AND scope = ? AND status = 'active';
                 """) {
                 prior.bind(1, subject).bind(2, key).bind(3, scope)
                 while prior.next() { supersededIDs.append(prior.int(0)) }
@@ -182,7 +182,7 @@ public enum CognitiveStore {
             var version = 1
             if let latest = Statement(handle, """
                 SELECT COALESCE(MAX(version), 0) FROM facts
-                WHERE subject = ? AND key = ? AND scope = ?;
+                WHERE subject = ? COLLATE NOCASE AND key = ? AND scope = ?;
                 """) {
                 latest.bind(1, subject).bind(2, key).bind(3, scope)
                 if latest.next() { version = latest.int(0) + 1 }
@@ -190,7 +190,7 @@ public enum CognitiveStore {
 
             guard let supersede = Statement(handle, """
                 UPDATE facts SET status = 'superseded', updated_at = ?
-                WHERE subject = ? AND key = ? AND scope = ? AND status = 'active';
+                WHERE subject = ? COLLATE NOCASE AND key = ? AND scope = ? AND status = 'active';
                 """),
                   let insert = Statement(handle, """
                 INSERT INTO facts (subject, key, value_json, scope, version, status,
@@ -236,7 +236,9 @@ public enum CognitiveStore {
     ) -> [Fact] {
         var sql = "SELECT id, subject, key, value_json, scope, version, status, "
             + "source_id, created_at, updated_at FROM facts WHERE status = 'active'"
-        if subject != nil { sql += " AND subject = ?" }
+        // Case-insensitive: retrieval looks subjects up by lowercased query
+        // tokens, and notes remember subjects however they were written.
+        if subject != nil { sql += " AND subject = ? COLLATE NOCASE" }
         if scope != nil { sql += " AND scope = ?" }
         sql += " ORDER BY updated_at DESC LIMIT ?;"
         return db.read { handle -> [Fact] in
@@ -387,6 +389,32 @@ public enum CognitiveStore {
             }
             return removed
         } ?? false
+    }
+
+    /// Records what a connected MCP server is, into the graph the retriever
+    /// walks: a server node, a tool node per tool (capped — a 200-tool server
+    /// does not become 200 nodes), and the PROJECT_USES_MCP relation from the
+    /// standing project node. Idempotent by construction — get-or-create
+    /// everywhere — so reconnects and roster rebuilds land on the same nodes.
+    public static func recordServerConnection(name: String, tools: [String]) {
+        let serverName = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !serverName.isEmpty,
+              let project = entity(type: "project", name: "bud"),
+              let server = entity(type: "server", name: serverName)
+        else { return }
+        _ = relate(from: project.id, type: "PROJECT_USES_MCP", to: server.id, source: "mcp-connect")
+        for tool in tools.prefix(12) {
+            let trimmed = tool.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, let node = entity(type: "tool", name: trimmed) else { continue }
+            _ = relate(from: server.id, type: "SERVER_PROVIDES_TOOL", to: node.id, source: "mcp-connect")
+        }
+    }
+
+    /// Records an installed skill as a node, so a later query that names it can
+    /// walk to what it connects to. Stable on purpose: removal leaves the node.
+    @discardableResult
+    public static func recordSkill(name: String) -> MemoryEntity? {
+        entity(type: "skill", name: name.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     // MARK: - Entities and relations

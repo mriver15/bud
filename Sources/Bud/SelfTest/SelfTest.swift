@@ -1431,7 +1431,7 @@ public enum BudSelfTest {
         c.check("...with the old version marked superseded",
                 history.contains { $0.status == "superseded" })
         c.equal("only the newest version is active",
-                CognitiveStore.activeFacts(subject: "editor").map(\.value), ["xcode 16"])
+                CognitiveStore.activeFacts(subject: "editor", scope: "general").map(\.value), ["xcode 16"])
 
         // Entities, aliases and bounded graph traversal.
         guard let bud = CognitiveStore.entity(type: "project", name: "bud"),
@@ -1555,6 +1555,52 @@ public enum BudSelfTest {
                 saved.count == 1 && known.count == 1)
         c.equal("...and exactly one note exists",
                 BudStore.lessons().filter { $0.text == "Concurrent saves land once." }.count, 1)
+
+        // A structured note is also a fact, like the migration's promotion:
+        // later queries naming the subject retrieve it directly.
+        _ = await memoryTools.invoke(
+            tool: "remember",
+            arguments: .object([
+                "text": .string("Editor: Xcode 16"),
+                "scope": .string("user"),
+            ]),
+            callID: "remember-structured"
+        )
+        c.equal("a structured note is also a retrievable fact",
+                CognitiveStore.activeFacts(subject: "editor", scope: "user").first?.value, "Xcode 16")
+        _ = await memoryTools.invoke(
+            tool: "remember",
+            arguments: .object([
+                "text": .string("Deploy: Fridays"),
+                "scope": .string("general"),
+            ]),
+            callID: "remember-general-structured"
+        )
+        c.check("a general structured note stays an episode, not a fact",
+                CognitiveStore.activeFacts(subject: "deploy").isEmpty)
+
+        // The graph learns the moment things connect or install.
+        CognitiveStore.recordServerConnection(name: "Get Competitive", tools: ["update_team", "search_pokemon"])
+        let serverNode = CognitiveStore.entity(named: "get competitive")
+        c.check("a connected server becomes a graph node", serverNode?.type == "server")
+        c.check("...and its tools become nodes too",
+                CognitiveStore.entity(named: "update_team")?.type == "tool")
+        let projectNode = CognitiveStore.entity(named: "bud")
+        if let projectNode, let serverNode {
+            c.check("...related to the project",
+                    CognitiveStore.neighbors(of: projectNode.id, depth: 1)
+                        .contains { $0.id == serverNode.id })
+            let neighbourCount = CognitiveStore.neighbors(of: projectNode.id, depth: 2).count
+            CognitiveStore.recordServerConnection(name: "Get Competitive", tools: ["update_team", "search_pokemon"])
+            c.equal("...and re-recording lands on the same nodes",
+                    CognitiveStore.neighbors(of: projectNode.id, depth: 2).count, neighbourCount)
+        } else {
+            c.check("the project and server nodes exist", false)
+        }
+        let skillNode = CognitiveStore.recordSkill(name: "pdf")
+        c.check("an installed skill becomes a node", skillNode?.type == "skill")
+        c.check("...and re-recording it is idempotent",
+                CognitiveStore.recordSkill(name: "pdf")?.id == skillNode?.id)
 
         // Forgetting the lesson clears the cognitive copy too, or retrieval
         // would keep surfacing a note the person deleted.

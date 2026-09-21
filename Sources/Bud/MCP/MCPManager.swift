@@ -172,6 +172,9 @@ public final class MCPManager: MCPManaging, ToolProvider {
                 id: id, name: config.name, transport: config.transport,
                 state: .ready, toolCount: tools.count, serverVersion: info?.version
             )
+            // The cognitive graph learns the server the moment it is added:
+            // later queries that name it walk to everything it connects to.
+            CognitiveStore.recordServerConnection(name: config.name, tools: tools.map(\.name))
             let version = (info?.version).flatMap { $0.isEmpty ? nil : " \($0)" } ?? ""
             appendLog(id, "Connected to \(info?.name ?? config.name)\(version) — \(Self.toolCount(tools.count)).")
         } catch {

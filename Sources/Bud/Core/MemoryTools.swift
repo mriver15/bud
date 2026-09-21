@@ -155,6 +155,24 @@ public nonisolated struct MemoryToolsProvider: ToolProvider {
                 salience: 0.8,
                 source: "lesson:\(lesson.id)"
             )
+            // A structured note — "Editor: Xcode" — is also a fact, so a later
+            // query naming the subject retrieves it directly. The same
+            // promotion rule the migration applied to existing notes, so what
+            // is remembered now behaves like what was remembered before.
+            if scope != "general", let colon = text.firstIndex(of: ":") {
+                let subject = text[..<colon].trimmingCharacters(in: .whitespacesAndNewlines)
+                let value = text[text.index(after: colon)...].trimmingCharacters(in: .whitespacesAndNewlines)
+                if !subject.isEmpty, subject.count <= 60,
+                   subject.allSatisfy({ !$0.isWhitespace }),
+                   !value.isEmpty, value.count <= 200 {
+                    _ = CognitiveStore.recordFact(
+                        subject: subject,
+                        value: value,
+                        scope: scope,
+                        source: "lesson:\(lesson.id)"
+                    )
+                }
+            }
         }
 
         return .ok(
