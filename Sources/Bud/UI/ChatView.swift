@@ -13,6 +13,9 @@ public struct ChatView: View {
     @BudState private var isFinding = false
     @BudState private var findQuery = ""
     @BudState private var findCursor = 0
+    /// The last time the follow scrolled to the bottom, so streaming deltas
+    /// coalesce into ~10 layout passes a second instead of one per token.
+    @BudState private var lastFollowScroll = Date.distantPast
     @FocusState private var isFindFocused: Bool
     /// The report a context compact returned, shown in place of the budget banner
     /// until the next turn or a new chat clears it.
@@ -195,6 +198,12 @@ public struct ChatView: View {
             }
             .onChange(of: streamSignature) { _, _ in
                 guard isNearBottom, !isUserScrolling else { return }
+                // A delta per token means a scroll per token; the follow only
+                // needs the bottom pinned, and layout at 10Hz reads identically
+                // while costing a tenth of the passes.
+                let now = Date()
+                guard now.timeIntervalSince(lastFollowScroll) >= 0.1 else { return }
+                lastFollowScroll = now
                 proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
             }
             .onChange(of: model.turns.count) { _, _ in
