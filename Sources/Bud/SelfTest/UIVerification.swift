@@ -212,6 +212,31 @@ public enum BudUIVerification {
                 memoryWindow.contentView.map { findDirectiveField(in: $0) } == true)
         memoryWindow.close()
 
+        // MARK: The Jev model field renders in Settings
+
+        // The same scratch-window technique, for the row that pins the model a
+        // Jev call is sent to. Worth a real render rather than trust: the field
+        // is one line in a pane of twenty, and a row that never appears is
+        // indistinguishable from a pin that was never applied. The pane's stack
+        // is not lazy, so the row is built whether or not it is scrolled into
+        // view — which is what makes the placeholder a usable marker.
+        let settingsWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 900),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        settingsWindow.contentView = NSHostingView(
+            rootView: SettingsView(model: model, initialTab: .general)
+        )
+        settingsWindow.contentView?.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(1.0))
+        c.check(
+            "the Jev model field renders in settings",
+            settingsWindow.contentView.map {
+                containsTextField(placeholderContaining: JevDecisionEngine.defaultModel, in: $0)
+            } == true
+        )
+        settingsWindow.close()
+
         return c.report()
     }
 
@@ -237,9 +262,18 @@ public enum BudUIVerification {
     }
 
     private static func findDirectiveField(in view: NSView) -> Bool {
+        containsTextField(placeholderContaining: "destructive", in: view)
+    }
+
+    /// Whether a text field with a placeholder containing `text` is in the tree.
+    ///
+    /// SwiftUI's `TextField` is a real `NSTextField` on macOS, so a rendered
+    /// field is checkable by the placeholder it was given — which is the only
+    /// part of a plain field that identifies it in the view tree.
+    private static func containsTextField(placeholderContaining text: String, in view: NSView) -> Bool {
         if let field = view as? NSTextField,
-           field.placeholderString?.contains("destructive") == true { return true }
-        return view.subviews.contains { findDirectiveField(in: $0) }
+           field.placeholderString?.contains(text) == true { return true }
+        return view.subviews.contains { containsTextField(placeholderContaining: text, in: $0) }
     }
 
     /// Counts distinct quantised colours in a coarse sample of a PNG. A flat

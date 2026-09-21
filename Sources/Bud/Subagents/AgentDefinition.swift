@@ -66,6 +66,15 @@ public struct AgentDefinition: Sendable, Identifiable, Equatable {
     public var tools: [String]?
     /// Overrides the session model. `nil` runs on whatever the session is using.
     public var model: String?
+    /// Other names this agent answers to, from whoever wrote it.
+    ///
+    /// A skill's `triggers` are exactly this: the words its author says people
+    /// use for it. Local matching is word overlap against the name and the
+    /// summary, and the author knows the domain words those two miss — a W-9 is
+    /// a PDF, and "w-9" appears in neither "pdf" nor "reads and fills PDF
+    /// forms". Empty for the agents Bud ships and for servers, whose names,
+    /// summaries and tool lists already say what they are.
+    public var aliases: [String]
     public var symbol: String
 
     public init(
@@ -75,6 +84,7 @@ public struct AgentDefinition: Sendable, Identifiable, Equatable {
         origin: Origin = .builtin,
         tools: [String]? = nil,
         model: String? = nil,
+        aliases: [String] = [],
         symbol: String = "person.crop.circle"
     ) {
         self.name = name
@@ -83,6 +93,7 @@ public struct AgentDefinition: Sendable, Identifiable, Equatable {
         self.origin = origin
         self.tools = tools
         self.model = model
+        self.aliases = aliases
         self.symbol = symbol
     }
 
@@ -225,6 +236,10 @@ public enum AgentLibrary {
             origin: .skill(skill.name),
             tools: Skill.toolList(skill.allowedTools),
             model: skill.metadata["model"],
+            // The words the author says people use for this skill are the same
+            // words a task will be phrased in when it is handed over, so they
+            // travel with the agent and widen what the local resolver matches.
+            aliases: skill.triggerAliases,
             symbol: "book.closed"
         )
     }

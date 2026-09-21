@@ -51,8 +51,7 @@ public enum SkillRanking {
             // any amount of overlap, because it is the one signal here that is not a
             // guess: the author knows what this skill is called by the people who
             // need it.
-            if !skill.triggers.isEmpty,
-               triggerPhrases(skill.triggers).contains(where: { message.contains($0) }) {
+            if skill.triggerAliases.contains(where: { message.contains($0.lowercased()) }) {
                 score *= 3
             }
             if score > 0 { scored.append((skill.name, score)) }
@@ -79,14 +78,6 @@ public enum SkillRanking {
         TextRanking.tokens(in: skill.name.replacingOccurrences(of: "-", with: " ")
             + " " + skill.summary
             + " " + skill.triggers)
-    }
-
-    /// Comma- or newline-separated, as `metadata.triggers` is written by hand.
-    private static func triggerPhrases(_ raw: String) -> [String] {
-        raw
-            .split(whereSeparator: { $0 == "," || $0 == "\n" })
-            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-            .filter { !$0.isEmpty }
     }
 }
 

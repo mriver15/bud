@@ -49,6 +49,27 @@ public struct Skill: Sendable, Identifiable, Equatable {
     /// wild, which costs nothing.
     public var triggers: String { metadata["triggers"] ?? "" }
 
+    /// `triggers` split into the phrases themselves, one per comma or newline,
+    /// kept in the author's casing so a phrase reads as a name rather than as a
+    /// matching token.
+    ///
+    /// Read wherever the alias matters — the skill line the model sees, the
+    /// ranking that decides what to promote, and the vocabulary the delegate
+    /// resolver matches a capability against — so the split is written once.
+    public var triggerAliases: [String] { Skill.triggerAliases(triggers) }
+
+    /// The same split, for a raw `metadata.triggers` value.
+    ///
+    /// Comma- or newline-separated because that is how the field is written by
+    /// hand; blanks are dropped rather than kept as an empty phrase that would
+    /// match every wording.
+    public static func triggerAliases(_ raw: String) -> [String] {
+        raw
+            .split(whereSeparator: { $0 == "," || $0 == "\n" })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
     /// `allowed-tools` as a list.
     ///
     /// The field is a space-separated string in the standard and a comma-separated

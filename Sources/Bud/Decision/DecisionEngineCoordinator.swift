@@ -69,12 +69,24 @@ public enum DecisionEngineCoordinator {
             }
             let engine = JevDecisionEngine(
                 apiKey: key,
+                model: jevModel(config.jevModel),
                 onUsage: { prompt, completion in env.recordUsage(prompt: prompt, completion: completion) }
             )
             return await runConfigured(
                 engine, label: "jev", env: env, state: state, questions: questions
             )
         }
+    }
+
+    /// The model a Jev call is sent to: the configured pin, or the shipped alias
+    /// when nothing is pinned.
+    ///
+    /// A cleared field is an empty string, and an empty `model` on the wire is a
+    /// refused request rather than a default — so the fallback lives here, where
+    /// the request is built, instead of being left to the server.
+    static func jevModel(_ configured: String) -> String {
+        let trimmed = configured.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? JevDecisionEngine.defaultModel : trimmed
     }
 
     /// The shared configured-engine path: run, account, and fall back to the

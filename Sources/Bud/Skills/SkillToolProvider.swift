@@ -178,7 +178,7 @@ public enum SkillContext {
     /// PDF skill stays visible when the rest of the description does not.
     private static func opening(_ skill: Skill) -> String {
         var line = firstSentence(skill.summary)
-        let aliases = triggerAliases(skill.triggers)
+        let aliases = skill.triggerAliases
         if !aliases.isEmpty {
             line += " [also called: \(aliases.joined(separator: ", "))]"
         }
@@ -200,16 +200,6 @@ public enum SkillContext {
         let sentence = String(flat[..<stop.lowerBound]) + "."
         guard sentence.count > compactLimit else { return sentence }
         return String(flat.prefix(compactLimit)) + "…"
-    }
-
-    /// The aliases a skill's author wrote down as its `triggers`, one per comma
-    /// or newline, kept in their original casing so they read as names rather
-    /// than as matching tokens.
-    private static func triggerAliases(_ raw: String) -> [String] {
-        raw
-            .split(whereSeparator: { $0 == "," || $0 == "\n" })
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
     }
 
     /// How many characters the catalogue may spend spelling out skills.

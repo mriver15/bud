@@ -874,6 +874,26 @@ private struct GeneralSettingsTab: View {
                     )
                     .font(Bud.Font.caption)
                     .foregroundStyle(.tertiary)
+                    HStack(spacing: Bud.Space.sm) {
+                        Text("Jev model")
+                            .font(Bud.Font.callout)
+                        Spacer(minLength: Bud.Space.sm)
+                        TextField(
+                            JevDecisionEngine.defaultModel,
+                            text: jevModelBinding
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 260, alignment: .leading)
+                    }
+                    Text(
+                        "An alias or a versioned id. The default alias tracks TypeSafe's "
+                            + "newest release, whose answers can change without a change here — "
+                            + "pin a version such as jev-1.13.0 when a routing threshold has been "
+                            + "tuned against it. The version that answered is recorded with every "
+                            + "decision."
+                    )
+                    .font(Bud.Font.caption)
+                    .foregroundStyle(.tertiary)
                     Divider().opacity(0.2)
                     Stepper(value: subagentConcurrencyBinding, in: 1...32) {
                         limitRow("Subagents in parallel", "\(model.config.allowParallelSubagents)")
@@ -1025,6 +1045,16 @@ private struct GeneralSettingsTab: View {
             get: { model.config.typesafeAPIKey },
             set: { newValue in
                 model.config.typesafeAPIKey = newValue
+                model.persistConfig()
+            }
+        )
+    }
+
+    private var jevModelBinding: Binding<String> {
+        Binding(
+            get: { model.config.jevModel },
+            set: { newValue in
+                model.config.jevModel = newValue
                 model.persistConfig()
             }
         )

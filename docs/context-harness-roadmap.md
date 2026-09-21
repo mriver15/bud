@@ -273,6 +273,24 @@ decision engine (Jev/provider) a typed `delegate_to` choice over the roster
 instead of answering with names for the model to guess from; below the
 activation band the refusal stands.
 
+**Revised once the Jev adapter was live: the answers are remembered, and the
+vocabulary widens.** Asking a network model the same question every spawn is
+the cost of a stateless matcher, so a `delegate_to` answer that clears the
+activation band is filed in SQLite (`delegate_aliases`) and read back as a third
+source in front of the engine — one call per wording ever, not per spawn — and
+the words of what was placed enter that agent's vocabulary, which is what lets a
+later task phrased the same way resolve locally instead of asking again.
+In-session, answers (refusals included) are memoised and dropped when the
+roster's names, summaries or aliases change, because every answer was about the
+roster that existed when it was asked. Declared aliases close the other half: a
+skill's `metadata.triggers` travel with its agent as names for it and match as
+whole phrases, which is the only signal in this matching that comes from whoever
+wrote the skill. None of it trains the model — TypeSafe serves one set of
+weights to every account and states that customer requests are not training
+data — so the loop this pipeline has is local by construction, and the model it
+asks is now pinnable (`jevModel`) because `jev-latest` moves under a threshold
+that was tuned against one version.
+
 ### 6.3 Generated UI as an output capability
 
 **Experiment.** Test whether `render_ui` should remain a tool or become a provider-neutral output dialect. The goal is to avoid paying a large always-on tool schema solely so the model can decide that a table/dashboard would be useful.

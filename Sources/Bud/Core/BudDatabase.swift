@@ -33,7 +33,7 @@ public final class BudDatabase: @unchecked Sendable {
     /// Bumped when the schema changes. `user_version` is SQLite's own slot for
     /// this, which is better than a table of our own: it cannot be dropped by a
     /// stray query and it is read without preparing a statement.
-    public static let schemaVersion = 5
+    public static let schemaVersion = 6
 
     public static var defaultURL: URL {
         BudConfigLoader.budDirectory.appendingPathComponent("bud.sqlite")
@@ -184,6 +184,17 @@ public final class BudDatabase: @unchecked Sendable {
         CREATE TABLE IF NOT EXISTS state (
             key   TEXT PRIMARY KEY,
             value TEXT
+        );
+
+        -- Capability wordings the decision engine has already placed, as a
+        -- capability-to-agent map: the one thing in the delegation path that
+        -- outlives the spawn that learned it. A wording written here answers
+        -- locally from then on, so the engine is asked once per wording rather
+        -- than once per spawn.
+        CREATE TABLE IF NOT EXISTS delegate_aliases (
+            capability TEXT PRIMARY KEY,
+            agent      TEXT NOT NULL,
+            learned_at REAL NOT NULL
         );
         """)
         // Both paths reach here: a database created just now has these columns

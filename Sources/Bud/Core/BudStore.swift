@@ -445,6 +445,54 @@ public enum BudStore {
         } ?? []
     }
 
+    // MARK: - Learned delegation
+
+    /// Files a capability wording against the agent the decision engine placed
+    /// it with, replacing whatever that wording meant before.
+    ///
+    /// Written for a confident answer only — the caller applies the activation
+    /// band — because a mapping is permanent: a weak answer filed here becomes
+    /// a wrong agent silently run every time the same phrase turns up. The
+    /// wording is stored as given, already normalised by the resolver, so two
+    /// spellings of one phrase are one row.
+    @discardableResult
+    public static func rememberDelegateAlias(_ capability: String, agent: String) -> Bool {
+        let wording = capability.trimmingCharacters(in: .whitespacesAndNewlines)
+        let named = agent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !wording.isEmpty, !named.isEmpty else { return false }
+        return db.transaction { handle -> Bool in
+            guard let statement = Statement(handle, """
+                INSERT INTO delegate_aliases (capability, agent, learned_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(capability) DO UPDATE SET agent = excluded.agent,
+                                                      learned_at = excluded.learned_at;
+                """) else { return false }
+            statement.bind(1, wording).bind(2, named).bind(3, Date()).run()
+            return statement.changes > 0
+        } ?? false
+    }
+
+    /// Every wording that has been learned, keyed by the wording itself.
+    ///
+    /// Returned whole rather than filtered by roster: an installed agent can
+    /// come back, and a row naming one that is not there is inert — the
+    /// resolver only ever looks a mapping up to check it against the roster it
+    /// was given.
+    public static func delegateAliases() -> [String: String] {
+        db.read { handle -> [String: String] in
+            guard let statement = Statement(handle, "SELECT capability, agent FROM delegate_aliases;")
+            else { return [:] }
+            var aliases: [String: String] = [:]
+            while statement.next() {
+                guard let capability = statement.string(0), let agent = statement.string(1) else {
+                    continue
+                }
+                aliases[capability] = agent
+            }
+            return aliases
+        } ?? [:]
+    }
+
     // MARK: - Lessons
 
     /// Records something worth keeping. A repeat of something already known is

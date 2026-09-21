@@ -127,6 +127,9 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
     /// model call the session makes.
     private let agents: AgentRegistry
     private let gate: RunGate
+    /// What the decision engine has already answered about this roster, so a
+    /// wording costs one call per roster rather than one per spawn.
+    @ObservationIgnored private var memo = EngineResolutionMemo()
     /// Live handles, so one run can be cancelled without disturbing siblings.
     @ObservationIgnored private var handles: [String: Task<Void, Never>] = [:]
 
@@ -168,9 +171,9 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         case .failure(let problem):
             return .error(problem.message)
         case .success(let specs):
-            let resolutions = await engineResolutions(for: specs)
-            if let refusal = refusal(for: specs, engineResolutions: resolutions) { return .error(refusal) }
-            return .ok(Self.digest(await spawn(specs, engineResolutions: resolutions)))
+            let plan = await capabilityPlan(for: specs)
+            if let refusal = refusal(for: specs, plan: plan) { return .error(refusal) }
+            return .ok(Self.digest(await spawn(specs, plan: plan)))
         }
     }
 
@@ -181,7 +184,7 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
     /// not the same size: a task that quietly loses its agent runs with the wrong
     /// instructions and the wrong tools and still comes back sounding confident.
     /// Answering with the names that do exist costs one round trip and fixes it.
-    func refusal(for specs: [SubagentSpec], engineResolutions: [String: String]) -> String? {
+    func refusal(for specs: [SubagentSpec], plan: CapabilityPlan) -> String? {
         let named = specs.compactMap(\.agent)
         if let unknown = named.first(where: { agents.named($0) == nil }) {
             let available = agents.agents.map(\.name)
@@ -192,11 +195,14 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         }
         // Capability wording is resolved locally; a wording nothing matches
         // confidently is refused with the closest names rather than run with a
-        // guessed agent — unless the decision engine already placed it.
+        // guessed agent — unless the plan placed it, from a declared name or
+        // from what the decision engine answered.
         for spec in specs where spec.agent == nil {
             guard let capability = spec.capability, !capability.isEmpty else { continue }
-            guard engineResolutions[capability] == nil else { continue }
-            let resolution = DelegateResolver.resolve(capability, agents: agents.agents)
+            let wording = DelegateResolver.normalize(capability)
+            guard plan.placements[wording] == nil else { continue }
+            let resolution = plan.closest[wording]
+                ?? DelegateResolver.resolve(capability, agents: agents.agents)
             if resolution.agentID == nil {
                 let available = agents.agents.map(\.name)
                 let hint = resolution.candidates.isEmpty
@@ -212,32 +218,79 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         return nil
     }
 
-    // MARK: - Engine-backed resolution
+    // MARK: - Placing capabilities
 
-    /// Capability wordings the local resolver could not place, resolved by the
-    /// configured decision engine instead. One decision call per unresolved
-    /// wording — the case that otherwise costs a whole round trip and lands
-    /// the model the names to guess from.
-    private func engineResolutions(for specs: [SubagentSpec]) async -> [String: String] {
-        var resolutions: [String: String] = [:]
+    /// One spawn call's capability work, resolved in a single pass.
+    ///
+    /// Read by both sides of the call: `placements` decides which agent a task
+    /// runs as, and `closest` is what a refusal answers with — so the two can
+    /// never disagree about whether a wording was placed, which is exactly the
+    /// bug that would run a task under the wrong agent or refuse one that had
+    /// an answer.
+    struct CapabilityPlan {
+        /// Normalised wording → the agent it belongs to.
+        var placements: [String: String] = [:]
+        /// Normalised wording → the local view of it, for the refusal's hint.
+        var closest: [String: DelegateResolver.Resolution] = [:]
+    }
+
+    /// Places every capability wording in one spawn call, cheapest source first:
+    /// the local vocabulary (agent names, their summaries, the aliases their
+    /// authors declared), then what earlier calls learned, and only for a
+    /// wording neither can place, the configured decision engine.
+    ///
+    /// The engine's answer is remembered twice: in the session memo, so the same
+    /// wording is asked once per roster rather than once per spawn, and in the
+    /// store, so it is asked once ever. That written mapping is what widens the
+    /// local vocabulary for the next wording phrased the same way, which is the
+    /// whole of the learning loop this pipeline has.
+    private func capabilityPlan(for specs: [SubagentSpec]) async -> CapabilityPlan {
+        let roster = agents.agents
+        var plan = CapabilityPlan()
+        guard !roster.isEmpty else { return plan }
+        let learned = BudStore.delegateAliases()
+
         for spec in specs {
-            guard spec.agent == nil, let capability = spec.capability, !capability.isEmpty,
-                  resolutions[capability] == nil,
-                  DelegateResolver.resolve(capability, agents: agents.agents).agentID == nil
+            guard spec.agent == nil, let raw = spec.capability else { continue }
+            let wording = DelegateResolver.normalize(raw)
+            guard !wording.isEmpty,
+                  plan.placements[wording] == nil,
+                  plan.closest[wording] == nil
             else { continue }
-            if let resolved = await resolveWithEngine(capability) {
-                resolutions[capability] = resolved
+
+            let local = DelegateResolver.resolve(wording, agents: roster, learned: learned)
+            if let placed = local.agentID {
+                plan.placements[wording] = placed
+                continue
+            }
+            plan.closest[wording] = local
+
+            switch memo.answer(for: wording, roster: roster) {
+            case .agent(let name):
+                plan.placements[wording] = name
+            case .unresolved:
+                continue
+            case nil:
+                let answer = await askEngine(wording, roster: roster)
+                memo.record(answer, for: wording, roster: roster)
+                guard case .agent(let name) = answer else { continue }
+                // Filed, so the next session answers this wording locally. Only
+                // a placement at the activation band reaches here: `askEngine`
+                // has already applied the band, and a mapping is permanent.
+                BudStore.rememberDelegateAlias(wording, agent: name)
+                plan.placements[wording] = name
             }
         }
-        return resolutions
+        return plan
     }
 
     /// Asks the configured engine to pick the agent for a capability the local
-    /// resolver refused. The roster is sent only here — the case the model's
-    /// wording could not be placed at all — and only as a typed choice.
-    private func resolveWithEngine(_ capability: String) async -> String? {
-        let roster = agents.agents
-        guard !roster.isEmpty else { return nil }
+    /// vocabulary could not place. The roster is sent only here — the case the
+    /// model's wording could not be placed at all — and only as a typed choice.
+    private func askEngine(
+        _ wording: String,
+        roster: [AgentDefinition]
+    ) async -> EngineResolutionMemo.Answer {
         let question = DecisionQuestion.choice(
             id: "delegate_to",
             options: roster.map(\.name) + ["none"],
@@ -248,10 +301,13 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         let evaluation = await DecisionEngineCoordinator.evaluate(
             selection: env.config.decisionEngine,
             env: env,
-            state: DecisionState(query: capability),
+            state: DecisionState(query: wording),
             questions: [question]
         )
-        return Self.resolvedAgent(from: evaluation.batch, agents: roster)
+        guard let name = Self.resolvedAgent(from: evaluation.batch, agents: roster) else {
+            return .unresolved
+        }
+        return .agent(name)
     }
 
     /// The agent a `delegate_to` answer names, when the engine was confident
@@ -342,8 +398,8 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         case .failure(let problem):
             return .error(problem.message)
         case .success(let specs):
-            let resolutions = await engineResolutions(for: specs)
-            if let refusal = refusal(for: specs, engineResolutions: resolutions) { return .error(refusal) }
+            let plan = await capabilityPlan(for: specs)
+            if let refusal = refusal(for: specs, plan: plan) { return .error(refusal) }
             // The parent's own work is already consuming model time; a delegation
             // that fans wider than the pool is a batch that finishes later than
             // doing it serially would have.
@@ -352,7 +408,7 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
                 ? "\n\n(\(specs.count - capped.count) of \(specs.count) tasks were not started: "
                     + "at most \(Self.maxChildren) can be delegated at a time.)"
                 : ""
-            return .ok(Self.digest(await spawn(capped, engineResolutions: resolutions)) + note)
+            return .ok(Self.digest(await spawn(capped, plan: plan)) + note)
         }
     }
 
@@ -362,15 +418,15 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
     /// have settled. The pool capacity is re-read here so a mid-session change in
     /// settings takes effect on the next batch.
     public func spawn(_ specs: [SubagentSpec]) async -> [SubagentRun] {
-        await spawn(specs, engineResolutions: [:])
+        await spawn(specs, plan: await capabilityPlan(for: specs))
     }
 
-    /// The resolution-aware path: capabilities the decision engine already
-    /// placed are honoured here, so an engine-resolved task runs with the agent
-    /// it was resolved to rather than being re-guessed locally.
-    public func spawn(
+    /// The resolution-aware path: capabilities the plan already placed are
+    /// honoured here, so a resolved task runs with the agent it was resolved to
+    /// rather than being re-guessed locally.
+    func spawn(
         _ specs: [SubagentSpec],
-        engineResolutions: [String: String]
+        plan: CapabilityPlan
     ) async -> [SubagentRun] {
         guard !specs.isEmpty else { return [] }
         await gate.setCapacity(max(1, env.config.allowParallelSubagents))
@@ -384,17 +440,15 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
             // Resolved here, on the main actor, so the detached loop is handed a
             // value rather than a registry it would have to reach back for. An
             // agent the model named and got wrong is refused before this point,
-            // so a spec that names one always resolves. A capability wording
-            // resolves locally — or from the engine's resolution when the local
-            // match came up short — so a wording that reached here names an
-            // agent.
+            // so a spec that names one always resolves. A capability wording is
+            // placed by the plan — locally, from what was learned, or by the
+            // engine — so a wording that reached here names an agent.
             let effectiveAgent: String?
             var capabilityNote: String?
             if let agent = spec.agent {
                 effectiveAgent = agent
             } else if let capability = spec.capability, !capability.isEmpty,
-                      let resolved = engineResolutions[capability]
-                          ?? DelegateResolver.resolve(capability, agents: agents.agents).agentID {
+                      let resolved = plan.placements[DelegateResolver.normalize(capability)] {
                 effectiveAgent = resolved
                 capabilityNote = "capability '\(capability)'"
             } else {
@@ -915,6 +969,67 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
 /// A task list that could not be read, with the sentence to send back to the model.
 struct SpecProblem: Error, Sendable {
     var message: String
+}
+
+// MARK: - Engine placement memo
+
+/// What the decision engine said about one capability wording, for as long as
+/// the roster it said it about is unchanged.
+///
+/// The engine is asked about a wording the local vocabulary cannot place, and
+/// the same wording comes back: the model phrases a capability, is refused, and
+/// phrases it again next turn, or two tasks in one batch ask about the same
+/// thing. Without this, each of those is another round trip to a network model
+/// for an answer that cannot have changed while the roster stands still.
+///
+/// The answers are cleared — not corrected — when the roster moves, because
+/// every one of them was about the agents that existed when it was asked: a
+/// skill installed since may be the right home for a wording the engine placed
+/// elsewhere a minute ago. Negative answers are remembered too, so a wording
+/// nothing can place costs one refusal rather than one per spawn.
+struct EngineResolutionMemo {
+    enum Answer: Equatable {
+        case agent(String)
+        case unresolved
+    }
+
+    private var answers: [String: Answer] = [:]
+    private var roster: Int?
+
+    /// What the engine said about `wording`, or nil when it has not been asked.
+    mutating func answer(for wording: String, roster agents: [AgentDefinition]) -> Answer? {
+        refresh(for: agents)
+        return answers[wording]
+    }
+
+    mutating func record(
+        _ answer: Answer,
+        for wording: String,
+        roster agents: [AgentDefinition]
+    ) {
+        refresh(for: agents)
+        answers[wording] = answer
+    }
+
+    private mutating func refresh(for agents: [AgentDefinition]) {
+        let signature = Self.signature(agents)
+        guard roster != signature else { return }
+        roster = signature
+        answers.removeAll()
+    }
+
+    /// Everything a placement is made from: the names, what each agent says it
+    /// does, and the names its author declared. Lowercased, because casing is
+    /// the model's rather than the roster's and must not read as a change.
+    static func signature(_ agents: [AgentDefinition]) -> Int {
+        var hash = 5381
+        for agent in agents {
+            for text in [agent.name, agent.summary] + agent.aliases {
+                for byte in text.lowercased().utf8 { hash = (hash &* 33) &+ Int(byte) }
+            }
+        }
+        return hash
+    }
 }
 
 // MARK: - Tool call fragments

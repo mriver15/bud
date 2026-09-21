@@ -1340,6 +1340,78 @@ public enum BudSelfTest {
         c.check("nothing shared resolves to nothing",
                 unknown.agentID == nil && unknown.candidates.isEmpty)
 
+        // The words an agent's author declared for it. "w-9" is not a word — the
+        // tokenizer drops anything under three characters — so it can only match
+        // as a whole phrase, which is exactly the case this exists for: a W-9 is
+        // a PDF, and nothing in "pdf" or "reads and fills PDF forms" says so.
+        let declared = [
+            AgentDefinition(
+                name: "pdf", summary: "Reads and fills PDF forms.", instructions: "",
+                aliases: ["w-9", "tax form"]
+            )
+        ]
+        c.equal("a name the author declared resolves", 
+                DelegateResolver.resolve("w-9", agents: declared).agentID, "pdf")
+        c.check("...above the activation band",
+                DelegateResolver.resolve("w-9", agents: declared).confidence
+                    >= DelegateResolver.activateThreshold)
+        c.nilValue("without them the same wording resolves to nothing",
+                   DelegateResolver.resolve("tax form", agents: agents).agentID)
+        c.equal("...and with them the words widen the match",
+                DelegateResolver.resolve("tax form", agents: declared).agentID, "pdf")
+
+        // A wording the engine placed earlier. Read as evidence for this roster
+        // only, so a mapping left behind by an agent that is no longer installed
+        // cannot keep collecting work.
+        let learned = ["pokedex lookup": "getcompetitive"]
+        c.equal("a wording the engine placed resolves locally",
+                DelegateResolver.resolve("pokedex lookup", agents: agents, learned: learned).agentID,
+                "getcompetitive")
+        c.nilValue("a mapping naming an agent that is not here is ignored",
+                   DelegateResolver.resolve("expert in quantum chromodynamics", agents: agents,
+                                            learned: ["expert in quantum chromodynamics": "ghost"]).agentID)
+        c.nilValue("and its words do not widen a roster it is not part of",
+                   DelegateResolver.resolve("pokedex lookup analysis", agents: agents,
+                                            learned: ["pokedex lookup": "ghost"]).agentID)
+        c.check("a declared name wins over a mapping that disagrees",
+                DelegateResolver.resolve("w-9", agents: declared + agents,
+                                         learned: ["w-9": "getcompetitive"]).agentID == "pdf")
+        // What one placement buys the next: the engine's own words enter that
+        // agent's vocabulary, so a follow-up phrased the same way overlaps on
+        // evidence instead of paying for another call.
+        let widened = DelegateResolver.resolve(
+            "pokedex lookup analysis", agents: agents, learned: learned
+        )
+        c.equal("a placement widens the vocabulary it was made from", widened.agentID, "getcompetitive")
+        c.check("...at the activation band",
+                widened.confidence >= DelegateResolver.activateThreshold)
+
+        // The memo: the session's memory of what the engine answered, dropped
+        // when the roster it answered about changes.
+        var memo = EngineResolutionMemo()
+        c.nilValue("a wording the engine has not been asked about has no answer",
+                   memo.answer(for: "competitive pokemon analysis", roster: agents))
+        memo.record(.agent("getcompetitive"), for: "competitive pokemon analysis", roster: agents)
+        c.equal("an answer comes back for its own wording",
+                memo.answer(for: "competitive pokemon analysis", roster: agents),
+                .agent("getcompetitive"))
+        memo.record(.unresolved, for: "quantum chromodynamics", roster: agents)
+        c.equal("a refusal is remembered too",
+                memo.answer(for: "quantum chromodynamics", roster: agents), .unresolved)
+        var aliasMemo = EngineResolutionMemo()
+        aliasMemo.record(.agent("pdf"), for: "w-9", roster: declared)
+        c.equal("an answer is held while the roster stands",
+                aliasMemo.answer(for: "w-9", roster: declared), .agent("pdf"))
+        c.nilValue("a new agent drops every answer about the old roster",
+                   memo.answer(for: "competitive pokemon analysis",
+                               roster: agents + [AgentDefinition(
+                                   name: "cartographer", summary: "Maps places.", instructions: ""
+                               )]))
+        c.nilValue("and so does a declared name changing",
+                   aliasMemo.answer(for: "w-9", roster: [
+                       AgentDefinition(name: "pdf", summary: "Reads and fills PDF forms.", instructions: "")
+                   ]))
+
         // The engine-backed fallback: a typed delegate_to answer substitutes
         // for the local resolver, gated by the activation band — below it the
         // answer is a hint, not a decision, because running the wrong agent is
@@ -1377,12 +1449,12 @@ public enum BudSelfTest {
             ])])]),
             depth: 0, parentID: nil
         ) {
-            c.check("an unresolved capability is refused without the engine",
-                    supervisor.refusal(for: capsSpecs, engineResolutions: [:]) != nil)
-            c.check("...and passes once the engine placed it",
+            c.check("an unplaced capability is refused",
+                    supervisor.refusal(for: capsSpecs, plan: .init()) != nil)
+            c.check("...and passes once the plan placed it",
                     supervisor.refusal(
                         for: capsSpecs,
-                        engineResolutions: ["competitive pokemon analysis": "getcompetitive"]
+                        plan: .init(placements: ["competitive pokemon analysis": "getcompetitive"])
                     ) == nil)
         } else {
             c.check("the capability spec parses", false)
@@ -1917,6 +1989,24 @@ public enum BudSelfTest {
         } else {
             c.check("the jev selection round-trips", false)
         }
+
+        // The model a Jev call goes to: an alias that moves under you, or a
+        // version pinned on purpose. Only a pin is worth a line in the file.
+        var pinned = BudConfig()
+        pinned.jevModel = "jev-1.13.0"
+        if let data = try? JSONEncoder().encode(BudConfigLoader.StoredConfig(from: pinned)),
+           let decoded = try? JSONDecoder().decode(BudConfigLoader.StoredConfig.self, from: data) {
+            c.equal("a pinned Jev model round-trips",
+                    BudConfigLoader.apply(decoded, to: BudConfig()).jevModel, "jev-1.13.0")
+        } else {
+            c.check("a pinned Jev model round-trips", false)
+        }
+        c.nilValue("the shipped alias is not written to the file",
+                   BudConfigLoader.StoredConfig(from: BudConfig()).jevModel)
+        c.equal("a cleared pin falls back to the shipped alias",
+                DecisionEngineCoordinator.jevModel("   "), JevDecisionEngine.defaultModel)
+        c.equal("...and a pin is sent as written",
+                DecisionEngineCoordinator.jevModel("jev-1.13.0"), "jev-1.13.0")
 
         // Jev: the typed mapping against a stubbed TypeSafe endpoint, offline.
         final class StubProtocol: URLProtocol, @unchecked Sendable {
@@ -6042,6 +6132,18 @@ public enum BudSelfTest {
                 registry.named("pdf-forms")?.instructions, "Do the thing carefully.")
         c.equal("a skill agent knows where it came from",
                 registry.named("pdf-forms")?.origin.label, "Skill · pdf-forms")
+        // The words the author says people use for it travel with the agent: a
+        // task handed over in those words is matched against the vocabulary, and
+        // the author is the one party who knows them.
+        let aliased = Skill(
+            name: "w9", summary: "Forms.", license: nil, compatibility: nil,
+            metadata: ["triggers": "w-9, tax form"], allowedTools: nil,
+            delegation: "Fills in a form.", instructions: "Carefully."
+        )
+        c.equal("a skill's triggers become its agent's names",
+                AgentLibrary.from(skill: aliased)?.aliases, ["w-9", "tax form"])
+        c.equal("...and an agent with none has none",
+                AgentLibrary.from(skill: skill("plain", agent: "Anything.", tools: nil))?.aliases, [])
 
         // MARK: Servers
 
@@ -7246,6 +7348,24 @@ public enum BudSelfTest {
         c.equal("recording the same run again updates it rather than duplicating",
                 BudStore.recentRuns().count, 1)
         c.equal("with the newer state", BudStore.recentRuns().first?.state, .failed)
+
+        // MARK: Learned delegation
+
+        // What the decision engine placed, filed so the next session answers it
+        // locally. One row per wording, replaced rather than duplicated when it
+        // is learned again.
+        c.check("a wording the engine placed is filed",
+                BudStore.rememberDelegateAlias("competitive pokemon analysis", agent: "getcompetitive"))
+        c.equal("...and read back", BudStore.delegateAliases()["competitive pokemon analysis"],
+                "getcompetitive")
+        BudStore.rememberDelegateAlias("competitive pokemon analysis", agent: "scout")
+        c.equal("re-learning a wording replaces it rather than adding a row",
+                BudStore.delegateAliases()["competitive pokemon analysis"], "scout")
+        c.equal("...so one wording is one row", BudStore.delegateAliases().count, 1)
+        c.check("an empty wording is refused", !BudStore.rememberDelegateAlias("  ", agent: "scout"))
+        c.check("...and a mapping to nothing with it",
+                !BudStore.rememberDelegateAlias("something real", agent: " "))
+        c.equal("...leaving what was already there alone", BudStore.delegateAliases().count, 1)
 
         // MARK: Legacy import
 

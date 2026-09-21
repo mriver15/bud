@@ -137,6 +137,15 @@ public struct BudConfig: Sendable, Codable, Hashable {
     /// other secrets; empty until the user pastes one, and an empty key makes
     /// the coordinator use the deterministic floor.
     public var typesafeAPIKey: String
+    /// Which Jev model answers, by name or alias.
+    ///
+    /// `jev-latest` by default, which tracks the newest release — so the answers
+    /// behind it can change without a change here, and a confidence threshold
+    /// tuned against one version is being asked to hold for the next. TypeSafe's
+    /// own advice is to pin the versioned id when the thresholds matter, and this
+    /// is where that happens; the served version is recorded in every answer's
+    /// rationale, so the drift is visible either way.
+    public var jevModel: String
     /// How much of the conversation the model is sent, in characters.
     ///
     /// History grew without limit: a tool result is capped at 24,000 characters
@@ -296,6 +305,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         uiOutputDialect: Bool = false,
         decisionEngine: DecisionEngineID = .deterministic,
         typesafeAPIKey: String = "",
+        jevModel: String = JevDecisionEngine.defaultModel,
         historyBudgetChars: Int = 120_000,
         hasCompletedOnboarding: Bool = false,
         updateRepo: String = BudConfig.defaultUpdateRepo,
@@ -324,6 +334,7 @@ public struct BudConfig: Sendable, Codable, Hashable {
         self.uiOutputDialect = uiOutputDialect
         self.decisionEngine = decisionEngine
         self.typesafeAPIKey = typesafeAPIKey
+        self.jevModel = jevModel
         self.historyBudgetChars = historyBudgetChars
         self.hasCompletedOnboarding = hasCompletedOnboarding
         self.updateRepo = updateRepo
@@ -730,6 +741,11 @@ public enum BudConfigLoader {
         if let v = stored.decisionEngine {
             config.decisionEngine = DecisionEngineID(rawValue: v) ?? .deterministic
         }
+        // A model name is not a value with a failure mode to degrade to: an
+        // unknown one is TypeSafe's to refuse, and guessing a fallback here would
+        // hide a pin that no longer resolves behind answers from a model the user
+        // did not choose.
+        if let v = stored.jevModel, !v.isEmpty { config.jevModel = v }
         if let v = stored.historyBudgetChars { config.historyBudgetChars = v }
         if let v = stored.hasCompletedOnboarding { config.hasCompletedOnboarding = v }
         return config
@@ -1132,6 +1148,7 @@ public enum BudConfigLoader {
         public var contextCompilerV2: Bool?
         public var uiOutputDialect: Bool?
         public var decisionEngine: String?
+        public var jevModel: String?
         public var historyBudgetChars: Int?
         public var hasCompletedOnboarding: Bool?
 
@@ -1183,6 +1200,12 @@ public enum BudConfigLoader {
             self.decisionEngine = config.decisionEngine == .deterministic
                 ? nil
                 : config.decisionEngine.rawValue
+            // Left out while it is the shipped alias, like the engine selection:
+            // the default is what a fresh install is, and only a version pinned
+            // on purpose is worth a line in the file.
+            self.jevModel = config.jevModel == JevDecisionEngine.defaultModel
+                ? nil
+                : config.jevModel
             self.historyBudgetChars = config.historyBudgetChars
             // Left out when false, like `compactSchemas`: the default is what a
             // fresh install already is, and the flag is only written once the
@@ -1216,6 +1239,7 @@ public enum BudConfigLoader {
             contextCompilerV2: Bool? = nil,
             uiOutputDialect: Bool? = nil,
             decisionEngine: String? = nil,
+            jevModel: String? = nil,
             hasCompletedOnboarding: Bool? = nil,
             apiKey: String? = nil,
             baseURL: String? = nil
@@ -1244,6 +1268,7 @@ public enum BudConfigLoader {
             self.contextCompilerV2 = contextCompilerV2
             self.uiOutputDialect = uiOutputDialect
             self.decisionEngine = decisionEngine
+            self.jevModel = jevModel
             self.hasCompletedOnboarding = hasCompletedOnboarding
             self.apiKey = apiKey
             self.baseURL = baseURL
