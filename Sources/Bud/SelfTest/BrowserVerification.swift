@@ -459,6 +459,16 @@ public enum BudBrowserVerification {
             var data = event.data;
             if (data && data.id === 1) {
               window.parent.postMessage({jsonrpc:'2.0', method:'ui/notifications/initialized'}, '*');
+              window.parent.postMessage({jsonrpc:'2.0', id:2, method:'tools/call', params:{name:'team_doctor', arguments:{}}}, '*');
+              window.parent.postMessage({jsonrpc:'2.0', id:3, method:'resources/read', params:{uri:'ui://x'}}, '*');
+            }
+            if (data && data.id === 2) {
+              window.parent.postMessage({jsonrpc:'2.0', method:'ui/notifications/fixture',
+                params:{toolsCall: !!(data.result && data.result.isError === true)}}, '*');
+            }
+            if (data && data.id === 3) {
+              window.parent.postMessage({jsonrpc:'2.0', method:'ui/notifications/fixture',
+                params:{resourcesRead: !!(data.error && data.error.code === -32000)}}, '*');
             }
             if (data && data.method === 'ui/notifications/tool-result') {
               document.getElementById('status').textContent =
@@ -486,9 +496,24 @@ public enum BudBrowserVerification {
                 ]),
                 isError: false, contentHash: appResource.contentHash
             )
-            let coordinator = MCPAppCoordinator(resource: appResource, attachment: attachment)
+            let coordinator = MCPAppCoordinator(resource: appResource, attachment: attachment) { _ in
+                .object([
+                    "content": .array([.object(["type": .string("text"), "text": .string("no server in the fixture")])]),
+                    "isError": .bool(true),
+                ])
+            }
             var reportedSize: CGSize?
             coordinator.bridge.onSizeChange = { reportedSize = $0 }
+            final class FixtureBox {
+                var toolsCall: Bool?
+                var resourcesRead: Bool?
+            }
+            let fixtureBox = FixtureBox()
+            coordinator.bridge.onMessage = { method, params in
+                guard method == "ui/notifications/fixture" else { return }
+                if let value = params["toolsCall"]?.boolValue { fixtureBox.toolsCall = value }
+                if let value = params["resourcesRead"]?.boolValue { fixtureBox.resourcesRead = value }
+            }
 
             // WebKit defers work for a view that is not in a window — the same
             // reason the browser engine parks its page — so the app view is
@@ -513,6 +538,14 @@ public enum BudBrowserVerification {
                     reportedSize, CGSize(width: 640, height: 400))
             c.check("...with the host shell intact",
                     (try? await coordinator.webView.evaluateJavaScript("typeof window.__budSetResource")) as? String == "function")
+
+            // Stage 2: an app-initiated `tools/call` routes to the host's async
+            // handler (the fixture's canned error answer), and an unserved
+            // `resources/read` fails closed as a JSON-RPC *error*, never a result
+            // that only looks like one.
+            _ = await waitUntil(timeout: 3) { fixtureBox.toolsCall != nil && fixtureBox.resourcesRead != nil }
+            c.check("an app tools/call routes to the async handler", fixtureBox.toolsCall == true)
+            c.check("an unserved resources/read fails closed as a JSON-RPC error", fixtureBox.resourcesRead == true)
 
             // A top-frame navigation away from the host is refused outright —
             // the delegate is the last line, after the sandbox. What proves the

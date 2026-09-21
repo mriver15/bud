@@ -353,47 +353,61 @@ public final class MCPManager: MCPManaging, ToolProvider {
         }
     }
 
-    /// The app-initiated call route: a tool, named and scoped to one server, on
-    /// the connection the app was created on. No global tool-name lookup, so web
-    /// content can never name another server's tool and have it routed.
-    public func invokeAppTool(
+    /// The app-initiated `tools/call` route: a tool, named and scoped to one
+    /// server, on the connection the app was created on. No global tool-name
+    /// lookup, so web content can never name another server's tool and have it
+    /// routed.
+    ///
+    /// The answer is always a spec-shaped `CallToolResult` — a refusal or
+    /// failure is `isError: true` with a text block, never a JSON-RPC error —
+    /// because the app's SDK turns a JSON-RPC error into a promise rejection the
+    /// app may not catch, and a hang reads worse than an error it can show.
+    public func serveAppToolCall(
         serverID: String,
-        tool: String,
-        arguments: JSONValue,
+        params: JSONValue,
         generation: Int
-    ) async -> ToolResult {
+    ) async -> JSONValue {
         guard let config = servers.first(where: { $0.id == serverID }) else {
-            return .error("No MCP server with that id is configured.")
+            return Self.toolError("No MCP server with that id is configured.")
         }
         guard statuses[config.id]?.state == .ready, let client = clients[config.id] else {
-            return .error("MCP server '\(config.name)' is not connected. Reconnect it in Settings.")
+            return Self.toolError("MCP server '\(config.name)' is not connected. Reconnect it in Settings.")
         }
         guard await client.connectionGeneration == generation else {
-            return .error("The app's connection has been replaced. Reload it.")
+            return Self.toolError("The app's connection has been replaced. Reload it.")
         }
         guard await client.supportsApps() else {
-            return .error("The server does not support MCP Apps.")
+            return Self.toolError("The server does not support MCP Apps.")
         }
+        guard let tool = params["name"]?.stringValue else {
+            return Self.toolError("tools/call needs a 'name'.")
+        }
+        let arguments = params["arguments"].flatMap { $0.objectValue != nil ? $0 : nil } ?? .object([:])
         guard let mcpTool = (await client.cachedTools).first(where: { $0.name == tool }) else {
-            return .error("'\(tool)' is not a tool of '\(config.name)'.")
+            return Self.toolError("'\(tool)' is not a tool of '\(config.name)'.")
         }
         guard mcpTool.ui?.isAppCallable ?? false else {
-            return .error("'\(tool)' is not callable by the app.")
+            return Self.toolError("'\(tool)' is not callable by the app.")
         }
         let route = Route(serverID: config.id, serverName: config.name, tool: tool)
         if let refusal = await refusalUnlessConfirmed(route: route, arguments: arguments) {
-            return refusal
+            return Self.toolError(refusal.text.isEmpty ? "The tool call was refused." : refusal.text)
         }
         do {
             let full = try await client.callToolFull(name: tool, arguments: arguments)
-            return ToolResult(
-                text: full.renderedText,
-                ui: MCPClient.surface(for: full.content, titled: tool),
-                isError: full.isError
-            )
+            return MCPAppLoader.boundedResult(full)
         } catch {
-            return .error("MCP tool '\(tool)' failed: \(MCPError.wrap(error).errorDescription ?? "unknown error")")
+            return Self.toolError("MCP tool '\(tool)' failed: \(MCPError.wrap(error).errorDescription ?? "unknown error")")
         }
+    }
+
+    /// A `CallToolResult` whose `isError` carries a message, so the app's SDK
+    /// resolves the promise and its result handler renders the text.
+    private static func toolError(_ message: String) -> JSONValue {
+        .object([
+            "content": .array([.object(["type": .string("text"), "text": .string(message)])]),
+            "isError": .bool(true),
+        ])
     }
 
     /// Asks before an external mutation, when there is anyone to ask, the server

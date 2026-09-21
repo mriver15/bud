@@ -649,7 +649,13 @@ private struct ToolActivityRow: View {
         Group {
             switch appPhase {
             case .rendered(let resource):
-                MCPAppShell(resource: resource, attachment: app)
+                MCPAppShell(resource: resource, attachment: app) { params in
+                    await model.mcp.serveAppToolCall(
+                        serverID: app.serverID,
+                        params: params,
+                        generation: app.generation
+                    )
+                }
             case .failed(let message):
                 HStack(spacing: Bud.Space.sm) {
                     Image(systemName: "exclamationmark.triangle.fill")

@@ -39,7 +39,11 @@ public final class MCPAppCoordinator: NSObject, WKNavigationDelegate {
     private var injected = false
     private var tornDown = false
 
-    public init(resource: MCPAppResource, attachment: MCPAppAttachment) {
+    public init(
+        resource: MCPAppResource,
+        attachment: MCPAppAttachment,
+        onServerToolCall: @escaping (JSONValue) async -> JSONValue
+    ) {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.suppressesIncrementalRendering = true
@@ -68,6 +72,7 @@ public final class MCPAppCoordinator: NSObject, WKNavigationDelegate {
         bridge.onSizeChange = { [weak self] size in
             self?.onSizeChange?(size)
         }
+        bridge.onServerToolCall = onServerToolCall
 
         webView.loadHTMLString(MCPAppBridge.hostPageHTML, baseURL: nil)
     }
@@ -123,10 +128,15 @@ public final class MCPAppCoordinator: NSObject, WKNavigationDelegate {
 public struct MCPAppWebView: NSViewRepresentable {
     let resource: MCPAppResource
     let attachment: MCPAppAttachment
+    let onServerToolCall: (JSONValue) async -> JSONValue
     let onSizeChange: (CGSize?) -> Void
 
     public func makeCoordinator() -> MCPAppCoordinator {
-        let coordinator = MCPAppCoordinator(resource: resource, attachment: attachment)
+        let coordinator = MCPAppCoordinator(
+            resource: resource,
+            attachment: attachment,
+            onServerToolCall: onServerToolCall
+        )
         coordinator.onSizeChange = onSizeChange
         return coordinator
     }
@@ -156,12 +166,17 @@ public struct MCPAppWebView: NSViewRepresentable {
 public struct MCPAppShell: View {
     let resource: MCPAppResource
     let attachment: MCPAppAttachment
+    let onServerToolCall: (JSONValue) async -> JSONValue
 
     @BudState private var height: CGFloat = 520
 
     public var body: some View {
         VStack(alignment: .leading, spacing: Bud.Space.xs) {
-            MCPAppWebView(resource: resource, attachment: attachment) { size in
+            MCPAppWebView(
+                resource: resource,
+                attachment: attachment,
+                onServerToolCall: onServerToolCall
+            ) { size in
                 guard let size else { return }
                 // The app reports its content height; the host fits it, within
                 // the flexible bound it declared, so a tall app is not clipped.

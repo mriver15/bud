@@ -45,6 +45,9 @@ public final class MCPAppBridge: NSObject, WKScriptMessageHandler {
     /// A message the app sent the host (V1: none are implemented; kept for the
     /// future bridge rows).
     public var onMessage: ((String, JSONValue) -> Void)?
+    /// The app asked the server to run a tool on its behalf. Wired by the view
+    /// to the MCP manager; returns the wire `CallToolResult` to send back.
+    public var onServerToolCall: ((JSONValue) async -> JSONValue)?
 
     private var initialized = false
     private var nextID = 1
@@ -61,46 +64,66 @@ public final class MCPAppBridge: NSObject, WKScriptMessageHandler {
         receivedCount += 1
         let value = JSONValue(any: message.body)
         guard let method = value["method"]?.stringValue else { return }
+        let params = value["params"] ?? .object([:])
         if let id = value["id"], !id.isNull {
-            send(JSONRPCResponse(id: id, result: respond(method, value["params"] ?? .object([:]))).json)
+            // `tools/call` is the one route that talks to the server, and the
+            // server is async, so it cannot share the synchronous answer path.
+            if method == "tools/call", let onServerToolCall {
+                Task { [weak self] in
+                    guard let self else { return }
+                    let result = await onServerToolCall(params)
+                    self.send(JSONRPCResponse(id: id, result: result).json)
+                }
+                return
+            }
+            switch respond(method, params) {
+            case .result(let result):
+                send(JSONRPCResponse(id: id, result: result).json)
+            case .error(let error):
+                send(JSONRPCResponse(id: id, error: error).json)
+            }
         } else {
-            handleNotification(method, params: value["params"] ?? .object([:]))
+            handleNotification(method, params: params)
         }
     }
 
-    /// The result or error for a request, as the spec's `result` field. V1
-    /// answers the handshake and `ping`, opens links after a scheme check, and
-    /// refuses everything else — the app's tool calls, reads and messages are
-    /// the *next* milestone, and failing closed is the whole of their story now.
-    private func respond(_ method: String, _ params: JSONValue) -> JSONValue {
+    /// The answer for a request the host serves synchronously. Anything it does
+    /// not serve fails closed as a *JSON-RPC error* — never a `result` that only
+    /// looks like an answer — so the app's SDK rejects the promise rather than
+    /// handing its result handler an empty object.
+    private enum Response {
+        case result(JSONValue)
+        case error(JSONRPCError)
+    }
+
+    private func respond(_ method: String, _ params: JSONValue) -> Response {
         switch method {
         case "ui/initialize":
-            return initializeResult()
+            return .result(initializeResult())
         case "ping":
-            return .object([:])
+            return .result(.object([:]))
         case "ui/open-link":
             guard let url = params["url"]?.stringValue,
                   let approved = MCPAppPolicy.openableLink(url)
             else {
-                return error(-32000, "Link opening denied: only http and https are allowed.")
+                return .error(JSONRPCError(
+                    code: -32000,
+                    message: "Link opening denied: only http and https are allowed."
+                ))
             }
             NSWorkspace.shared.open(approved)
-            return .object([:])
+            return .result(.object([:]))
         case "ui/request-display-mode":
-            // Only inline exists in V1, so the answer is always inline.
-            return .object(["mode": .string("inline")])
-        case "tools/call", "resources/read", "ui/message", "ui/update-model-context":
-            return error(-32000, "\(method) is not available in this version.")
+            // Only inline exists, so the answer is always inline.
+            return .result(.object(["mode": .string("inline")]))
+        case "tools/call":
+            // Routed asynchronously above; this is the no-handler fallback.
+            return .error(JSONRPCError(code: -32000, message: "tools/call is not available in this version."))
+        case "resources/read", "ui/message", "ui/update-model-context":
+            return .error(JSONRPCError(code: -32000, message: "\(method) is not available in this version."))
         default:
-            return error(-32601, "Method not found: \(method)")
+            return .error(JSONRPCError(code: -32601, message: "Method not found: \(method)"))
         }
-    }
-
-    private func error(_ code: Int, _ message: String) -> JSONValue {
-        .object([
-            "code": .number(Double(code)),
-            "message": .string(message),
-        ])
     }
 
     private func handleNotification(_ method: String, params: JSONValue) {
