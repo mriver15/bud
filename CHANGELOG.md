@@ -12,6 +12,24 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.12.0
+
+### Smarter context, captured surfaces, faster streaming
+
+Bud hands work to an agent when nothing it has directly covers the request —
+delegation is the fallback, not a keyword. Remembered context engages on
+evidence: memory that touches the request rides along automatically, and what
+Bud remembers now reaches its cognitive store.
+
+Generated surfaces gained a camera: hover a rendered block and click to save
+it as a PNG to Bud's screenshots folder (and the clipboard).
+
+Streaming got faster: messages that have finished are never re-parsed,
+conversation saves run in the background, and following the stream re-lays out
+at a steady 10Hz instead of once per token. Browsing turns also carry about
+170 fewer tokens of tool prose.
+
+
 ## Bud 2.11.6
 
 ### Stop means stop, and the composer remembers
