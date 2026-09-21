@@ -1785,16 +1785,20 @@ public enum BudSelfTest {
             .score(id: "ambiguity", levels: ["low", "medium", "high"], instructions: ""),
         ]
         StubProtocol.canned = (200, #"{"model":"jev-test","answers":{"needs_browser":{"type":"noul","noul":0.95},"complexity":{"type":"choice","choice":"complex","confidence":0.8},"ambiguity":{"type":"score","score":1.9,"confidence":0.9}},"usage":{"input_tokens":100,"output_tokens":12}}"#)
-        actor UsageBox {
+        // A synchronous box rather than an actor round-trip: the callback runs
+        // during `evaluate`, and an unstructured Task hop from it races the
+        // assertion below — a race the optimised build loses every time.
+        final class UsageBox: @unchecked Sendable {
+            private let lock = NSLock()
             private var stored: (Int, Int)?
-            func set(_ value: (Int, Int)) { stored = value }
-            func get() -> (Int, Int)? { stored }
+            func set(_ value: (Int, Int)) { lock.withLock { stored = value } }
+            func get() -> (Int, Int)? { lock.withLock { stored } }
         }
         let usageBox = UsageBox()
         let jev = JevDecisionEngine(
             apiKey: "test-key",
             session: URLSession(configuration: stubConfig),
-            onUsage: { input, output in Task { await usageBox.set((input, output)) } }
+            onUsage: { input, output in usageBox.set((input, output)) }
         )
         let jevBatch = try? await jev.evaluate(state: DecisionState(query: "x"), questions: jevQuestions)
         c.check("jev answers booleans from the noul probability",
@@ -1804,7 +1808,7 @@ public enum BudSelfTest {
         c.equal("...and typed choices", jevBatch?.answer(for: "complexity")?.choiceValue, "complex")
         c.equal("...and scores rounded to the nearest level",
                 jevBatch?.answer(for: "ambiguity")?.scoreValue, "high")
-        c.equal("...and reports its token usage", await usageBox.get()?.0, 100)
+        c.equal("...and reports its token usage", usageBox.get()?.0, 100)
 
         StubProtocol.canned = (401, #"{"error":"unauthorized"}"#)
         let rejected = try? await JevDecisionEngine(
