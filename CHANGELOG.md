@@ -12,6 +12,42 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.15.0
+
+### Streaming costs a fraction of what it did, and the shadow recording stops running for nobody
+
+Three changes, all of them work that happened and nothing the user asked for.
+
+**The transcript is repainted at a display rate, not once per token.** Every
+token from the model used to be written straight into the transcript, which
+re-parsed and re-laid out the whole message being streamed — work proportional
+to the answer so far, repeated for each of its tokens, so the cost of a long
+answer grew with the square of its length. Deltas now accumulate and the
+transcript is handed what it has about eight times a second, with the first
+token published immediately so an answer still starts appearing the moment it
+starts arriving, and an unconditional flush at the end of every round so nothing
+is ever left unpainted. What you read is identical; what it took to show it is
+not.
+
+**The three-dot indicator and the "Thinking…" shimmer move at half the rate.**
+Twenty times a second was a frame rate nothing there needed — the dots ride a
+1.2-second sine and the shimmer sweeps in 1.6 seconds, so the step size is
+invisible while the work it saves is not. Each step re-composed the panel around
+them for the entire length of every turn.
+
+**The per-round shadow recording is off unless someone asks for it.** Bud's
+context map, its cognition and decision evidence, and the divergences between
+them are the parity evidence for the planner rework — and nothing in the app
+reads any of it. It was running on every round of every turn regardless, and it
+is the most expensive thing Bud did per round: a second memory retrieval, a
+second capability-index build, another walk of the skills directory, and a
+string of synchronous evidence writes on the main thread. The analysis itself
+still runs, because the execution posture it carries is the advisory line shown
+when a command is about to run; the measurement around it is now behind
+**Shadow diagnostics** in Settings › General, off, and on in the harnesses that
+assert on it.
+
+
 ## Bud 2.14.0
 
 ### Delegation remembers what it was taught, and Jev's model can be pinned
