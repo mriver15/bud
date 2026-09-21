@@ -49,7 +49,7 @@ public struct DecisionState: Sendable, Equatable {
 /// A typed question (§3.2 of the roadmap): routing returns enums, booleans and
 /// scores — not prose that must be parsed back out of a paragraph.
 public enum DecisionQuestion: Sendable, Equatable {
-    case boolean(id: String, instructions: String)
+    case boolean(id: String, instructions: String, criteria: BooleanCriteria? = nil)
     /// `criteria` maps each option to a rubric the engine can judge by; nil
     /// entries answer "no extra detail". Used by `delegate_to`, where the
     /// options are agent names and the rubrics are what each agent does.
@@ -58,8 +58,21 @@ public enum DecisionQuestion: Sendable, Equatable {
 
     public var id: String {
         switch self {
-        case .boolean(let id, _), .choice(let id, _, _, _), .score(let id, _, _): return id
+        case .boolean(let id, _, _), .choice(let id, _, _, _), .score(let id, _, _): return id
         }
+    }
+}
+
+/// The two sides of a yes/no boundary, in the noul criteria shape: when the
+/// boundary is subtle, each side pins it down with what it does — and does
+/// not — mean. Empty sides are omitted from the wire question.
+public struct BooleanCriteria: Sendable, Equatable {
+    public var yes: String
+    public var no: String
+
+    public init(yes: String, no: String) {
+        self.yes = yes
+        self.no = no
     }
 }
 
@@ -135,22 +148,42 @@ public struct DecisionBatch: Sendable, Equatable {
 
 /// The §5.1 initial batch: the ten decisions every round makes, as typed
 /// questions. `domains` is the compact capability-group list the
-/// `primary_domain` choice is offered from.
+/// `primary_domain` choice is offered from; `domainCriteria` carries each
+/// group's summary as its rubric, so the engine reads what the groups do
+/// rather than guessing from bare names.
 public enum DecisionQuestions {
-    public static func initial(domains: [String]) -> [DecisionQuestion] {
+    public static func initial(
+        domains: [String],
+        domainCriteria: [String: String]? = nil
+    ) -> [DecisionQuestion] {
         [
             .boolean(id: "needs_files", instructions: "Whether the request needs file reading or writing."),
             .boolean(id: "needs_browser", instructions: "Whether the request needs the live browser."),
             .boolean(id: "needs_web", instructions: "Whether the request needs fetching from the web."),
-            .boolean(id: "needs_memory", instructions: "Whether the request draws on remembered context."),
+            .boolean(
+                id: "needs_memory",
+                instructions: "Whether the request draws on remembered context.",
+                criteria: BooleanCriteria(
+                    yes: "The request draws on remembered context: retrieval found candidates that speak to it.",
+                    no: "The request stands alone; nothing remembered is needed to answer it."
+                )
+            ),
             .boolean(id: "needs_ui", instructions: "Whether the answer should be a structured surface."),
-            .boolean(id: "needs_delegate", instructions: "Whether the request has no directly matching skill, subagent, or tool, so the work must be handed to an agent."),
+            .boolean(
+                id: "needs_delegate",
+                instructions: "Whether the request has no directly matching skill, subagent, or tool, so the work must be handed to an agent.",
+                criteria: BooleanCriteria(
+                    yes: "The request explicitly hands work to an agent, or none of the directly matching capabilities covers it.",
+                    no: "A directly named skill, subagent, tool or connected server covers the request; this conversation can do the work."
+                )
+            ),
             .choice(id: "complexity", options: ["trivial", "normal", "complex", "long_horizon"],
                     instructions: "How large the task reads."),
             .choice(id: "mutation_intent", options: ["read", "localWrite", "execute", "externalMutation"],
                     instructions: "What the request asks to change."),
             .choice(id: "primary_domain", options: domains,
-                    instructions: "The capability group the request is about."),
+                    instructions: "The capability group the request is about.",
+                    criteria: domainCriteria),
             .score(id: "ambiguity", levels: ["low", "medium", "high"],
                    instructions: "How underspecified the request reads."),
         ]

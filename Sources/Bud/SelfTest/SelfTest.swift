@@ -1974,6 +1974,34 @@ public enum BudSelfTest {
                 jevBatch?.answer(for: "ambiguity")?.scoreValue, "high")
         c.equal("...and reports its token usage", usageBox.get()?.0, 100)
 
+        // The wire format: the advanced noul/choice criteria shapes the
+        // TypeSafe primitives document, so a question that carries them ships
+        // them as structure rather than as flattened strings.
+        let structuredQuestions: [DecisionQuestion] = [
+            .boolean(id: "needs_delegate", instructions: "delegation?",
+                     criteria: BooleanCriteria(yes: "nothing local covers it",
+                                               no: "a direct match covers it")),
+            .boolean(id: "plain", instructions: "plain"),
+            .choice(id: "primary_domain", options: ["Browser", "none"], instructions: "domain?",
+                    criteria: ["Browser": "live pages"]),
+        ]
+        let body = JevDecisionEngine.requestBody(
+            state: DecisionState(query: "x"), model: "jev-latest", questions: structuredQuestions
+        )
+        c.equal("the noul boundary ships as true/false criteria",
+                body["questions"]?["needs_delegate"]?["criteria"]?["true"]?.stringValue,
+                "nothing local covers it")
+        c.equal("...and the no side with it",
+                body["questions"]?["needs_delegate"]?["criteria"]?["false"]?.stringValue,
+                "a direct match covers it")
+        c.check("a boolean without criteria ships none",
+                body["questions"]?["plain"]?["criteria"] == nil)
+        c.equal("choice rubrics ship per option",
+                body["questions"]?["primary_domain"]?["criteria"]?["Browser"]?.stringValue,
+                "live pages")
+        c.check("...and options without rubrics ship null",
+                body["questions"]?["primary_domain"]?["criteria"]?["none"] == .null)
+
         StubProtocol.canned = (401, #"{"error":"unauthorized"}"#)
         let rejected = try? await JevDecisionEngine(
             apiKey: "bad", session: URLSession(configuration: stubConfig)
