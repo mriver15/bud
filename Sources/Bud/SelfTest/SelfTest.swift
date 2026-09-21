@@ -1240,7 +1240,8 @@ public enum BudSelfTest {
     /// roster growth out of the parent prompt, and the delegate resolution that
     /// replaces it. Pure functions over synthetic inventories, so the bands,
     /// ceilings and refusal behaviour are asserted exactly.
-    static func capabilityIndex() -> SelfTestReport {
+    @MainActor
+    static func capabilityIndex() async -> SelfTestReport {
         let c = Checker(suite: "capabilities")
 
         func tool(
@@ -1339,18 +1340,72 @@ public enum BudSelfTest {
         c.check("nothing shared resolves to nothing",
                 unknown.agentID == nil && unknown.candidates.isEmpty)
 
-        // The compact spawn description is the O(1) property: it does not take
-        // the roster as input, so it cannot grow with it.
+        // The engine-backed fallback: a typed delegate_to answer substitutes
+        // for the local resolver, gated by the activation band — below it the
+        // answer is a hint, not a decision, because running the wrong agent is
+        // a whole conversation wasted.
+        func delegateBatch(_ choice: String?, _ confidence: Double) -> DecisionBatch {
+            guard let choice else { return DecisionBatch(engineID: "test", answers: []) }
+            return DecisionBatch(engineID: "test", answers: [
+                DecisionAnswer(questionID: "delegate_to", kind: .choice(choice),
+                               confidence: confidence, rationale: "typed choice"),
+            ])
+        }
+        c.equal("a confident engine pick names the agent",
+                SubagentSupervisor.resolvedAgent(from: delegateBatch("getcompetitive", 0.92), agents: agents),
+                "getcompetitive")
+        c.check("'none' is a refusal, not an agent",
+                SubagentSupervisor.resolvedAgent(from: delegateBatch("none", 0.92), agents: agents) == nil)
+        c.check("below the activation band the answer is not substituted",
+                SubagentSupervisor.resolvedAgent(from: delegateBatch("getcompetitive", 0.6), agents: agents) == nil)
+        c.check("a name outside the roster is not substituted",
+                SubagentSupervisor.resolvedAgent(from: delegateBatch("ghost", 0.95), agents: agents) == nil)
+        c.check("an unanswered question resolves to nothing",
+                SubagentSupervisor.resolvedAgent(from: delegateBatch(nil, 0), agents: agents) == nil)
+
+        // A capability the engine placed is no longer refused: the resolution
+        // stands in for the local resolver that could not place it.
+        let supRegistry = AgentRegistry()
+        supRegistry.rebuild(skills: [], servers: [MCPServerConfig(name: "getcompetitive")])
+        let supervisor = SubagentSupervisor(
+            env: AppEnvironment(config: BudConfig()), agents: supRegistry
+        )
+        if case .success(let capsSpecs) = SubagentSupervisor.parse(
+            .object(["tasks": .array([.object([
+                "title": .string("t"), "prompt": .string("p"),
+                "capability": .string("competitive pokemon analysis"),
+            ])])]),
+            depth: 0, parentID: nil
+        ) {
+            c.check("an unresolved capability is refused without the engine",
+                    supervisor.refusal(for: capsSpecs, engineResolutions: [:]) != nil)
+            c.check("...and passes once the engine placed it",
+                    supervisor.refusal(
+                        for: capsSpecs,
+                        engineResolutions: ["competitive pokemon analysis": "getcompetitive"]
+                    ) == nil)
+        } else {
+            c.check("the capability spec parses", false)
+        }
+
+        // The compact spawn description carries a bounded roster digest: the
+        // model knows what it can delegate to without the prompt growing with
+        // the roster the way the full description does.
         let manyAgents = (0..<50).map {
             AgentDefinition(name: "agent\($0)", summary: "Does thing \($0).", instructions: "")
         }
         let rosterText = manyAgents.map { "- \($0.name): \($0.summary)" }.joined(separator: "\n")
         let bigFull = SubagentSupervisor.spawnDescription(roster: rosterText)
-        let compactDesc = SubagentSupervisor.spawnDescriptionCompact()
+        let compactDesc = SubagentSupervisor.spawnDescriptionCompact(agents: manyAgents)
         c.check("the compact description does not grow with the roster",
                 compactDesc.count < bigFull.count)
-        c.check("...and names none of the roster entries",
-                manyAgents.allSatisfy { !compactDesc.contains($0.name) })
+        c.check("...and the digest is bounded to the cap",
+                SubagentSupervisor.rosterDigest(manyAgents).split(separator: "\n").count <= 13)
+        c.check("...and names only the capped agents",
+                compactDesc.contains("agent0") && !compactDesc.contains("agent12"))
+        let emptyDigest = SubagentSupervisor.spawnDescriptionCompact(agents: [])
+        c.check("...and an empty roster carries no digest at all",
+                !emptyDigest.contains("Agents available this session:"))
         c.check("...and points at capability resolution", compactDesc.contains("capability"))
         c.check("...but keeps the shared contract",
                 compactDesc.hasPrefix(SubagentSupervisor.spawnDescription(roster: "")))
@@ -1992,6 +2047,8 @@ public enum BudSelfTest {
         c.check("a UI-less round omits the interface schemas",
                 !uiLess.plan.descriptors.contains { $0.name == GenUIToolProvider.renderToolName
                     || $0.name == GenUIToolProvider.findToolName })
+        c.check("a decision to delegate offers the spawn tool",
+                uiLess.plan.descriptors.contains { $0.name == "spawn_subagents" })
         let uiWanted = await stageA(for: "Compare these three options in a table")
         c.check("...but a presentation request keeps them",
                 uiWanted.plan.descriptors.contains { $0.name == GenUIToolProvider.renderToolName })

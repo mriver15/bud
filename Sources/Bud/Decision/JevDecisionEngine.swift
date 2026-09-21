@@ -135,14 +135,17 @@ public struct JevDecisionEngine: DecisionEngine {
                     "type": .string("noul"),
                     "instructions": .string(instructions),
                 ])
-            case .choice(let id, let options, let instructions):
+            case .choice(let id, let options, let instructions, let criteria):
                 // Criteria maps option to rubric; null means "no extra detail".
-                var criteria: [String: JSONValue] = [:]
-                for option in options { criteria[option] = .null }
+                var criteriaMap: [String: JSONValue] = [:]
+                for option in options {
+                    let rubric = criteria?[option] ?? ""
+                    criteriaMap[option] = rubric.isEmpty ? .null : .string(rubric)
+                }
                 questionMap[id] = .object([
                     "type": .string("choice"),
                     "instructions": .string(instructions),
-                    "criteria": .object(criteria),
+                    "criteria": .object(criteriaMap),
                 ])
             case .score(let id, let levels, let instructions):
                 questionMap[id] = .object([
@@ -180,7 +183,7 @@ public struct JevDecisionEngine: DecisionEngine {
             // the 0.5 boundary — a coin flip is no evidence, a 0.95 is strong.
             return (.boolean(yes >= 0.5), 0.5 + abs(yes - 0.5))
 
-        case .choice(_, let options, _):
+        case .choice(_, let options, _, _):
             guard raw["type"]?.stringValue == "choice",
                   let chosen = raw["choice"]?.stringValue,
                   options.contains(chosen),

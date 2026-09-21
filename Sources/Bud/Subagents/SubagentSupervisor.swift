@@ -150,7 +150,7 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
             ToolDescriptor(
                 name: Self.spawnToolName,
                 description: compact
-                    ? Self.spawnDescriptionCompact()
+                    ? Self.spawnDescriptionCompact(agents: agents.agents)
                     : Self.spawnDescription(roster: agents.roster()),
                 schema: Self.spawnSchema(compactCapability: compact),
                 providerID: providerID,
@@ -167,8 +167,9 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         case .failure(let problem):
             return .error(problem.message)
         case .success(let specs):
-            if let refusal = refusal(for: specs) { return .error(refusal) }
-            return .ok(Self.digest(await spawn(specs)))
+            let resolutions = await engineResolutions(for: specs)
+            if let refusal = refusal(for: specs, engineResolutions: resolutions) { return .error(refusal) }
+            return .ok(Self.digest(await spawn(specs, engineResolutions: resolutions)))
         }
     }
 
@@ -179,7 +180,7 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
     /// not the same size: a task that quietly loses its agent runs with the wrong
     /// instructions and the wrong tools and still comes back sounding confident.
     /// Answering with the names that do exist costs one round trip and fixes it.
-    private func refusal(for specs: [SubagentSpec]) -> String? {
+    func refusal(for specs: [SubagentSpec], engineResolutions: [String: String]) -> String? {
         let named = specs.compactMap(\.agent)
         if let unknown = named.first(where: { agents.named($0) == nil }) {
             let available = agents.agents.map(\.name)
@@ -190,9 +191,10 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         }
         // Capability wording is resolved locally; a wording nothing matches
         // confidently is refused with the closest names rather than run with a
-        // guessed agent.
+        // guessed agent — unless the decision engine already placed it.
         for spec in specs where spec.agent == nil {
             guard let capability = spec.capability, !capability.isEmpty else { continue }
+            guard engineResolutions[capability] == nil else { continue }
             let resolution = DelegateResolver.resolve(capability, agents: agents.agents)
             if resolution.agentID == nil {
                 let available = agents.agents.map(\.name)
@@ -207,6 +209,65 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
             }
         }
         return nil
+    }
+
+    // MARK: - Engine-backed resolution
+
+    /// Capability wordings the local resolver could not place, resolved by the
+    /// configured decision engine instead. One decision call per unresolved
+    /// wording — the case that otherwise costs a whole round trip and lands
+    /// the model the names to guess from.
+    private func engineResolutions(for specs: [SubagentSpec]) async -> [String: String] {
+        var resolutions: [String: String] = [:]
+        for spec in specs {
+            guard spec.agent == nil, let capability = spec.capability, !capability.isEmpty,
+                  resolutions[capability] == nil,
+                  DelegateResolver.resolve(capability, agents: agents.agents).agentID == nil
+            else { continue }
+            if let resolved = await resolveWithEngine(capability) {
+                resolutions[capability] = resolved
+            }
+        }
+        return resolutions
+    }
+
+    /// Asks the configured engine to pick the agent for a capability the local
+    /// resolver refused. The roster is sent only here — the case the model's
+    /// wording could not be placed at all — and only as a typed choice.
+    private func resolveWithEngine(_ capability: String) async -> String? {
+        let roster = agents.agents
+        guard !roster.isEmpty else { return nil }
+        let question = DecisionQuestion.choice(
+            id: "delegate_to",
+            options: roster.map(\.name) + ["none"],
+            instructions: "Which agent should handle this capability request. "
+                + "Choose 'none' when no agent fits.",
+            criteria: Dictionary(uniqueKeysWithValues: roster.map { ($0.name, $0.summary) })
+        )
+        let evaluation = await DecisionEngineCoordinator.evaluate(
+            selection: env.config.decisionEngine,
+            env: env,
+            state: DecisionState(query: capability),
+            questions: [question]
+        )
+        return Self.resolvedAgent(from: evaluation.batch, agents: roster)
+    }
+
+    /// The agent a `delegate_to` answer names, when the engine was confident
+    /// enough to substitute it. Below the activation band the answer is a hint,
+    /// not a decision — running the wrong agent is a whole conversation wasted,
+    /// while one refusal costs a round trip.
+    nonisolated static func resolvedAgent(
+        from batch: DecisionBatch,
+        agents: [AgentDefinition]
+    ) -> String? {
+        guard let answer = batch.answer(for: "delegate_to"),
+              answer.confidence >= DecisionPolicy.activateThreshold,
+              let choice = answer.choiceValue,
+              choice != "none",
+              agents.contains(where: { $0.name == choice })
+        else { return nil }
+        return choice
     }
 
     /// Reads the task list. Shared with the nested path so a task means the same
@@ -280,7 +341,8 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
         case .failure(let problem):
             return .error(problem.message)
         case .success(let specs):
-            if let refusal = refusal(for: specs) { return .error(refusal) }
+            let resolutions = await engineResolutions(for: specs)
+            if let refusal = refusal(for: specs, engineResolutions: resolutions) { return .error(refusal) }
             // The parent's own work is already consuming model time; a delegation
             // that fans wider than the pool is a batch that finishes later than
             // doing it serially would have.
@@ -289,7 +351,7 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
                 ? "\n\n(\(specs.count - capped.count) of \(specs.count) tasks were not started: "
                     + "at most \(Self.maxChildren) can be delegated at a time.)"
                 : ""
-            return .ok(Self.digest(await spawn(capped)) + note)
+            return .ok(Self.digest(await spawn(capped, engineResolutions: resolutions)) + note)
         }
     }
 
@@ -299,6 +361,16 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
     /// have settled. The pool capacity is re-read here so a mid-session change in
     /// settings takes effect on the next batch.
     public func spawn(_ specs: [SubagentSpec]) async -> [SubagentRun] {
+        await spawn(specs, engineResolutions: [:])
+    }
+
+    /// The resolution-aware path: capabilities the decision engine already
+    /// placed are honoured here, so an engine-resolved task runs with the agent
+    /// it was resolved to rather than being re-guessed locally.
+    public func spawn(
+        _ specs: [SubagentSpec],
+        engineResolutions: [String: String]
+    ) async -> [SubagentRun] {
         guard !specs.isEmpty else { return [] }
         await gate.setCapacity(max(1, env.config.allowParallelSubagents))
 
@@ -312,14 +384,16 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
             // value rather than a registry it would have to reach back for. An
             // agent the model named and got wrong is refused before this point,
             // so a spec that names one always resolves. A capability wording
-            // resolves the same way — refused before this point when nothing
-            // matched confidently, so a wording that reached here names an agent.
+            // resolves locally — or from the engine's resolution when the local
+            // match came up short — so a wording that reached here names an
+            // agent.
             let effectiveAgent: String?
             var capabilityNote: String?
             if let agent = spec.agent {
                 effectiveAgent = agent
             } else if let capability = spec.capability, !capability.isEmpty,
-                      let resolved = DelegateResolver.resolve(capability, agents: agents.agents).agentID {
+                      let resolved = engineResolutions[capability]
+                          ?? DelegateResolver.resolve(capability, agents: agents.agents).agentID {
                 effectiveAgent = resolved
                 capabilityNote = "capability '\(capability)'"
             } else {
@@ -638,11 +712,14 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
             """ + spawnGuidance
     }
 
-    /// The contextCompilerV2 description: the contract and the discovery
-    /// affordance, with the roster held back. Prompt cost stops growing with the
-    /// roster; the model names what a task needs and Bud resolves it locally.
-    nonisolated static func spawnDescriptionCompact() -> String {
-        spawnIntro + """
+    /// The contextCompilerV2 description: the contract, a bounded digest of
+    /// what can be delegated to, and the discovery affordance. The digest keeps
+    /// the prompt from growing with the roster while the model still knows what
+    /// exists — a model that cannot see the agents cannot phrase a capability
+    /// they would match. Past the cap, resolution is the same local path.
+    nonisolated static func spawnDescriptionCompact(agents: [AgentDefinition]) -> String {
+        let digest = rosterDigest(agents)
+        return spawnIntro + (digest.isEmpty ? "" : "\n\n" + digest) + """
 
 
             Agents are available (scouts, skill agents, connected MCP servers), each \
@@ -655,6 +732,32 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
             from. Leave both out and the task runs unnamed: every tool, the session \
             model, and nothing but the prompt you wrote.
             """ + spawnGuidance
+    }
+
+    /// The roster in one line each: name, then the first sentence of the
+    /// summary. Bounded — the first `cap` agents, each cut to `lineLimit`
+    /// characters — so the prompt pays a fixed price for awareness no matter
+    /// how many servers and skills are connected.
+    nonisolated static func rosterDigest(
+        _ agents: [AgentDefinition],
+        cap: Int = 12,
+        lineLimit: Int = 96
+    ) -> String {
+        guard !agents.isEmpty else { return "" }
+        let lines = agents.prefix(cap).map { agent in
+            // The summary's first sentence; a server agent's summary leads with
+            // its own name, which the line already carries, so the lead is
+            // dropped rather than said twice.
+            let sentence = agent.summary
+                .split(separator: ".").first.map(String.init)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let lead = agent.name + ":"
+            let body = sentence.hasPrefix(lead)
+                ? String(sentence.dropFirst(lead.count)).trimmingCharacters(in: .whitespaces)
+                : sentence
+            return String(("- " + agent.name + (body.isEmpty ? "" : " — " + body)).prefix(lineLimit))
+        }
+        return "Agents available this session:\n" + lines.joined(separator: "\n")
     }
 
     nonisolated static func systemPrompt(_ spec: SubagentSpec, agent: AgentDefinition?) -> String {

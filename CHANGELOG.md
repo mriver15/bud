@@ -12,6 +12,22 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Unreleased
+
+### Delegation learns the roster — and the decision engine picks when words can't
+
+The `spawn_subagents` pipeline stopped asking the model to guess. The compact
+spawn description now carries a bounded digest of the roster — each agent's name
+and a one-line summary, capped at twelve — so the model phrases tasks against
+what actually exists instead of inventing capability wording nothing matches.
+When local word-matching still comes up short, the refusal path asks the
+configured decision engine a typed `delegate_to` choice over the roster; a
+confident answer runs the task, a weak one keeps the refusal. And the
+`needs_delegate` decision is finally consumed: the spawn tool is offered because
+the decision layer said the work has to be handed off, not because the model
+named it.
+
+
 ## Bud 2.13.0
 
 ### find_image grows a picture library

@@ -626,13 +626,11 @@ public enum BudLiveVerification {
         await flagEnv.registry.register(SubagentSupervisor(env: flagEnv, agents: flagAgents))
         let spawnDescriptor = await flagEnv.registry.descriptors()
             .first { $0.name == SubagentSupervisor.spawnToolName }
-        // The O(1) property: the compact description is built without the
-        // roster, so its length cannot grow with it — asserted against the
-        // full description the same roster produces. (Name-substring checks
-        // would trip on the shared guidance text, which mentions what a scout
-        // cannot do as part of the delegation contract.)
-        c.check("context compiler v2: the spawn description is roster-independent",
-                spawnDescriptor?.description == SubagentSupervisor.spawnDescriptionCompact())
+        // The O(1) property: the compact description carries a *bounded* digest
+        // of the roster — names and one-line summaries, capped — so its length
+        // cannot grow with the roster the way the full description does.
+        c.check("context compiler v2: the spawn description carries the bounded roster digest",
+                spawnDescriptor?.description == SubagentSupervisor.spawnDescriptionCompact(agents: flagAgents.agents))
         // The win is asymptotic: compact costs a fixed amount, the roster
         // description grows with the roster — asserted against a large one, not
         // the handful of built-ins a fresh session holds.

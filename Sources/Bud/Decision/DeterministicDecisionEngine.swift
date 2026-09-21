@@ -124,7 +124,7 @@ public struct DeterministicDecisionEngine: DecisionEngine {
             // The deterministic reading: the group the query names, or the
             // strongest situational group. The engine answers with an option
             // the caller offered, or stays silent when none fits.
-            guard case .choice(let id, let options, _) = question else { return nil }
+            guard case .choice(let id, let options, _, _) = question else { return nil }
             let named = options.first { ToolPlanner.matchesQuery(name: $0, query: query) }
             let situational: String?
             if ToolPlanner.hasBrowserIntent(query: query, surface: state.surface),

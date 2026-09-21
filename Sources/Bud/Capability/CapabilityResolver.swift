@@ -85,6 +85,7 @@ public enum CapabilityResolver {
         let needsWeb = decision("needs_web")
         let needsFiles = decision("needs_files")
         let needsUI = decision("needs_ui")
+        let needsDelegate = decision("needs_delegate")
 
         // Promoted groups, in decision order. A group is atomic: naming one
         // tool of a server brings the server's whole surface.
@@ -116,6 +117,13 @@ public enum CapabilityResolver {
         if let domain = batch.answer(for: "primary_domain")?.choiceValue,
            byGroup[domain] != nil {
             promote(domain)
+        }
+        // Delegation is a decision, not a guess: when the batch says the work
+        // has to be handed to an agent, the spawn tool is offered because the
+        // decision layer said so — the model never has to invent the need for
+        // it from a description that hides the roster.
+        if needsDelegate, byGroup["Subagents"] != nil {
+            promote("Subagents")
         }
 
         // Sticky execution evidence: what succeeded recently stays available.

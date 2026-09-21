@@ -50,12 +50,15 @@ public struct DecisionState: Sendable, Equatable {
 /// scores — not prose that must be parsed back out of a paragraph.
 public enum DecisionQuestion: Sendable, Equatable {
     case boolean(id: String, instructions: String)
-    case choice(id: String, options: [String], instructions: String)
+    /// `criteria` maps each option to a rubric the engine can judge by; nil
+    /// entries answer "no extra detail". Used by `delegate_to`, where the
+    /// options are agent names and the rubrics are what each agent does.
+    case choice(id: String, options: [String], instructions: String, criteria: [String: String]? = nil)
     case score(id: String, levels: [String], instructions: String)
 
     public var id: String {
         switch self {
-        case .boolean(let id, _), .choice(let id, _, _), .score(let id, _, _): return id
+        case .boolean(let id, _), .choice(let id, _, _, _), .score(let id, _, _): return id
         }
     }
 }
