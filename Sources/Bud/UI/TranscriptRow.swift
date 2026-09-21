@@ -260,9 +260,9 @@ public struct TranscriptRow: View {
 
         case .ui(_, let payload):
             // A surface the model spoke into its answer. Rendered exactly like
-            // a tool-produced one — same card, same actions.
-            GenerativeUIView(
-                spec: payload,
+            // a tool-produced one — same card, same hover screenshot capture.
+            UISurfaceBlock(
+                payload: payload,
                 onAction: { action in Task { await model.submit(action: action) } },
                 onPrompt: { prompt in Task { await model.send(prompt) } }
             )
@@ -361,6 +361,147 @@ private struct RowAction: View {
         .buttonStyle(.plain)
         .help(help)
         .onHover { isHovering = $0 }
+    }
+}
+
+// MARK: - Surface capture
+
+/// Captures a surface block to a PNG.
+///
+/// The capture is a same-spec re-render at the size the block is drawn, in a
+/// window that is never shown — the exact route `--render-ui` proves. A live
+/// window region cannot be captured: the panel's glass lives in compositor
+/// layers that `cacheDisplay` never sees, so a crop of the screen would come
+/// back as a flat fill. Re-rendering the spec is faithful anyway — the block
+/// is pure data, and the glass tints composite against the same backdrop
+/// stand-in the render tool uses.
+@MainActor
+enum SurfaceCapture {
+    static func png(for payload: JSONValue, size: CGSize) -> Data? {
+        guard size.width > 1, size.height > 1 else { return nil }
+
+        let root = ZStack {
+            // Stand-in for the desktop the panel floats over; without it the
+            // glass tints and hairline edges composite against a void.
+            LinearGradient(
+                colors: [
+                    Color(red: 0.16, green: 0.18, blue: 0.30),
+                    Color(red: 0.30, green: 0.22, blue: 0.34),
+                    Color(red: 0.42, green: 0.26, blue: 0.28),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            GenerativeUIView(spec: payload, onAction: { _ in }, onPrompt: { _ in })
+        }
+        .frame(width: size.width, height: size.height)
+
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = NSHostingView(rootView: root)
+        window.contentView?.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        window.displayIfNeeded()
+
+        guard let contentView = window.contentView,
+              let rep = contentView.bitmapImageRepForCachingDisplay(in: contentView.bounds)
+        else { return nil }
+        contentView.cacheDisplay(in: contentView.bounds, to: rep)
+        return rep.representation(using: .png, properties: [:])
+    }
+
+    /// Lands the PNG where the browser's screenshots live, owner-only like
+    /// everything else in that directory.
+    @discardableResult
+    static func save(_ png: Data) -> URL? {
+        let directory = BudConfigLoader.budDirectory
+            .appendingPathComponent("screenshots", isDirectory: true)
+        BudConfigLoader.createOwnerOnlyDirectory(directory)
+        let stamp = ISO8601DateFormatter().string(from: Date())
+            .replacingOccurrences(of: ":", with: "-")
+        let url = directory.appendingPathComponent("surface-\(stamp).png")
+        do {
+            try BudConfigLoader.writeOwnerOnly(png, to: url)
+        } catch {
+            return nil
+        }
+        return url
+    }
+}
+
+/// The AppKit view behind a `UISurfaceBlock`: empty, and there only to give
+/// the capture the block's live size — `bounds` tracks the drawn block
+/// whether or not the panel has scrolled since.
+final class SurfaceAnchorView: NSView {
+    var onWindow: ((NSView) -> Void)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { onWindow?(self) }
+    }
+}
+
+private struct SurfaceAnchor: NSViewRepresentable {
+    let onResolve: (NSView) -> Void
+
+    func makeNSView(context: Context) -> SurfaceAnchorView {
+        let view = SurfaceAnchorView()
+        view.onWindow = { onResolve($0) }
+        return view
+    }
+
+    func updateNSView(_ nsView: SurfaceAnchorView, context: Context) {}
+}
+
+/// A `render_ui` surface with a hover-revealed screenshot affordance.
+///
+/// The icon exists only while the block is hovered — a small corner button,
+/// not a standing control. Clicking captures the block at its drawn size,
+/// writes the PNG into Bud's screenshots directory and puts it on the
+/// pasteboard; the icon flashes a checkmark while the capture is fresh.
+private struct UISurfaceBlock: View {
+    let payload: JSONValue
+    let onAction: (GenUIAction) -> Void
+    let onPrompt: (String) -> Void
+
+    @BudState private var isHovering = false
+    @BudState private var didCapture = false
+    @BudState private var anchor: NSView?
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            GenerativeUIView(spec: payload, onAction: onAction, onPrompt: onPrompt)
+
+            if isHovering {
+                RowAction(symbol: didCapture ? "checkmark" : "camera", help: "Save screenshot") {
+                    capture()
+                }
+                .padding(Bud.Space.xs)
+            }
+        }
+        .background(SurfaceAnchor { anchor = $0 })
+        .onHover { isHovering = $0 }
+    }
+
+    private func capture() {
+        guard let anchor, anchor.bounds.width > 1, anchor.bounds.height > 1 else { return }
+        let size = anchor.bounds.size
+        didCapture = true
+        Task { @MainActor in
+            guard let png = SurfaceCapture.png(for: payload, size: size) else {
+                didCapture = false
+                return
+            }
+            SurfaceCapture.save(png)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setData(png, forType: .png)
+            try? await Task.sleep(for: .seconds(1.2))
+            didCapture = false
+        }
     }
 }
 
@@ -470,8 +611,8 @@ private struct ToolActivityRow: View {
             header
 
             if let ui {
-                GenerativeUIView(
-                    spec: ui,
+                UISurfaceBlock(
+                    payload: ui,
                     onAction: { action in Task { await model.submit(action: action) } },
                     onPrompt: { prompt in Task { await model.send(prompt) } }
                 )
