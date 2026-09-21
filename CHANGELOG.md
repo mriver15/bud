@@ -12,7 +12,7 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
-## Unreleased
+## Bud 2.13.0
 
 ### find_image grows a picture library
 
