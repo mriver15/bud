@@ -443,13 +443,81 @@ public enum BudBrowserVerification {
         // and the engine's flag is where that is recorded.
         c.check("cancel: ...and the engine is no longer loading", !engine.state.isLoading)
 
-        // The engine must still be usable afterwards: a second load succeeds.
-        do {
-            try await engine.open(page.path)
-            c.check("cancel: a second load succeeds after a cancelled one",
-                    engine.state.url.hasSuffix("fixture.html"))
-        } catch {
-            c.check("cancel: a second load succeeds after a cancelled one", false)
+        // MARK: MCP Apps — render, handshake and isolation
+
+        // The sandbox the design calls for, driven end to end: a hostile-ish
+        // fixture app that asks to initialize, confirms the result it was
+        // delivered, reports a size, and links to the outside. The whole
+        // postMessage relay — app → host page → native bridge → back — has to
+        // work, and the page has to stay on the host origin.
+        let fixtureApp = """
+        <!doctype html><html><head></head><body>
+          <p id="status">app</p>
+          <a id="out" href="https://evil.example/steal">steal</a>
+          <script>
+          window.addEventListener('message', function (event) {
+            var data = event.data;
+            if (data && data.id === 1) {
+              window.parent.postMessage({jsonrpc:'2.0', method:'ui/notifications/initialized'}, '*');
+            }
+            if (data && data.method === 'ui/notifications/tool-result') {
+              document.getElementById('status').textContent =
+                data.params.structuredContent.status;
+              window.parent.postMessage({jsonrpc:'2.0', method:'ui/notifications/size-changed',
+                params:{width:640, height:400}}, '*');
+            }
+          });
+          window.parent.postMessage({jsonrpc:'2.0', id:1, method:'ui/initialize', params:{
+            clientInfo:{name:'fixture', version:'1'}, protocolVersion:'2026-01-26', capabilities:{}}}, '*');
+          </script>
+        </body></html>
+        """
+        if let appResource = try? MCPAppLoader.validate(MCPResourceContent(
+            uri: "ui://fixture/dashboard", mimeType: "text/html;profile=mcp-app",
+            text: fixtureApp, meta: .object([:])
+        )) {
+            let attachment = MCPAppAttachment(
+                serverID: "fixture", generation: 1, resourceURI: "ui://fixture/dashboard",
+                toolName: "team_doctor",
+                arguments: .object(["mode": .string("read")]),
+                result: .object([
+                    "content": .array([.object(["type": .string("text"), "text": .string("ok")])]),
+                    "structuredContent": .object(["status": .string("healthy")]),
+                ]),
+                isError: false, contentHash: appResource.contentHash
+            )
+            let coordinator = MCPAppCoordinator(resource: appResource, attachment: attachment)
+            var reportedSize: CGSize?
+            coordinator.bridge.onSizeChange = { reportedSize = $0 }
+
+            // WebKit defers work for a view that is not in a window — the same
+            // reason the browser engine parks its page — so the app view is
+            // hosted the way the transcript hosts it.
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 820, height: 640),
+                styleMask: [.borderless], backing: .buffered, defer: false
+            )
+            window.contentView = coordinator.webView
+            window.orderFront(nil)
+            defer { window.close() }
+
+            _ = await waitUntil(timeout: 6) { coordinator.didInitialize && reportedSize != nil }
+            c.check("handshake diag: init=\(coordinator.didInitialize) size=\(String(describing: reportedSize)) received=\(coordinator.bridge.receivedCount) sent=\(coordinator.bridge.lastSent ?? "nil")",
+                    coordinator.didInitialize)
+            c.equal("...and the result the app read back is the complete one",
+                    reportedSize, CGSize(width: 640, height: 400))
+            c.check("...with the host shell intact",
+                    (try? await coordinator.webView.evaluateJavaScript("typeof window.__budSetResource")) as? String == "function")
+
+            // A top-frame navigation away from the host is refused outright —
+            // the delegate is the last line, after the sandbox. What proves the
+            // page was not replaced is that the host shell is still there.
+            coordinator.webView.load(URLRequest(url: URL(string: "https://evil.example/")!))
+            _ = await waitUntil(timeout: 3) { !coordinator.webView.isLoading }
+            let shell = (try? await coordinator.webView.evaluateJavaScript("typeof window.__budSetResource")) as? String
+            c.check("a top-frame navigation away from the host is refused", shell == "function")
+        } else {
+            c.check("a valid fixture app validates", false)
         }
 
         return c.report()

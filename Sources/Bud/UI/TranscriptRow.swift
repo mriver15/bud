@@ -247,13 +247,14 @@ public struct TranscriptRow: View {
         case .text(let id, let text):
             MarkdownView(text, showsCaret: isTail(id), highlight: highlight)
 
-        case .tool(let id, let call, let providerName, let state, let resultText, let ui):
+        case .tool(let id, let call, let providerName, let state, let resultText, let ui, let app):
             ToolActivityRow(
                 call: call,
                 providerName: providerName,
                 state: state,
                 resultText: resultText,
                 ui: ui,
+                app: app,
                 model: model,
                 isTail: isTail(id)
             )
@@ -601,16 +602,20 @@ private struct ToolActivityRow: View {
     let state: ToolRunState
     let resultText: String?
     let ui: JSONValue?
+    let app: MCPAppAttachment?
     let model: AppModel
     let isTail: Bool
 
     @BudState private var isExpanded = false
+    @BudState private var appPhase: MCPAppPhase?
 
     var body: some View {
         VStack(alignment: .leading, spacing: Bud.Space.sm) {
             header
 
-            if let ui {
+            if let app {
+                appBody(app)
+            } else if let ui {
                 UISurfaceBlock(
                     payload: ui,
                     onAction: { action in Task { await model.submit(action: action) } },
@@ -631,6 +636,46 @@ private struct ToolActivityRow: View {
                             lineWidth: 0.6
                         )
                 }
+        }
+    }
+
+    // MARK: App rendering
+
+    /// The app is resolved here — the reference persisted with the call is not
+    /// the HTML — and every failure falls back to the text result, so a stored
+    /// conversation whose server is gone still shows what the call returned.
+    @ViewBuilder
+    private func appBody(_ app: MCPAppAttachment) -> some View {
+        Group {
+            switch appPhase {
+            case .rendered(let resource):
+                MCPAppShell(resource: resource, attachment: app)
+            case .failed(let message):
+                HStack(spacing: Bud.Space.sm) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Bud.Palette.warning)
+                    Text(message)
+                        .font(Bud.Font.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if hasResult { resultBody }
+            case .loading, .none:
+                HStack(spacing: Bud.Space.sm) {
+                    ProgressView().controlSize(.small)
+                    Text("Loading \(app.toolName)…")
+                        .font(Bud.Font.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .task(id: app.id) {
+            appPhase = .loading
+            let outcome = await model.mcp.renderableApp(app)
+            switch outcome {
+            case .success(let resource): appPhase = .rendered(resource)
+            case .failure(let error): appPhase = .failed(error.errorDescription ?? "The app is unavailable.")
+            }
         }
     }
 
@@ -726,7 +771,7 @@ private struct ToolActivityRow: View {
     }
 
     private var canExpand: Bool {
-        hasResult && ui == nil
+        hasResult && ui == nil && app == nil
     }
 
     private var hasResult: Bool {
@@ -792,13 +837,14 @@ private struct ToolRoundGroup: View {
         VStack(alignment: .leading, spacing: Bud.Space.xs) {
             roundHeader
             ForEach(segments) { segment in
-                if case .tool(let id, let call, let providerName, let state, let resultText, let ui) = segment {
+                if case .tool(let id, let call, let providerName, let state, let resultText, let ui, let app) = segment {
                     ToolActivityRow(
                         call: call,
                         providerName: providerName,
                         state: state,
                         resultText: resultText,
                         ui: ui,
+                        app: app,
                         model: model,
                         isTail: isTail(id)
                     )
@@ -832,7 +878,7 @@ private struct ToolRoundGroup: View {
         var firstStart: Date?
         var lastEnd: Date?
         for segment in segments {
-            guard case .tool(_, let call, _, _, _, _) = segment else { continue }
+            guard case .tool(_, let call, _, _, _, _, _) = segment else { continue }
             if let started = call.startedAt {
                 firstStart = min(firstStart ?? started, started)
             }

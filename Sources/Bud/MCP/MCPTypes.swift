@@ -51,6 +51,40 @@ public enum MCPError: Error, LocalizedError, Hashable, Sendable {
 
 // MARK: - Tools
 
+/// The `_meta.ui` block a tool advertises, and what it points at.
+///
+/// Parsed from the tool's `_meta.ui` object, with the deprecated flat
+/// `_meta["ui/resourceUri"]` form still honoured — the spec says it is on the
+/// way out, and a host that dropped it would break every server written against
+/// the earlier draft.
+public struct MCPToolUI: Sendable, Hashable {
+    /// The `ui://` resource rendered for this tool's result, when there is one.
+    public var resourceUri: String?
+    /// Who can reach the tool. Defaults to `["model", "app"]` when omitted.
+    public var visibility: [String]
+
+    public static let defaultVisibility = ["model", "app"]
+
+    public var isModelVisible: Bool { visibility.contains("model") }
+    public var isAppCallable: Bool { visibility.contains("app") }
+
+    public init(resourceUri: String?, visibility: [String]) {
+        self.resourceUri = resourceUri
+        self.visibility = visibility.isEmpty ? Self.defaultVisibility : visibility
+    }
+
+    public init?(json: JSONValue) {
+        let object = json["ui"]?.objectValue
+        let flat = json["ui/resourceUri"]?.stringValue
+        let resourceUri = object?["resourceUri"]?.stringValue
+            ?? flat
+            ?? object?["resourceUri"]?.stringValue
+        let visibility = object?["visibility"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        guard resourceUri != nil || !visibility.isEmpty else { return nil }
+        self.init(resourceUri: resourceUri, visibility: visibility)
+    }
+}
+
 /// One tool as advertised by `tools/list`.
 public struct MCPTool: Sendable, Hashable, Identifiable {
     public var name: String
@@ -58,13 +92,16 @@ public struct MCPTool: Sendable, Hashable, Identifiable {
     /// The server's JSON Schema, passed to the model untouched: rewriting it
     /// would only drop server-specific validation hints.
     public var inputSchema: JSONValue
+    /// The UI this tool points at, when the server declared one.
+    public var ui: MCPToolUI?
 
     public var id: String { name }
 
-    public init(name: String, description: String, inputSchema: JSONValue) {
+    public init(name: String, description: String, inputSchema: JSONValue, ui: MCPToolUI? = nil) {
         self.name = name
         self.description = description
         self.inputSchema = inputSchema
+        self.ui = ui
     }
 
     /// Lenient by design. Servers omit `description`, send `inputSchema` shapes
@@ -79,6 +116,81 @@ public struct MCPTool: Sendable, Hashable, Identifiable {
         self.description = object["description"]?.stringValue ?? ""
         self.inputSchema = object["inputSchema"]
             ?? .object(["type": "object", "properties": .object([:])])
+        self.ui = object["_meta"].flatMap(MCPToolUI.init(json:))
+    }
+}
+
+// MARK: - Call results
+
+/// A `tools/call` result, whole.
+///
+/// `MCPClient.callTool` used to flatten this into `ToolResult.text` and drop
+/// everything the model could not read. MCP Apps needs the *complete* result —
+/// content blocks, `structuredContent`, `isError` — to hand to the view, so the
+/// flattening happens one layer up, and the text-only path keeps exactly the
+/// same shape it had.
+public struct MCPCallResult: Sendable, Hashable {
+    public var content: [MCPContent]
+    public var structuredContent: JSONValue?
+    public var isError: Bool
+    /// The server's result object, verbatim — what the app reads.
+    public var raw: JSONValue
+
+    public init(
+        content: [MCPContent],
+        structuredContent: JSONValue?,
+        isError: Bool,
+        raw: JSONValue
+    ) {
+        self.content = content
+        self.structuredContent = structuredContent
+        self.isError = isError
+        self.raw = raw
+    }
+
+    /// What the model sees — the same text the flat path produced.
+    public var renderedText: String {
+        var text = content.map(\.rendered).joined(separator: "\n")
+        if text.isEmpty {
+            text = structuredContent?.encodedString() ?? ""
+        }
+        return text
+    }
+}
+
+/// One `resources/read` answer for a `ui://` resource: the MIME type, the HTML
+/// as text (blob content is base64-decoded first), and the `_meta` the server
+/// sent alongside it.
+public struct MCPResourceContent: Sendable, Hashable {
+    public var uri: String
+    public var mimeType: String
+    public var text: String
+    public var meta: JSONValue
+
+    public init(uri: String, mimeType: String, text: String, meta: JSONValue) {
+        self.uri = uri
+        self.mimeType = mimeType
+        self.text = text
+        self.meta = meta
+    }
+
+    public init?(json: JSONValue) {
+        guard let object = json.objectValue else { return nil }
+        let contents = object["contents"]?.arrayValue ?? []
+        guard let first = contents.first?.objectValue else { return nil }
+        guard let uri = first["uri"]?.stringValue, !uri.isEmpty else { return nil }
+        self.uri = uri
+        self.mimeType = first["mimeType"]?.stringValue ?? ""
+        if let text = first["text"]?.stringValue {
+            self.text = text
+        } else if let blob = first["blob"]?.stringValue,
+                  let data = Data(base64Encoded: blob),
+                  let decoded = String(data: data, encoding: .utf8) {
+            self.text = decoded
+        } else {
+            self.text = ""
+        }
+        self.meta = object["_meta"] ?? first["_meta"] ?? .object([:])
     }
 }
 

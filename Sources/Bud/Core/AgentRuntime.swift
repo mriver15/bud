@@ -881,7 +881,8 @@ public final class AgentRuntime {
                     providerName: provider,
                     state: .running,
                     resultText: nil,
-                    ui: nil
+                    ui: nil,
+                    app: nil
                 )
             )
         }
@@ -955,7 +956,7 @@ public final class AgentRuntime {
         guard turns.indices.contains(turnIndex) else { return }
         let segments = turns[turnIndex].segments
         guard let idx = segments.firstIndex(where: { $0.id == segmentID }),
-              case .tool(let id, let call, let provider, _, _, _) = segments[idx] else { return }
+              case .tool(let id, let call, let provider, _, _, _, _) = segments[idx] else { return }
 
         // The call's clock stops the moment its result lands, success or failure.
         var stamped = call
@@ -966,7 +967,8 @@ public final class AgentRuntime {
             providerName: provider,
             state: state,
             resultText: result.text,
-            ui: result.ui
+            ui: result.ui,
+            app: result.app
         )
     }
 

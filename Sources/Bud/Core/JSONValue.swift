@@ -200,17 +200,21 @@ extension JSONValue {
         switch value {
         case let v as JSONValue: self = v
         case is NSNull: self = .null
-        case let b as Bool: self = .bool(b)
-        case let i as Int: self = .number(Double(i))
-        case let i as Int64: self = .number(Double(i))
-        case let d as Double: self = .number(d)
+        // NSNumber must come first: both `Bool` and `Int` bridge to NSNumber, and
+        // `NSNumber(value: 1) as? Bool` succeeds via `boolValue` — which would
+        // turn a JSON-RPC request id of `1` into `true` and every numeric field
+        // into a boolean. The CF type id is what tells a boolean apart from a
+        // number; everything else is a number.
         case let n as NSNumber:
-            // NSNumber bridges booleans as well; CFGetTypeID disambiguates.
             if CFGetTypeID(n) == CFBooleanGetTypeID() {
                 self = .bool(n.boolValue)
             } else {
                 self = .number(n.doubleValue)
             }
+        case let b as Bool: self = .bool(b)
+        case let i as Int: self = .number(Double(i))
+        case let i as Int64: self = .number(Double(i))
+        case let d as Double: self = .number(d)
         case let s as String: self = .string(s)
         case let a as [Any]: self = .array(a.map(JSONValue.init(any:)))
         case let o as [String: Any]: self = .object(o.mapValues(JSONValue.init(any:)))

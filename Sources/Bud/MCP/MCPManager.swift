@@ -269,7 +269,13 @@ public final class MCPManager: MCPManaging, ToolProvider {
             return refusal
         }
         do {
-            let result = try await client.callTool(name: route.tool, arguments: arguments)
+            let full = try await client.callToolFull(name: route.tool, arguments: arguments)
+            var result = ToolResult(
+                text: full.renderedText,
+                ui: MCPClient.surface(for: full.content, titled: route.tool),
+                isError: full.isError
+            )
+            result.app = await appAttachment(route: route, client: client, arguments: arguments, full: full)
             appendLog(
                 route.serverID,
                 result.isError
@@ -288,6 +294,103 @@ public final class MCPManager: MCPManaging, ToolProvider {
                 await markFailed(config, reason: "The server closed the connection.")
             }
             return .error("MCP tool '\(tool)' failed: \(detail)")
+        }
+    }
+
+    /// The app to render for a model call, when the tool declared one, the server
+    /// negotiated the extension, and the resource passes validation. A failure at
+    /// any point is nil — the text result still answers the call.
+    private func appAttachment(
+        route: Route,
+        client: MCPClient,
+        arguments: JSONValue,
+        full: MCPCallResult
+    ) async -> MCPAppAttachment? {
+        guard await client.supportsApps() else { return nil }
+        let tool = (await client.cachedTools).first { $0.name == route.tool }
+        guard let uri = tool?.ui?.resourceUri else { return nil }
+        do {
+            let content = try await client.readResource(uri: uri)
+            let resource = try MCPAppLoader.validate(content)
+            return MCPAppAttachment(
+                serverID: route.serverID,
+                generation: await client.connectionGeneration,
+                resourceURI: uri,
+                toolName: route.tool,
+                arguments: arguments,
+                result: MCPAppLoader.boundedResult(full),
+                isError: full.isError,
+                contentHash: resource.contentHash
+            )
+        } catch {
+            appendLog(route.serverID, "✗ \(route.tool) app: \(MCPError.wrap(error).errorDescription ?? "invalid")")
+            return nil
+        }
+    }
+
+    // MARK: Apps
+
+    /// Resolves a persisted app reference back into renderable content, or the
+    /// reason it cannot be. This is the one gate a stored conversation passes
+    /// through on its way to a rendered view.
+    public func renderableApp(_ ref: MCPAppAttachment) async -> Result<MCPAppResource, MCPAppError> {
+        guard statuses[ref.serverID]?.state == .ready, let client = clients[ref.serverID] else {
+            return .failure(.serverMissing)
+        }
+        guard await client.connectionGeneration == ref.generation else {
+            return .failure(.generationMismatch)
+        }
+        guard await client.supportsApps() else { return .failure(.notNegotiated) }
+        do {
+            let content = try await client.readResource(uri: ref.resourceURI)
+            return .success(try MCPAppLoader.validate(content))
+        } catch let error as MCPAppError {
+            return .failure(error)
+        } catch {
+            return .failure(.serverMissing)
+        }
+    }
+
+    /// The app-initiated call route: a tool, named and scoped to one server, on
+    /// the connection the app was created on. No global tool-name lookup, so web
+    /// content can never name another server's tool and have it routed.
+    public func invokeAppTool(
+        serverID: String,
+        tool: String,
+        arguments: JSONValue,
+        generation: Int
+    ) async -> ToolResult {
+        guard let config = servers.first(where: { $0.id == serverID }) else {
+            return .error("No MCP server with that id is configured.")
+        }
+        guard statuses[config.id]?.state == .ready, let client = clients[config.id] else {
+            return .error("MCP server '\(config.name)' is not connected. Reconnect it in Settings.")
+        }
+        guard await client.connectionGeneration == generation else {
+            return .error("The app's connection has been replaced. Reload it.")
+        }
+        guard await client.supportsApps() else {
+            return .error("The server does not support MCP Apps.")
+        }
+        guard let mcpTool = (await client.cachedTools).first(where: { $0.name == tool }) else {
+            return .error("'\(tool)' is not a tool of '\(config.name)'.")
+        }
+        guard mcpTool.ui?.isAppCallable ?? false else {
+            return .error("'\(tool)' is not callable by the app.")
+        }
+        let route = Route(serverID: config.id, serverName: config.name, tool: tool)
+        if let refusal = await refusalUnlessConfirmed(route: route, arguments: arguments) {
+            return refusal
+        }
+        do {
+            let full = try await client.callToolFull(name: tool, arguments: arguments)
+            return ToolResult(
+                text: full.renderedText,
+                ui: MCPClient.surface(for: full.content, titled: tool),
+                isError: full.isError
+            )
+        } catch {
+            return .error("MCP tool '\(tool)' failed: \(MCPError.wrap(error).errorDescription ?? "unknown error")")
         }
     }
 
@@ -357,16 +460,21 @@ public final class MCPManager: MCPManaging, ToolProvider {
         var tool: String
     }
 
-    /// The tools this server is allowed to contribute.
+    /// The tools this server is allowed to contribute *to the model*.
     ///
     /// One function, read by both the descriptor pass and by routing, so what the
     /// model is offered and what it can call are the same list by construction.
     /// A tool hidden from the request that still answered a call would be the
     /// same disagreement as the one that made every MCP tool uncallable.
+    ///
+    /// App-only tools — `visibility: ["app"]` — are dropped here, because they
+    /// are not the model's to call. They stay in `discoveredByServer` and are
+    /// reachable through the app route only, on the same connection.
     private func servedTools(for config: MCPServerConfig, from cached: [MCPTool]) -> [MCPTool] {
-        guard let enabled = config.enabledTools else { return cached }
+        let visible = cached.filter { $0.ui?.isModelVisible ?? true }
+        guard let enabled = config.enabledTools else { return visible }
         let wanted = Set(enabled)
-        return cached.filter { wanted.contains($0.name) }
+        return visible.filter { wanted.contains($0.name) }
     }
 
     private struct Collected {

@@ -86,6 +86,7 @@ public enum BudSelfTest {
             memoryContext,
             selfUpdate,
             mcpConfigMapping,
+            mcpApps,
             fileReading,
             uiImages,
             skills,
@@ -513,11 +514,150 @@ public enum BudSelfTest {
 
     // MARK: The prompt a build ships
 
+    /// The MCP Apps host, exercised on the parts that are pure and
+    /// security-critical: metadata parsing, resource validation, the CSP, the
+    /// open-link policy, and the persistence round-trip. The WebKit sandbox
+    /// itself is a browser-verification concern; these are the gates that decide
+    /// whether anything is rendered at all.
+    static func mcpApps() -> SelfTestReport {
+        let c = Checker(suite: "mcp-apps")
+
+        // MARK: Tool metadata
+
+        let meta = MCPToolUI(json: .object([
+            "ui": .object([
+                "resourceUri": .string("ui://weather/dashboard"),
+                "visibility": .array([.string("app")]),
+            ]),
+        ]))
+        c.equal("a tool's ui resource is read from _meta.ui",
+                meta?.resourceUri, "ui://weather/dashboard")
+        c.check("...and its visibility",
+                meta?.isAppCallable == true && meta?.isModelVisible == false)
+        let flat = MCPToolUI(json: .object(["ui/resourceUri": .string("ui://x")]))
+        c.equal("the deprecated flat form still resolves", flat?.resourceUri, "ui://x")
+        c.check("...and defaults to model+app visibility",
+                flat?.isModelVisible == true && flat?.isAppCallable == true)
+        c.nilValue("a tool with no ui metadata has none", MCPToolUI(json: .object([:])))
+        let tool = MCPTool(json: .object([
+            "name": .string("refresh"), "description": .string("d"),
+            "_meta": .object([
+                "ui": .object([
+                    "resourceUri": .string("ui://r"),
+                    "visibility": .array([.string("app")]),
+                ]),
+            ]),
+        ]))
+        c.equal("a tool parses its ui", tool?.ui?.resourceUri, "ui://r")
+        c.check("...and an app-only tool is hidden from the model surface",
+                tool?.ui?.isModelVisible == false)
+
+        // MARK: Resource validation
+
+        func content(_ uri: String, _ mime: String, _ html: String, meta: JSONValue = .object([:])) -> MCPResourceContent {
+            MCPResourceContent(uri: uri, mimeType: mime, text: html, meta: meta)
+        }
+        let good = try? MCPAppLoader.validate(content("ui://x", "text/html;profile=mcp-app", "<html></html>"))
+        c.check("a valid resource validates", good != nil)
+        c.check("a non-ui scheme is refused",
+                (try? MCPAppLoader.validate(content("resource://x", "text/html;profile=mcp-app", "<html></html>"))) == nil)
+        c.check("a non-app mime is refused",
+                (try? MCPAppLoader.validate(content("ui://x", "text/plain", "<html></html>"))) == nil)
+        c.check("an empty resource is refused",
+                (try? MCPAppLoader.validate(content("ui://x", "text/html;profile=mcp-app", ""))) == nil)
+        let huge = String(repeating: "x", count: MCPAppLoader.maxHTMLBytes + 1)
+        c.check("an oversized resource is refused",
+                (try? MCPAppLoader.validate(content("ui://x", "text/html;profile=mcp-app", huge))) == nil)
+
+        // MARK: Content-Security-Policy
+
+        c.check("the default CSP admits no network", good?.csp.policy.contains("connect-src 'none'") == true)
+        c.check("...and no nested frames", good?.csp.policy.contains("frame-src 'none'") == true)
+        c.check("...and no objects", good?.csp.policy.contains("object-src 'none'") == true)
+        let withCsp = try! MCPAppLoader.validate(content(
+            "ui://x", "text/html;profile=mcp-app", "<html><head></head><body></body></html>",
+            meta: .object(["ui": .object(["csp": .object([
+                "connectDomains": .array([.string("https://api.example.com")]),
+                "resourceDomains": .array([.string("https://cdn.example.com")]),
+            ])])])
+        ))
+        c.check("declared connect domains enter the policy",
+                withCsp.csp.policy.contains("https://api.example.com"))
+        c.check("...and declared resource domains",
+                withCsp.csp.policy.contains("https://cdn.example.com"))
+        c.check("...while connect stays 'none' when none were declared",
+                good?.csp.policy.contains("connect-src 'none'") == true)
+        c.check("the CSP is in the document before anything parses",
+                withCsp.wrappedHTML.contains("Content-Security-Policy")
+                    && withCsp.wrappedHTML.range(of: "Content-Security-Policy")!.lowerBound
+                        < withCsp.wrappedHTML.range(of: "<body")!.lowerBound)
+
+        // MARK: Open-link policy
+
+        c.check("an https link opens", MCPAppPolicy.openableLink("https://example.com") != nil)
+        c.check("...and an http one", MCPAppPolicy.openableLink("http://example.com") != nil)
+        c.check("a javascript: link is refused", MCPAppPolicy.openableLink("javascript:alert(1)") == nil)
+        c.check("...and a file: link", MCPAppPolicy.openableLink("file:///etc/passwd") == nil)
+        c.check("...and a non-url", MCPAppPolicy.openableLink("not a url") == nil)
+
+        // MARK: The bridge parses messages as Any → JSONValue
+
+        // A numeric JSON-RPC id must survive as a number, not a boolean:
+        // `NSNumber(value: 1) as? Bool` is `true`, which is the bug that would
+        // have answered every `ui/initialize` with `"id": true` and stopped the
+        // handshake.
+        let rpc = JSONValue(any: ["jsonrpc": "2.0", "id": 1, "method": "ui/initialize"] as [String: Any])
+        c.equal("a numeric JSON-RPC id survives the bridge as a number",
+                rpc["id"], .number(1))
+        let flagged = JSONValue(any: ["flag": true] as [String: Any])
+        c.equal("...while a boolean stays a boolean", flagged["flag"], .bool(true))
+
+        // MARK: The bridge's literal escaper
+        // Delivery is via evaluateJavaScript, which compiles the string as JS —
+        // not inline HTML — so the only characters that matter are the ones that
+        // would terminate the literal: a quote, a newline, a control byte, a
+        // backslash.
+        let escaped = MCPAppBridge.jsString("\u{01}\"\n'\\")
+        let body = String(escaped.dropFirst().dropLast())
+        c.check("jsString produces a well-formed literal",
+                escaped.hasPrefix("'") && escaped.hasSuffix("'")
+                    && !body.contains("\n") && !body.contains("\u{01}")
+                    && body.contains("\\n") && body.contains("\\'") && body.contains("\\\\"))
+
+        // MARK: Persistence round-trip
+
+        let call = ToolCall(id: "c", name: "x", arguments: "{}")
+        let app = MCPAppAttachment(
+            serverID: "s", generation: 3, resourceURI: "ui://r", toolName: "x",
+            arguments: .object([:]), result: .object(["content": .array([])]),
+            isError: false, contentHash: "abc"
+        )
+        let withApp = Segment.tool(id: "t", call: call, providerName: "p", state: .succeeded, resultText: "r", ui: nil, app: app)
+        if let data = try? JSONEncoder().encode(withApp),
+           let back = try? JSONDecoder().decode(Segment.self, from: data),
+           case .tool(_, _, _, _, _, _, let restored) = back {
+            c.equal("an app reference round-trips", restored?.resourceURI, "ui://r")
+            c.equal("...with its generation", restored?.generation, 3)
+            c.equal("...and its content hash", restored?.contentHash, "abc")
+        } else {
+            c.check("an app reference round-trips", false)
+        }
+        let withoutApp = Segment.tool(id: "t", call: call, providerName: "p", state: .succeeded, resultText: "r", ui: nil, app: nil)
+        if let data = try? JSONEncoder().encode(withoutApp),
+           let back = try? JSONDecoder().decode(Segment.self, from: data),
+           case .tool(_, _, _, _, _, _, let restored) = back {
+            c.check("a segment without an app decodes without one", restored == nil)
+        } else {
+            c.check("a segment without an app decodes without one", false)
+        }
+
+        return c.report()
+    }
+
     /// A stored prompt that is a copy of an old default must not outlive it, or
     /// the shipped prompt could never change for anyone who once pressed Save.
     static func promptDefaults() -> SelfTestReport {
-        let c = Checker(suite: "prompt")
-
+        let c = Checker(suite: "prompts")
         c.check("the shipped default is recognised as a default",
                 BudConfig.isShippedDefaultPrompt(BudConfig.defaultSystemPrompt))
         c.check("...and the previous one it replaced is recognised too",
@@ -7295,7 +7435,7 @@ public enum BudSelfTest {
                 .reasoning(id: "s1", text: "thinking"),
                 .text(id: "s2", text: "here is the answer"),
                 .tool(id: "s3", call: call, providerName: "Files", state: .succeeded,
-                      resultText: "contents", ui: nil),
+                      resultText: "contents", ui: nil, app: nil),
                 .notice(id: "s4", text: "heads up", kind: .warning),
             ],
             createdAt: Date(timeIntervalSince1970: 1_700_000_000)
@@ -7365,7 +7505,8 @@ public enum BudSelfTest {
                     .tool(
                         id: "s1",
                         call: ToolCall(id: "c9", name: "infra__status", arguments: "{}"),
-                        providerName: "Infra", state: .succeeded, resultText: "green", ui: nil
+                        providerName: "Infra", state: .succeeded, resultText: "green", ui: nil,
+                        app: nil
                     ),
                 ]),
             ]
@@ -7385,7 +7526,8 @@ public enum BudSelfTest {
                     id: "s2",
                     call: ToolCall(id: "c10", name: "dump", arguments: "{}"),
                     providerName: "Infra", state: .succeeded,
-                    resultText: String(repeating: "x", count: 9_000), ui: nil
+                    resultText: String(repeating: "x", count: 9_000), ui: nil,
+                    app: nil
                 ),
             ])]
         ).markdown(now: Date(timeIntervalSince1970: 1_700_000_000))
@@ -7417,7 +7559,7 @@ public enum BudSelfTest {
         c.equal("and every segment of it", loaded?.turns.first?.segments.count, 4)
         c.equal("and the model-facing history", loaded?.messages.count, 1)
 
-        if case .tool(let id, let restoredCall, let provider, let state, let result, _)? = loaded?.turns.first?.segments[2] {
+        if case .tool(let id, let restoredCall, let provider, let state, let result, _, _)? = loaded?.turns.first?.segments[2] {
             c.equal("a tool segment keeps its id", id, "s3")
             c.equal("its call, verbatim", restoredCall, call)
             c.equal("its provider", provider, "Files")
@@ -7476,13 +7618,13 @@ public enum BudSelfTest {
             Turn(role: .assistant, segments: [
                 .text(id: "t", text: "half an answer"),
                 .tool(id: "u", call: call, providerName: "Files", state: .running,
-                      resultText: nil, ui: nil),
+                      resultText: nil, ui: nil, app: nil),
             ], isStreaming: true)
         ]))
         let interrupted = BudStore.load(id: "conv_2")?.turns.first
 
         c.equal("a turn saved mid-stream does not come back streaming", interrupted?.isStreaming, false)
-        if case .tool(_, _, _, let state, _, _)? = interrupted?.segments[1] {
+        if case .tool(_, _, _, let state, _, _, _)? = interrupted?.segments[1] {
             c.equal("a tool that was still running comes back failed", state, .failed)
         } else {
             c.check("the interrupted tool segment survived", false)
@@ -7492,10 +7634,10 @@ public enum BudSelfTest {
         BudStore.save(Conversation(id: "conv_3", turns: [
             Turn(role: .assistant, segments: [
                 .tool(id: "v", call: call, providerName: "Shell", state: .succeeded,
-                      resultText: huge, ui: nil)
+                      resultText: huge, ui: nil, app: nil)
             ])
         ]))
-        if case .tool(_, _, _, _, let result, _)? = BudStore.load(id: "conv_3")?.turns.first?.segments[0] {
+        if case .tool(_, _, _, _, let result, _, _)? = BudStore.load(id: "conv_3")?.turns.first?.segments[0] {
             c.check("an enormous tool result is truncated on the way to disk",
                     (result?.count ?? 0) < huge.count)
             c.check("and says so rather than ending mid-sentence",

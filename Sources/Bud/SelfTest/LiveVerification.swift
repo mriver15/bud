@@ -549,7 +549,7 @@ public enum BudLiveVerification {
         c.check("runtime: executed a tool", usedTool)
         let succeeded = runtime.turns.contains { turn in
             turn.segments.contains { segment in
-                if case .tool(_, _, _, let state, let text, _) = segment {
+                if case .tool(_, _, _, let state, let text, _, _) = segment {
                     return state == .succeeded && (text?.contains("integration works") ?? false)
                 }
                 return false
@@ -594,7 +594,7 @@ public enum BudLiveVerification {
                 && turn.segments.contains { if case .tool = $0 { return true } else { return false } }
         }) {
             let timedCall = toolTurn.segments.contains { segment in
-                if case .tool(_, let call, _, _, _, _) = segment {
+                if case .tool(_, let call, _, _, _, _, _) = segment {
                     return call.startedAt != nil && call.endedAt != nil
                 }
                 return false
@@ -797,7 +797,7 @@ public enum BudLiveVerification {
 
         let producedSurface = uiRuntime.turns.contains { turn in
             turn.segments.contains { segment in
-                if case .tool(_, _, _, let state, _, let ui) = segment {
+                if case .tool(_, _, _, let state, _, let ui, _) = segment {
                     return state == .succeeded && ui != nil
                 }
                 return false
@@ -807,7 +807,7 @@ public enum BudLiveVerification {
 
         let surfaceComponents = uiRuntime.turns.reduce(0) { running, turn in
             running + turn.segments.reduce(0) { inner, segment in
-                if case .tool(_, _, _, _, _, let ui) = segment, let ui {
+                if case .tool(_, _, _, _, _, let ui, _) = segment, let ui {
                     return inner + (ui["components"]?.arrayValue?.count ?? 0)
                 }
                 return inner
@@ -897,7 +897,7 @@ public enum BudLiveVerification {
         let delayRunning = await waitUntil(timeout: 90) {
             mcpCancelRuntime.turns.contains { turn in
                 turn.segments.contains { segment in
-                    if case .tool(_, let call, _, let state, _, _) = segment {
+                    if case .tool(_, let call, _, let state, _, _, _) = segment {
                         return call.name.contains("delay") && state == .running
                     }
                     return false
@@ -911,10 +911,10 @@ public enum BudLiveVerification {
         // The delay call must not be recorded as a success: cancellation turns it
         // into a failure that names the cancellation, never a completed tool.
         let delaySegment = mcpCancelRuntime.turns.flatMap(\.segments).first { segment in
-            if case .tool(_, let call, _, _, _, _) = segment { return call.name.contains("delay") }
+            if case .tool(_, let call, _, _, _, _, _) = segment { return call.name.contains("delay") }
             return false
         }
-        if case .tool(_, _, _, let state, let result, _)? = delaySegment {
+        if case .tool(_, _, _, let state, let result, _, _)? = delaySegment {
             c.check("cancel: the delay call was not recorded as a success", state != .succeeded)
             c.check("cancel: the delay call is recorded as cancelled",
                     state == .failed && (result?.lowercased().contains("cancel") ?? false))
@@ -936,7 +936,7 @@ public enum BudLiveVerification {
         )
         let bothRunning = await waitUntil(timeout: 90) {
             let running = concurrentRuntime.turns.flatMap(\.segments).filter { segment in
-                if case .tool(_, let call, _, let state, _, _) = segment {
+                if case .tool(_, let call, _, let state, _, _, _) = segment {
                     return call.name.contains("delay") && state == .running
                 }
                 return false
@@ -949,7 +949,7 @@ public enum BudLiveVerification {
         c.check("cancel: stopping concurrent tools settles the runtime", concurrentStopped)
         let delaySegments = concurrentRuntime.turns.flatMap(\.segments).compactMap {
             segment -> (ToolRunState, String?)? in
-            if case .tool(_, let call, _, let state, let result, _) = segment,
+            if case .tool(_, let call, _, let state, let result, _, _) = segment,
                call.name.contains("delay") {
                 return (state, result)
             }

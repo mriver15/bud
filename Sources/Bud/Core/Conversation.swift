@@ -211,7 +211,7 @@ extension Conversation {
                         .map { "> \($0)" }
                         .joined(separator: "\n") + "\n\n"
 
-                case .tool(_, let call, let providerName, let state, let resultText, _):
+                case .tool(_, let call, let providerName, let state, let resultText, _, _):
                     out += "> `\(call.name)` · \(providerName) · \(state.rawValue)\n\n"
                     if let resultText, !resultText.isEmpty {
                         out += "```\n\(Self.clipped(resultText))\n```\n\n"

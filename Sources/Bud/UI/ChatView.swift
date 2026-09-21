@@ -331,7 +331,7 @@ public struct ChatView: View {
             switch segment {
             case .reasoning(_, let text), .text(_, let text), .notice(_, let text, _):
                 total = total &+ text.count &+ 1
-            case .tool(_, _, _, let state, let result, let ui):
+            case .tool(_, _, _, let state, let result, let ui, _):
                 total = total &+ state.rawValue.count &+ (result?.count ?? 0) &+ (ui == nil ? 0 : 1)
             case .ui(_, let payload):
                 total = total &+ payload.stringContentLength

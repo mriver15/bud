@@ -10,6 +10,9 @@ public actor MCPClient {
     public static let protocolVersion = "2025-06-18"
     public static let clientName = "Bud"
     public static let clientVersion = "1.0"
+    /// The MCP Apps extension. Negotiated in `initialize`, and the only gate in
+    /// front of rendering a server's `ui://` resource.
+    public static let appsExtension = "io.modelcontextprotocol/ui"
     /// Handshakes and listings are bounded so a wedged server cannot leave a
     /// server status stuck on "connecting" forever.
     public static let handshakeTimeout: TimeInterval = 30
@@ -36,8 +39,18 @@ public actor MCPClient {
     /// The last thing the server said outside the protocol, captured on failure
     /// and on death, for the status detail in Settings.
     public private(set) var diagnostics = ""
+    /// UI resources, keyed by URI. Small and bounded by the resources a server
+    /// declares; invalidated when the server announces a list change and when
+    /// the connection is replaced, so a view can never hold a template that a
+    /// later list superseded.
+    private var resourceCache: [String: JSONValue] = [:]
 
     public var isConnected: Bool { live }
+
+    /// Which connection this is, bumped on every connect and stop. An App
+    /// instance binds to this, so a rendered view from a connection that has
+    /// since been torn down and re-established is refused rather than trusted.
+    public var connectionGeneration: Int { session }
 
     public var serverInfo: (name: String, version: String)? {
         guard let handshake else { return nil }
@@ -61,6 +74,7 @@ public actor MCPClient {
         correlation = JSONRPCCorrelation()
         self.transport = transport
         cachedTools = []
+        resourceCache = [:]
         handshake = nil
         live = false
 
@@ -71,7 +85,12 @@ public actor MCPClient {
                 "initialize",
                 params: .object([
                     "protocolVersion": .string(Self.protocolVersion),
-                    "capabilities": .object([:]),
+                    "capabilities": .object([
+                        // Advertised here so the server knows this host can
+                        // render its apps, and read back from the server's own
+                        // capabilities to decide whether to.
+                        Self.appsExtension: .object([:]),
+                    ]),
                     "clientInfo": .object([
                         "name": .string(Self.clientName),
                         "version": .string(Self.clientVersion),
@@ -136,6 +155,18 @@ public actor MCPClient {
     // MARK: Calls
 
     public func callTool(name: String, arguments: JSONValue) async throws -> ToolResult {
+        let full = try await callToolFull(name: name, arguments: arguments)
+        return ToolResult(
+            text: full.renderedText,
+            ui: Self.surface(for: full.content, titled: name),
+            isError: full.isError
+        )
+    }
+
+    /// The complete result — content blocks, structured content and the raw
+    /// object — for a caller that wants more than the flattened text. MCP Apps
+    /// renders from this; the model-facing path above stays text-only.
+    public func callToolFull(name: String, arguments: JSONValue) async throws -> MCPCallResult {
         let result = try await request(
             "tools/call",
             params: .object([
@@ -144,18 +175,47 @@ public actor MCPClient {
             ]),
             timeout: Self.callTimeout
         )
-        let contents = (result["content"]?.arrayValue ?? []).map(MCPContent.init(json:))
-        var text = contents.map(\.rendered).joined(separator: "\n")
-        if text.isEmpty {
-            // A server that answers with only `structuredContent` would otherwise
-            // hand the model an empty string, which reads as "nothing happened".
-            text = result["structuredContent"]?.encodedString() ?? ""
-        }
-        return ToolResult(
-            text: text,
-            ui: Self.surface(for: contents, titled: name),
-            isError: result["isError"]?.boolValue ?? false
+        return MCPCallResult(
+            content: (result["content"]?.arrayValue ?? []).map(MCPContent.init(json:)),
+            structuredContent: result["structuredContent"],
+            isError: result["isError"]?.boolValue ?? false,
+            raw: result
         )
+    }
+
+    /// Reads one resource, for a known `ui://` URI. The server's answer is
+    /// cached by URI and invalidated when the connection is replaced or the
+    /// server announces a list change, so a template is fetched once and never
+    /// assumed current across generations.
+    ///
+    /// A known URI does not require `resources/list` to have worked: apps are
+    /// discovered through tool metadata, and a server may omit them from the
+    /// listing on purpose.
+    public func readResource(uri: String) async throws -> MCPResourceContent {
+        if let cached = resourceCache[uri] {
+            if let content = MCPResourceContent(json: cached) { return content }
+            resourceCache.removeValue(forKey: uri)
+        }
+        let result = try await request(
+            "resources/read",
+            params: .object(["uri": .string(uri)]),
+            timeout: Self.handshakeTimeout
+        )
+        resourceCache[uri] = result
+        guard let content = MCPResourceContent(json: result) else {
+            throw MCPError.protocolError(
+                code: -32602, message: "resources/read returned no content for '\(uri)'"
+            )
+        }
+        return content
+    }
+
+    /// Whether the server and this host negotiated the Apps extension. Absence
+    /// is taken at face value — the spec requires servers to declare what they
+    /// implement, and rendering without it would trust an extension the server
+    /// never agreed to.
+    public func supportsApps() -> Bool {
+        handshake?.supports(Self.appsExtension) ?? false
     }
 
     /// The pictures in a result, as something to draw.
@@ -168,7 +228,7 @@ public actor MCPClient {
     ///
     /// This also means a tool does not need somewhere public to put an image. A
     /// server on the same machine can just return it.
-    private static func surface(for contents: [MCPContent], titled title: String) -> JSONValue? {
+    static func surface(for contents: [MCPContent], titled title: String) -> JSONValue? {
         let files = contents.compactMap { content -> String? in
             guard case .image(let image) = content,
                   let url = ImageAssets.store(base64: image.base64, mimeType: image.mimeType)
@@ -330,6 +390,11 @@ public actor MCPClient {
             // The one notification that changes what Bud advertises.
             if method == "notifications/tools/list_changed" {
                 _ = try? await listTools()
+            }
+            // A changed resource list can re-point a `ui://` URI at new HTML,
+            // so the cache is dropped rather than trusted past the announcement.
+            if method == "notifications/resources/list_changed" {
+                resourceCache = [:]
             }
         }
     }
