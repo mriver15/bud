@@ -12,6 +12,24 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.20.4
+
+### MCP Apps answer the tools they run
+
+An app's own controls — "fetch evidence", "re-optimize", and the like — call back
+into the server through `tools/call`, and the host answered every one with "not
+available in this version". Worse, that refusal came back shaped as a successful
+result, so the app's SDK read it as an empty answer and rendered "Unsupported
+result".
+
+The app-initiated `tools/call` now routes through the same server-bound gate the
+host already had — scoped to the app's own server and generation, limited to
+tools the server marked app-callable, and honouring the mutation confirmation —
+and the answer is always a real `CallToolResult`. Methods the host still does not
+serve (`resources/read`, messages) fail closed as proper JSON-RPC errors, so the
+app's SDK rejects the promise instead of inventing an empty result.
+
+
 ## Bud 2.20.3
 
 ### The agent no longer loops on render_ui
