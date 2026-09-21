@@ -12,6 +12,16 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.20.7
+
+### Interrupted turns no longer leave a stuck bubble
+
+A turn the process died mid-way through left an empty assistant turn, and the
+transcript rendered it as a perpetual "thinking" bubble when the conversation was
+reopened. Interrupted empty turns are dropped on load — the question and any
+completed work stay.
+
+
 ## Bud 2.20.6
 
 ### Reverts the transcript scroll change
