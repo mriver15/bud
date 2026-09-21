@@ -12,6 +12,22 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.20.2
+
+### MCP Apps: the accent broke the handshake
+
+2.20.1 sent the workspace `--color-accent` so its highlighted badges would match
+Bud. The ext-apps SDK validates the host's CSS variables against a *strict*
+enum, and that name is not in it — an `unrecognized_keys` failure that rejects
+the whole `ui/initialize` response. The app therefore never sent `initialized`,
+the host never delivered its tool input or result, and the workspace sat at
+"Waiting for the tool result…" forever, no matter what the server returned.
+
+The accent is gone: every variable the host sends is inside the SDK's enum, the
+handshake completes, and the workspace renders its result. A regression check
+pins the sent keys to the enum so a future name cannot ship unseen.
+
+
 ## Bud 2.20.1
 
 ### MCP app chrome: the accent and the height
