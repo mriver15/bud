@@ -654,6 +654,7 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
                     )
                 }
                 messages.append(.toolResult(call, result))
+                await publish.publishToolCall(id, name: call.name, result: result)
             }
         }
 
@@ -826,6 +827,20 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
     @MainActor
     private func publishToolCalls(_ id: String, added: Int) {
         mutate(id) { $0.toolCallCount += added }
+    }
+
+    /// One call, appended to the run's record the moment it lands: the panel
+    /// shows what the agent is doing while it is doing it, not a count after
+    /// the fact.
+    @MainActor
+    private func publishToolCall(_ id: String, name: String, result: ToolResult) {
+        mutate(id) { run in
+            let preview = String((result.text ?? "").prefix(160))
+                .replacingOccurrences(of: "\n", with: " ")
+            run.toolCalls.append(
+                SubagentToolCall(name: name, succeeded: !result.isError, preview: preview)
+            )
+        }
     }
 
     /// Cancelling wins over any late failure: a cancelled run is already terminal,

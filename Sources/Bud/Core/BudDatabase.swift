@@ -33,7 +33,7 @@ public final class BudDatabase: @unchecked Sendable {
     /// Bumped when the schema changes. `user_version` is SQLite's own slot for
     /// this, which is better than a table of our own: it cannot be dropped by a
     /// stray query and it is read without preparing a statement.
-    public static let schemaVersion = 4
+    public static let schemaVersion = 5
 
     public static var defaultURL: URL {
         BudConfigLoader.budDirectory.appendingPathComponent("bud.sqlite")
@@ -192,6 +192,9 @@ public final class BudDatabase: @unchecked Sendable {
         addColumnIfMissing("prompt_tokens", in: "conversations", definition: "INTEGER NOT NULL DEFAULT 0")
         addColumnIfMissing("completion_tokens", in: "conversations", definition: "INTEGER NOT NULL DEFAULT 0")
         addColumnIfMissing("pinned", in: "conversations", definition: "INTEGER NOT NULL DEFAULT 0")
+        // v5: the per-call tool record, a JSON array beside the count. NULL
+        // reads as no calls, so rows from before the column exist unchanged.
+        addColumnIfMissing("tool_calls_json", in: "runs", definition: "TEXT")
 
         // v4: the cognitive memory schema, plus the one-time fold of the
         // existing `lessons` table into it. One lock around the whole step so a

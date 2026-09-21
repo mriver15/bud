@@ -411,6 +411,29 @@ public struct SubagentSpec: Sendable {
     }
 }
 
+/// One tool call a subagent made: what it was, whether it worked, and the
+/// start of what came back — enough to see what the agent was doing without
+/// reading its whole conversation.
+public struct SubagentToolCall: Sendable, Codable, Equatable, Identifiable {
+    public var id: String
+    public var name: String
+    public var succeeded: Bool
+    /// The first line or so of the result, newlines folded to spaces.
+    public var preview: String
+
+    public init(
+        id: String = UUID().uuidString,
+        name: String,
+        succeeded: Bool,
+        preview: String
+    ) {
+        self.id = id
+        self.name = name
+        self.succeeded = succeeded
+        self.preview = preview
+    }
+}
+
 public struct SubagentRun: Sendable, Identifiable {
     public var id: String
     public var title: String
@@ -420,6 +443,9 @@ public struct SubagentRun: Sendable, Identifiable {
     public var output: String
     public var reasoning: String
     public var toolCallCount: Int
+    /// What the run actually called, in order — the count answers "how much",
+    /// this answers "what".
+    public var toolCalls: [SubagentToolCall]
     public var startedAt: Date
     public var finishedAt: Date?
     public var error: String?
@@ -443,6 +469,7 @@ public struct SubagentRun: Sendable, Identifiable {
         output: String = "",
         reasoning: String = "",
         toolCallCount: Int = 0,
+        toolCalls: [SubagentToolCall] = [],
         startedAt: Date = Date(),
         finishedAt: Date? = nil,
         error: String? = nil,
@@ -458,6 +485,7 @@ public struct SubagentRun: Sendable, Identifiable {
         self.output = output
         self.reasoning = reasoning
         self.toolCallCount = toolCallCount
+        self.toolCalls = toolCalls
         self.startedAt = startedAt
         self.finishedAt = finishedAt
         self.error = error
