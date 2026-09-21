@@ -12,6 +12,24 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.20.0
+
+### A delegated server's app is visible in the conversation
+
+MCP Apps rendered only when the main agent called the tool directly. A server
+run as a separate agent — which is how `getcompetitive` is set up — did its work
+in the background and the interface it produced never reached the conversation,
+because a subagent's tool calls were reduced to text previews.
+
+A tool result now carries a *list* of apps rather than one, and the subagent
+hands them up instead of dropping them. When a delegated server's tool produces
+an app, it rides the run's record, is hoisted through the `spawn_subagents`
+result, and renders in the main transcript — the subagent still owns the work,
+and its interface is now the visible report, in the chat rather than tucked away
+in the Agents tab. Each run's apps survive the store round trip, and runs
+recorded before this existed still load with none.
+
+
 ## Bud 2.19.1
 
 ### MCP Apps works with the real getcompetitive server
