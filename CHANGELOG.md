@@ -12,6 +12,15 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.20.6
+
+### Reverts the transcript scroll change
+
+2.20.5 pinned the transcript with the native bottom anchor, and that crashed the
+chat window on launch. This release restores the previous follow-scroll; the
+overscroll-under-apps fix will be re-approached without the native anchor.
+
+
 ## Bud 2.20.5
 
 ### The transcript stops overscrolling under MCP apps
