@@ -12,6 +12,21 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.20.5
+
+### The transcript stops overscrolling under MCP apps
+
+An MCP app's frame grows when the app reports its size, and that growth landed
+after the follow-scroll had already read the transcript's height. The follow
+chased a stale offset and overscrolled the transcript — the symptom the new
+workspace showed as the view jumping past the visible cards.
+
+The transcript now pins to the bottom with the native scroll anchor, which
+follows content growth — streamed text and a resizing app alike — instead of the
+manual per-token scroll that misread the app's asynchronous resize. The new-turn
+re-engage is unchanged.
+
+
 ## Bud 2.20.4
 
 ### MCP Apps answer the tools they run
