@@ -12,7 +12,7 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
-## Unreleased
+## Bud 2.13.1
 
 ### Subagent tool calls are visible in the Agents panel
 
@@ -41,7 +41,9 @@ configured decision engine a typed `delegate_to` choice over the roster; a
 confident answer runs the task, a weak one keeps the refusal. And the
 `needs_delegate` decision is finally consumed: the spawn tool is offered because
 the decision layer said the work has to be handed off, not because the model
-named it.
+named it. The worked example that taught the model to paste one invented
+capability phrase on every call is gone: spawning names the roster, and an
+invented name is refused with the real ones.
 
 
 ## Bud 2.13.0
