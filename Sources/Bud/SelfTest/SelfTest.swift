@@ -624,6 +624,47 @@ public enum BudSelfTest {
                     && !body.contains("\n") && !body.contains("\u{01}")
                     && body.contains("\\n") && body.contains("\\'") && body.contains("\\\\"))
 
+        // MARK: The theme variables stay inside the SDK's strict enum
+        // The ext-apps SDK validates `hostContext.styles.variables` against a
+        // *strict* enum of CSS variable names. A key outside it — `--color-accent`
+        // was the one that shipped — is an `unrecognized_keys` failure that
+        // rejects the whole `ui/initialize` response, so the app never sends
+        // `initialized` and the workspace sits at "Waiting for the tool result…"
+        // forever. This mirrors that enum so a new key cannot ship unseen.
+        let allowedVariables: Set<String> = [
+            "--color-background-primary", "--color-background-secondary", "--color-background-tertiary",
+            "--color-background-inverse", "--color-background-ghost", "--color-background-info",
+            "--color-background-danger", "--color-background-success", "--color-background-warning",
+            "--color-background-disabled",
+            "--color-text-primary", "--color-text-secondary", "--color-text-tertiary",
+            "--color-text-inverse", "--color-text-ghost", "--color-text-info", "--color-text-danger",
+            "--color-text-success", "--color-text-warning", "--color-text-disabled",
+            "--color-border-primary", "--color-border-secondary", "--color-border-tertiary",
+            "--color-border-inverse", "--color-border-ghost", "--color-border-info",
+            "--color-border-danger", "--color-border-success", "--color-border-warning",
+            "--color-border-disabled",
+            "--color-ring-primary", "--color-ring-secondary", "--color-ring-inverse",
+            "--color-ring-info", "--color-ring-danger", "--color-ring-success", "--color-ring-warning",
+            "--font-sans", "--font-mono",
+            "--font-weight-normal", "--font-weight-medium", "--font-weight-semibold", "--font-weight-bold",
+            "--font-text-xs-size", "--font-text-sm-size", "--font-text-md-size", "--font-text-lg-size",
+            "--font-heading-xs-size", "--font-heading-sm-size", "--font-heading-md-size",
+            "--font-heading-lg-size", "--font-heading-xl-size", "--font-heading-2xl-size",
+            "--font-heading-3xl-size",
+            "--font-text-xs-line-height", "--font-text-sm-line-height", "--font-text-md-line-height",
+            "--font-text-lg-line-height", "--font-heading-xs-line-height", "--font-heading-sm-line-height",
+            "--font-heading-md-line-height", "--font-heading-lg-line-height",
+            "--font-heading-xl-line-height", "--font-heading-2xl-line-height",
+            "--font-heading-3xl-line-height",
+            "--border-radius-xs", "--border-radius-sm", "--border-radius-md", "--border-radius-lg",
+            "--border-radius-xl", "--border-radius-full", "--border-width-regular",
+            "--shadow-hairline", "--shadow-sm", "--shadow-md", "--shadow-lg",
+        ]
+        let outOfEnum = MCPAppBridge.themeVariables.keys.filter { !allowedVariables.contains($0) }
+        c.check("every theme variable is in the SDK's styles enum", outOfEnum.isEmpty)
+        c.check("...and no accent key sneaks back in",
+                !MCPAppBridge.themeVariables.keys.contains("--color-accent"))
+
         // MARK: Persistence round-trip
 
         let call = ToolCall(id: "c", name: "x", arguments: "{}")

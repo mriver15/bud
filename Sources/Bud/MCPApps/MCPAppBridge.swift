@@ -190,7 +190,13 @@ public final class MCPAppBridge: NSObject, WKScriptMessageHandler {
     /// spec expects. Bud is dark glass, so the light half mirrors the dark half;
     /// apps read these through `applyHostStyleVariables` and fall back on their
     /// own defaults for anything the host does not send.
-    private static let themeVariables: [String: JSONValue] = [
+    ///
+    /// Every key here must be in the SDK's `styles.variables` enum, which is
+    /// *strict*: a key it does not know — `--color-accent` included — is an
+    /// `unrecognized_keys` failure that rejects the whole `ui/initialize`
+    /// response, so the app never sends `initialized` and the handshake dies.
+    /// No accent key survives this gate, so it is deliberately absent.
+    nonisolated static let themeVariables: [String: JSONValue] = [
         "--color-background-primary": .string("light-dark(#ffffff, #171717)"),
         "--color-background-secondary": .string("light-dark(#f3f4f6, #242424)"),
         "--color-background-tertiary": .string("light-dark(#e5e7eb, #2e2e2e)"),
@@ -198,7 +204,6 @@ public final class MCPAppBridge: NSObject, WKScriptMessageHandler {
         "--color-text-secondary": .string("light-dark(#4b5563, #d4d4d4)"),
         "--color-text-tertiary": .string("light-dark(#6b7280, #9ca3af)"),
         "--color-border-primary": .string("light-dark(#e5e7eb, #3f3f3f)"),
-        "--color-accent": .string("light-dark(#4f46e5, #818cf8)"),
         "--font-sans": .string("-apple-system, system-ui, sans-serif"),
         "--font-mono": .string("ui-monospace, SFMono-Regular, monospace"),
     ]
