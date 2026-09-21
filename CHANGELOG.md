@@ -12,6 +12,39 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.18.0
+
+### The browser is three tools instead of thirteen, and a broken key press is fixed
+
+Thirteen browser tools meant thirteen schemas in every browser-shaped request and
+a menu in which clicking, typing, hovering, selecting, pressing and scrolling were
+six names for "act on the element with this ref" — a wide choice set for a model
+already holding twenty other tools, and the wrong place to spend its attention.
+They are now three: `browser_open` to go somewhere, `browser_read` to look — the
+outline, the readable text, the console, or a screenshot for you — and
+`browser_act` to do something, with the actions as an enum in the schema: click,
+type, hover, select, press, scroll, wait, back. Each action's own fields are
+described where the model reads them, and a call that leaves out what an action
+needs is refused with the name of the field it is missing.
+
+That is ten tools and about two thousand characters off every request — the
+prefix is 5,110 tokens instead of 5,620, measured with `--measure` — and nothing
+about what the browser can do. A model that reaches for one of the old names
+still has the right intent and the wrong vocabulary, so the old names resolve to
+the new tools rather than hard-failing.
+
+**A key press never worked.** The press script read its argument under the wrong
+name, so every `browser_press` — and now every `press` action — threw a
+JavaScript exception and did nothing. It was invisible because nothing drove it:
+the browser suite exercised clicking through the tool layer and never pressed a
+key. There is now a check that presses one and reads back what the page received,
+which is what found it.
+
+The memory tool's own description was tightened in the same pass — it had become
+the second-largest schema in the inventory — without dropping any of the rules
+about what is worth keeping or what the id-taking modes require.
+
+
 ## Bud 2.17.0
 
 ### The agent can manage its own memory
