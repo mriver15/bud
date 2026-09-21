@@ -12,6 +12,17 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.12.2
+
+### The Keychain stops asking
+
+Bud kept its secrets in four separate Keychain items, and every update
+re-signed the app as a different identity — so macOS asked for permission
+again, per item, after every release. Secrets now live in one item, the
+app signs with one stable identity, and the old items fold in on first
+run. That first run is the last time it asks.
+
+
 ## Bud 2.12.1
 
 ### Standing instructions, and memory that stops double-saving
