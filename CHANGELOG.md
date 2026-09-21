@@ -12,6 +12,41 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.17.0
+
+### The agent can manage its own memory
+
+Bud's memory tool could add notes and read them back, and that was all. A note
+that had gone stale, or wrong, or duplicated something already there could only
+be corrected by the person, in Settings — even though the model that wrote it in
+the first place is the one that finds out it is wrong.
+
+`remember` and `recall` are now one tool, `memory`, with five modes. `remember`
+keeps something new and hands back the note's id; `search` finds a note again by
+wording and returns the ids; `list` reads them back newest first; `update`
+rewrites a note in place, keeping its id and dragging the retrieval entries filed
+beside it along with the correction; and `forget` drops a note and everything it
+left in retrieval. The mode is an enum in the schema, so the model chooses from
+the modes that exist rather than remembering their names.
+
+Searches are ranked rather than filtered, in three passes: the words themselves,
+then the same IDF-weighted overlap the prompt's own note ranking uses, then a
+prefix pass for the words a model reaches for that are only nearly the words in
+the note — "deployments" against "deploys", "migrations" against "migration". Each
+pass runs only while nothing has matched, so a precise query cannot be diluted by
+a loose one.
+
+`update` and `forget` take an id from a search or a list. There is deliberately no
+way to name a note by its wording for either: a memory removed by approximation is
+worse than one more call, and a note that no longer exists is answered with the
+ids that do. A rewrite that would collide with another note is refused, because
+that is the state `remember` exists to prevent. Standing instructions the person
+wrote are reported by a search and never touched by a write — those are theirs,
+and they are changed in Memory settings.
+
+Two tools became one, so the tool surface in every request is one schema smaller.
+
+
 ## Bud 2.16.0
 
 ### Deleting means deleting, and activity belongs to its conversation
