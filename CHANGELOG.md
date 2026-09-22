@@ -12,6 +12,34 @@ version file in the tree, because a number that has to be edited by hand is one
 that will eventually disagree with the appcast.
 
 
+## Bud 2.21.0
+
+### MCP apps reach the agent, with a gate
+
+An app's controls now talk to the agent, not just the app's own server. A button
+wired to `ui/message` asks first — a confirmation that names the app — and on
+approval runs the follow-up without touching whatever you were typing. What an
+app does through `tools/call` is recorded for the agent to see, and context it
+pushes with `ui/update-model-context` rides into the next turn as data.
+
+### Acted-on apps collapse to their result
+
+An app you have acted on is replaced by a summary of what it returned, instead
+of staying a live web view. A rendered app that is no longer interactive should
+not keep paying for itself.
+
+### A conversation carries values, not every result
+
+Bud tracks the durable pointers a conversation produces — file paths, URLs,
+stored-result handles — and re-sends that compact state rather than every tool
+result it has already moved past. Results leave context once read, with the
+semantic half handled by the existing compaction.
+
+### Subagents don't draw interfaces
+
+A subagent's rendered surface never reaches the main chat window, so `render_ui`
+and `find_image` are no longer offered to subagents.
+
 ## Bud 2.20.7
 
 ### Interrupted turns no longer leave a stuck bubble
