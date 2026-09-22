@@ -917,6 +917,119 @@ public final class AppModel {
         }
     }
 
+    // MARK: MCP app actions
+
+    /// An MCP app asked to send a message to the agent. Confirmed first — an app
+    /// is not the user — then run as a follow-up without touching the composer,
+    /// so whatever the person was typing stays theirs.
+    func handleAppMessage(serverID: String, params: JSONValue) async -> JSONValue {
+        let text = Self.appMessageText(params)
+        guard !text.isEmpty else {
+            return Self.appError("The app sent an empty message.")
+        }
+        let serverName = mcp.servers.first(where: { $0.id == serverID })?.name ?? serverID
+        let request = ToolConfirmation.appMessage(server: serverName, message: text)
+        let decision = await requestAppMessageConfirmation(request)
+        guard decision.isAllowed else {
+            return Self.appError("The message was not sent.")
+        }
+        guard !runtime.isStreaming else {
+            return Self.appError("Bud is busy; the message was not sent.")
+        }
+        await followUp(ToolProvenance.appData(serverName, text))
+        return .object([:])
+    }
+
+    /// Stores context an MCP app pushed for future turns.
+    func updateAppModelContext(serverID: String, params: JSONValue) {
+        runtime.setAppModelContext(server: serverID, content: Self.appContextText(params))
+    }
+
+    /// Records an action an MCP app took, so the agent sees its output on the
+    /// next turn instead of only the app's iframe knowing. Returns the result's
+    /// text, for the transcript to show once the app is culled.
+    @discardableResult
+    func recordAppAction(serverID: String, tool: String, result: JSONValue) -> String {
+        let text = Self.appResultText(result)
+        let serverName = mcp.servers.first(where: { $0.id == serverID })?.name ?? serverID
+        runtime.recordAppAction(server: serverName, tool: tool, result: text)
+        return text
+    }
+
+    /// Starts a turn for a follow-up the user did not type, without touching the
+    /// composer. The budget still applies; only the person's draft is spared.
+    func followUp(_ message: String) async {
+        guard !runtime.isStreaming else { return }
+        if isOverBudget {
+            errorMessage = "This conversation has spent its "
+                + "\(BudFormat.tokens(conversationTokens)) token budget. "
+                + "Raise it in Settings › General, or start a new chat."
+            return
+        }
+        errorMessage = nil
+        turnStarted()
+        runtime.send(message, context: ToolPlanningContext(surface: surface.rawValue))
+    }
+
+    /// Always asks, unlike `requestConfirmation`, which a global "don't confirm"
+    /// can silence: an app message is not a tool the user configured, it is the
+    /// app reaching for the agent.
+    private func requestAppMessageConfirmation(
+        _ request: ToolConfirmation
+    ) async -> ToolConfirmation.Decision {
+        await withCheckedContinuation { continuation in
+            queuedConfirmations.append((request, continuation))
+            presentNextConfirmation()
+        }
+    }
+
+    // MARK: MCP app payload helpers
+
+    /// The text an app's `ui/message` carries: a single `{type,text}` block, a
+    /// `ContentBlock[]` array, or a bare `text` field.
+    private static func appMessageText(_ params: JSONValue) -> String {
+        if let text = params["text"]?.stringValue { return text }
+        if let content = params["content"], let text = contentText(content) { return text }
+        return ""
+    }
+
+    /// The text of a `ui/update-model-context` update: structured content wins,
+    /// then the content blocks.
+    private static func appContextText(_ params: JSONValue) -> String {
+        if let structured = params["structuredContent"], !structured.isNull {
+            return structured.encodedString()
+        }
+        if let content = params["content"], let text = contentText(content) { return text }
+        return ""
+    }
+
+    /// The human-readable text of an app's tool result.
+    private static func appResultText(_ result: JSONValue) -> String {
+        if let content = result["content"], let text = contentText(content) { return text }
+        if let structured = result["structuredContent"], !structured.isNull {
+            return structured.encodedString()
+        }
+        return ""
+    }
+
+    /// The text of a content block: either one `{type,text}` object or an array
+    /// of them.
+    private static func contentText(_ content: JSONValue) -> String? {
+        if let text = content["text"]?.stringValue { return text }
+        let texts = (content.arrayValue ?? []).compactMap { $0["text"]?.stringValue }
+        let joined = texts.joined(separator: "\n")
+        return joined.isEmpty ? nil : joined
+    }
+
+    /// An app-facing `CallToolResult` shaped error, so the app's SDK rejects the
+    /// promise rather than inventing an empty answer.
+    private static func appError(_ message: String) -> JSONValue {
+        .object([
+            "content": .array([.object(["type": .string("text"), "text": .string(message)])]),
+            "isError": .bool(true),
+        ])
+    }
+
     // MARK: Tools
 
     public func refreshTools() async {

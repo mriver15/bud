@@ -48,6 +48,12 @@ public final class MCPAppBridge: NSObject, WKScriptMessageHandler {
     /// The app asked the server to run a tool on its behalf. Wired by the view
     /// to the MCP manager; returns the wire `CallToolResult` to send back.
     public var onServerToolCall: ((JSONValue) async -> JSONValue)?
+    /// The app asked to send a message to the agent. Async because it waits on a
+    /// person to confirm; returns the wire result to send back.
+    public var onUserMessage: ((JSONValue) async -> JSONValue)?
+    /// The app pushed context the agent should carry into future turns.
+    /// Synchronous: the host stores it and acknowledges.
+    public var onUpdateModelContext: ((JSONValue) -> Void)?
 
     private var initialized = false
     private var nextID = 1
@@ -72,6 +78,16 @@ public final class MCPAppBridge: NSObject, WKScriptMessageHandler {
                 Task { [weak self] in
                     guard let self else { return }
                     let result = await onServerToolCall(params)
+                    self.send(JSONRPCResponse(id: id, result: result).json)
+                }
+                return
+            }
+            // `ui/message` waits on a person to confirm, so it too cannot share
+            // the synchronous answer path.
+            if method == "ui/message", let onUserMessage {
+                Task { [weak self] in
+                    guard let self else { return }
+                    let result = await onUserMessage(params)
                     self.send(JSONRPCResponse(id: id, result: result).json)
                 }
                 return
@@ -119,8 +135,15 @@ public final class MCPAppBridge: NSObject, WKScriptMessageHandler {
         case "tools/call":
             // Routed asynchronously above; this is the no-handler fallback.
             return .error(JSONRPCError(code: -32000, message: "tools/call is not available in this version."))
-        case "resources/read", "ui/message", "ui/update-model-context":
-            return .error(JSONRPCError(code: -32000, message: "\(method) is not available in this version."))
+        case "ui/message":
+            // Routed asynchronously above when a handler is wired; otherwise it
+            // cannot be answered and the app is told so.
+            return .error(JSONRPCError(code: -32000, message: "ui/message is not available in this version."))
+        case "ui/update-model-context":
+            onUpdateModelContext?(params)
+            return .result(.object([:]))
+        case "resources/read":
+            return .error(JSONRPCError(code: -32000, message: "resources/read is not available in this version."))
         default:
             return .error(JSONRPCError(code: -32601, message: "Method not found: \(method)"))
         }

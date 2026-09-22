@@ -22,6 +22,10 @@ public enum ToolRisk: String, Sendable, Equatable, CaseIterable {
     /// A mutation through a provider — an MCP server changing something outside
     /// this machine. Confirmed when the server asks for it.
     case externalMutation
+    /// An MCP app handing text to the agent to act on. Not a machine mutation,
+    /// but the same injection surface: app text becomes the next thing the agent
+    /// runs with tools in its hands.
+    case appMessage
 
     /// The class, as the dialog labels it.
     public var label: String {
@@ -31,6 +35,7 @@ public enum ToolRisk: String, Sendable, Equatable, CaseIterable {
         case .localWrite: return "Local write"
         case .execution: return "Execution"
         case .externalMutation: return "External mutation"
+        case .appMessage: return "Message from app"
         }
     }
 
@@ -42,6 +47,7 @@ public enum ToolRisk: String, Sendable, Equatable, CaseIterable {
         case .localWrite: return "square.and.pencil"
         case .execution: return "terminal"
         case .externalMutation: return "arrow.up.forward.square"
+        case .appMessage: return "bubble.left.and.bubble.right"
         }
     }
 }
@@ -212,6 +218,21 @@ public struct ToolConfirmation: Identifiable, Sendable, Equatable {
             preview: nil,
             isCommand: false,
             risk: .externalMutation
+        )
+    }
+
+    /// An MCP app asking to hand a message to the agent. Confirmed because an app
+    /// is not the user: its text becomes the next thing the agent acts on, and it
+    /// must not masquerade as the person's own input.
+    public static func appMessage(server: String, message: String) -> ToolConfirmation {
+        ToolConfirmation(
+            tool: "ui/message",
+            headline: "Allow \(server) to send a message?",
+            detail: message,
+            note: "The agent will read this and act on it.",
+            preview: nil,
+            isCommand: false,
+            risk: .appMessage
         )
     }
 

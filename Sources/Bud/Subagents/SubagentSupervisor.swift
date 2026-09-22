@@ -622,6 +622,14 @@ public final class SubagentSupervisor: SubagentSupervising, ToolProvider {
             tools = await env.registry.descriptors()
             if let agent { tools = tools.filter { agent.allows($0.name) } }
         }
+        // A subagent's rendered surface never reaches the main chat window, so
+        // the presentation pair is dead weight: `render_ui` draws something nobody
+        // sees, and `find_image` exists only to feed it. Withheld from every
+        // subagent, named or unnamed.
+        tools.removeAll {
+            $0.name == GenUIToolProvider.renderToolName
+                || $0.name == GenUIToolProvider.findToolName
+        }
         // Delegation is offered while there is depth left for it. Withheld past
         // that, so the model is not handed a tool whose only answer is a refusal.
         if spec.depth >= maxDepth {

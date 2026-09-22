@@ -122,6 +122,7 @@ extension Conversation {
         let userMessageIndices = messages.indices.filter {
             messages[$0].role == .user
                 && !messages[$0].content.hasPrefix(HistoryCompactor.summaryPrefix)
+                && !messages[$0].content.hasPrefix(ToolProvenance.appDataPrefix)
         }
         // Everything before the first exchange whose message was compacted away
         // is the summary message itself, so its boundary is the summary's end.
@@ -131,7 +132,8 @@ extension Conversation {
 
         var boundaries: [ExchangeBoundary] = []
         var userTurnOrdinal = 0
-        for (index, turn) in turns.enumerated() where turn.role == .user {
+        for (index, turn) in turns.enumerated()
+        where turn.role == .user && !turn.plainText.hasPrefix(ToolProvenance.appDataPrefix) {
             let historyCount = userTurnOrdinal < userMessageIndices.count
                 ? userMessageIndices[userTurnOrdinal]
                 : summaryEnd

@@ -608,6 +608,9 @@ private struct ToolActivityRow: View {
 
     @BudState private var isExpanded = false
     @BudState private var appPhase: MCPAppPhase?
+    /// Apps the user has acted on, keyed by id, replaced by the result text so a
+    /// live web view that is no longer interactive does not keep paying for itself.
+    @BudState private var actedApps: [String: String] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: Bud.Space.sm) {
@@ -649,11 +652,31 @@ private struct ToolActivityRow: View {
         Group {
             switch appPhase {
             case .rendered(let resource):
-                MCPAppShell(resource: resource, attachment: app) { params in
-                    await model.mcp.serveAppToolCall(
-                        serverID: app.serverID,
-                        params: params,
-                        generation: app.generation
+                if let summary = actedApps[app.id] {
+                    appSummary(summary)
+                } else {
+                    MCPAppShell(
+                        resource: resource,
+                        attachment: app,
+                        onServerToolCall: { params in
+                            let result = await model.mcp.serveAppToolCall(
+                                serverID: app.serverID,
+                                params: params,
+                                generation: app.generation
+                            )
+                            let tool = params["name"]?.stringValue ?? app.toolName
+                            let summary = model.recordAppAction(
+                                serverID: app.serverID, tool: tool, result: result
+                            )
+                            actedApps[app.id] = summary
+                            return result
+                        },
+                        onUserMessage: { params in
+                            await model.handleAppMessage(serverID: app.serverID, params: params)
+                        },
+                        onUpdateModelContext: { params in
+                            model.updateAppModelContext(serverID: app.serverID, params: params)
+                        }
                     )
                 }
             case .failed(let message):
@@ -682,6 +705,26 @@ private struct ToolActivityRow: View {
             case .success(let resource): appPhase = .rendered(resource)
             case .failure(let error): appPhase = .failed(error.errorDescription ?? "The app is unavailable.")
             }
+        }
+    }
+
+    /// The culled form of an app that has been acted on: a live web view that is
+    /// no longer interactive is worth replacing with the outcome it produced.
+    private func appSummary(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: Bud.Space.xs) {
+            Label("Acted on", systemImage: "checkmark.circle")
+                .font(Bud.Font.caption)
+                .foregroundStyle(.secondary)
+            Text(text.isEmpty ? "Done." : text)
+                .font(Bud.Font.callout)
+                .lineLimit(8)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(Bud.Space.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: Bud.Radius.control, style: .continuous)
+                .fill(Color.white.opacity(0.04))
         }
     }
 

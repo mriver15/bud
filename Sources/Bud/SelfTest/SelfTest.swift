@@ -128,6 +128,8 @@ public enum BudSelfTest {
             harnessEval,
             descriptorCompaction,
             historyCompaction,
+            conversationState,
+            mcpAppComms,
             promptSelection,
             markerHandles,
             tokenBenchmark,
@@ -3140,6 +3142,159 @@ public enum BudSelfTest {
         } else {
             c.check("the summary round-trips the archive", false)
         }
+
+        return c.report()
+    }
+
+    /// The tracked conversation state: durable pointers distilled from results,
+    /// deduped, capped, and rendered into the prompt in place of the raw text.
+    static func conversationState() -> SelfTestReport {
+        let c = Checker(suite: "conversation state")
+
+        // Extraction classifies the three durable value kinds in one pass.
+        let text = """
+        Read https://example.com/docs and the file at /Users/river/notes.md.
+        Earlier output was spilled to store_1a2b3c4d; a stray store_zzzz is not a handle.
+        """
+        let entries = ConversationState.extract(from: text, source: "read_file")
+        c.check("a URL is tracked",
+                entries.contains { $0.kind == .url && $0.value == "https://example.com/docs" })
+        c.check("a path is tracked",
+                entries.contains { $0.kind == .path && $0.value == "/Users/river/notes.md" })
+        c.check("a store handle is tracked",
+                entries.contains { $0.kind == .storeHandle && $0.value == "store_1a2b3c4d" })
+        c.check("a token that only looks like a handle is not",
+                !entries.contains { $0.kind == .storeHandle && $0.value == "store_zzzz" })
+
+        // Merge dedupes by identity and prunes the oldest past the cap.
+        var state = ConversationState.empty
+        state.merge(ConversationState.extract(from: text, source: "read_file"))
+        let once = state.entries.count
+        state.merge(ConversationState.extract(from: text, source: "browser_read"))
+        c.equal("the same value from two sources is one value", state.entries.count, once)
+        var capped = ConversationState.empty
+        capped.merge((0..<60).map {
+            ConversationState.Entry(kind: .path, value: "/p/\($0)", source: "t")
+        })
+        c.equal("the cap holds and keeps the newest", capped.entries.count, ConversationState.cap)
+        c.check("...dropping the oldest first", capped.entries.first?.value == "/p/20")
+
+        // Rendering groups by kind and frames the block as recorded data.
+        let rendered = state.render()
+        c.check("the block is framed as data",
+                rendered.hasPrefix("[Conversation state — recorded data"))
+        c.check("...and groups the kinds",
+                rendered.contains("Paths: /Users/river/notes.md")
+                && rendered.contains("URLs: https://example.com/docs")
+                && rendered.contains("Stored: store_1a2b3c4d"))
+
+        // Recovery re-derives the state from the messages a history holds.
+        let history = [
+            ChatMessage(role: .user, content: "read /Users/river/notes.md"),
+            ChatMessage(role: .assistant, toolCalls: [ToolCall(id: "a", name: "read_file", arguments: "{}")]),
+            ChatMessage(role: .tool, content: "the file lives at /Users/river/notes.md",
+                        toolCallID: "a", name: "read_file"),
+        ]
+        let recovered = ConversationState.recovered(from: history)
+        c.check("recovery distills tool results and answers",
+                recovered.entries.contains { $0.value == "/Users/river/notes.md" })
+
+        // Consumed results: an earlier turn's tool result leaves context once the
+        // model has answered it, while the current turn's stays verbatim.
+        let consumed = ContextCompiler.distillConsumed([
+            ChatMessage(role: .user, content: "first"),
+            ChatMessage(role: .assistant, toolCalls: [ToolCall(id: "x", name: "read_file", arguments: "{}")]),
+            ChatMessage(role: .tool, content: String(repeating: "z", count: 500), toolCallID: "x", name: "read_file"),
+            ChatMessage(role: .assistant, content: "done"),
+            ChatMessage(role: .user, content: "second"),
+            ChatMessage(role: .assistant, toolCalls: [ToolCall(id: "y", name: "read_file", arguments: "{}")]),
+            ChatMessage(role: .tool, content: String(repeating: "q", count: 500), toolCallID: "y", name: "read_file"),
+        ])
+        c.check("an answered turn's result leaves context",
+                consumed.messages[2].content.hasPrefix("[Earlier result"))
+        c.check("...but the current turn's result stays verbatim",
+                consumed.messages[6].content == String(repeating: "q", count: 500))
+        c.check("...and the drop is reported", consumed.dropped > 0)
+        c.check("...without orphaning the call",
+                consumed.messages[2].role == .tool
+                && consumed.messages[1].toolCalls.contains { $0.id == "x" })
+
+        // The compiler places the state block between notes and skills.
+        let compiler = ContextCompiler()
+        let fixedNow = Date(timeIntervalSince1970: 1_752_000_000)
+        let compiled = compiler.compile(CompilationInputs(
+            systemPrompt: "You are Bud.", model: "m", reasoningEffort: nil,
+            historyBudgetChars: 10_000, history: [], tools: [],
+            notes: "the user prefers concise answers",
+            skillCatalogue: "SKILLS", promotedSkills: [],
+            memorySection: "MEMORY SECTION",
+            state: state.render(), omittedNote: nil, now: fixedNow
+        ))
+        let notesAt = compiled.system.range(of: "concise answers")!.lowerBound
+        let stateAt = compiled.system.range(of: "[Conversation state —")!.lowerBound
+        let skillsAt = compiled.system.range(of: "SKILLS")!.lowerBound
+        c.check("the state block lands between notes and skills",
+                notesAt < stateAt && stateAt < skillsAt)
+        let bare = compiler.compile(CompilationInputs(
+            systemPrompt: "You are Bud.", model: "m", reasoningEffort: nil,
+            historyBudgetChars: 10_000, history: [], tools: [],
+            notes: "", skillCatalogue: "", promotedSkills: [],
+            memorySection: "", state: "", omittedNote: nil, now: fixedNow
+        ))
+        c.check("an empty state keeps the payload as before",
+                bare.system.hasPrefix("You are Bud.\nDefault model for this session: m."))
+
+        return c.report()
+    }
+
+    /// App→agent communication: a message an MCP app contributes is framed as
+    /// data, asks before it runs, and never reads as a user turn.
+    static func mcpAppComms() -> SelfTestReport {
+        let c = Checker(suite: "mcp app comms")
+
+        // The confirmation is the gate: an app is not the user.
+        let request = ToolConfirmation.appMessage(server: "weather", message: "Show rain for Friday")
+        c.equal("an app message asks as a message-from-app", request.risk, .appMessage)
+        c.equal("...and carries the agent-facing text", request.detail, "Show rain for Friday")
+        c.check("...under the app's name", request.headline.contains("weather"))
+
+        // Framing keeps app text from reading as the user's own.
+        let framed = ToolProvenance.appData("weather", "it will rain")
+        c.check("app data is fenced", framed.hasPrefix(ToolProvenance.appDataPrefix))
+
+        // Exchange boundaries skip app data: a follow-up does not consume a turn.
+        let turns = [Turn(role: .user, segments: [.text(id: "a", text: "hi")])]
+        let messages = [
+            ChatMessage(role: .user, content: "hi"),
+            ChatMessage(role: .user, content: ToolProvenance.appData("weather", "it will rain")),
+        ]
+        let boundaries = Conversation.exchangeBoundaries(turns: turns, messages: messages)
+        c.equal("app data does not steal a user-turn slot", boundaries.count, 1)
+        c.equal("...and the one user turn pairs with the real user message",
+                boundaries.first?.historyCount, 0)
+
+        // A follow-up is a turn too, and it must not break the pairing either.
+        let followedTurns = turns + [Turn(role: .user, segments: [
+            .text(id: "b", text: ToolProvenance.appData("weather", "it will rain")),
+        ])]
+        let followedMessages = messages
+        let followed = Conversation.exchangeBoundaries(turns: followedTurns, messages: followedMessages)
+        c.equal("a follow-up turn is skipped, keeping the pairing intact", followed.count, 1)
+
+        // The compiler places the app-pushed context as a fenced data block.
+        let compiler = ContextCompiler()
+        let fixedNow = Date(timeIntervalSince1970: 1_752_000_000)
+        let compiled = compiler.compile(CompilationInputs(
+            systemPrompt: "You are Bud.", model: "m", reasoningEffort: nil,
+            historyBudgetChars: 10_000, history: [], tools: [],
+            notes: "", skillCatalogue: "SKILLS", promotedSkills: [],
+            memorySection: "", state: "",
+            appContext: "weather: rain", omittedNote: nil, now: fixedNow
+        ))
+        c.check("app context lands in the system prompt as data",
+                compiled.system.contains(ToolProvenance.appDataPrefix))
+        c.check("...carrying what the app pushed",
+                compiled.system.contains("weather: rain"))
 
         return c.report()
     }

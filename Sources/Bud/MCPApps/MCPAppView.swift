@@ -129,6 +129,8 @@ public struct MCPAppWebView: NSViewRepresentable {
     let resource: MCPAppResource
     let attachment: MCPAppAttachment
     let onServerToolCall: (JSONValue) async -> JSONValue
+    let onUserMessage: (JSONValue) async -> JSONValue
+    let onUpdateModelContext: (JSONValue) -> Void
     let onSizeChange: (CGSize?) -> Void
 
     public func makeCoordinator() -> MCPAppCoordinator {
@@ -138,6 +140,8 @@ public struct MCPAppWebView: NSViewRepresentable {
             onServerToolCall: onServerToolCall
         )
         coordinator.onSizeChange = onSizeChange
+        coordinator.bridge.onUserMessage = onUserMessage
+        coordinator.bridge.onUpdateModelContext = onUpdateModelContext
         return coordinator
     }
 
@@ -147,6 +151,8 @@ public struct MCPAppWebView: NSViewRepresentable {
 
     public func updateNSView(_ nsView: WKWebView, context: Context) {
         context.coordinator.onSizeChange = onSizeChange
+        context.coordinator.bridge.onUserMessage = onUserMessage
+        context.coordinator.bridge.onUpdateModelContext = onUpdateModelContext
     }
 
     public static func dismantleNSView(_ nsView: WKWebView, coordinator: MCPAppCoordinator) {
@@ -167,6 +173,8 @@ public struct MCPAppShell: View {
     let resource: MCPAppResource
     let attachment: MCPAppAttachment
     let onServerToolCall: (JSONValue) async -> JSONValue
+    let onUserMessage: (JSONValue) async -> JSONValue
+    let onUpdateModelContext: (JSONValue) -> Void
 
     @BudState private var height: CGFloat = 520
 
@@ -175,7 +183,9 @@ public struct MCPAppShell: View {
             MCPAppWebView(
                 resource: resource,
                 attachment: attachment,
-                onServerToolCall: onServerToolCall
+                onServerToolCall: onServerToolCall,
+                onUserMessage: onUserMessage,
+                onUpdateModelContext: onUpdateModelContext
             ) { size in
                 guard let size else { return }
                 // The app reports its content height; the host fits it, within

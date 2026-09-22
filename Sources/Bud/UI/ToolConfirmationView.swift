@@ -72,7 +72,7 @@ struct ToolConfirmationView: View {
         case .read, .externalRead: return Color.secondary
         case .localWrite: return Bud.Palette.accent
         case .execution: return Bud.Palette.danger
-        case .externalMutation: return Bud.Palette.warning
+        case .externalMutation, .appMessage: return Bud.Palette.warning
         }
     }
 

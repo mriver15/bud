@@ -22,6 +22,12 @@ public struct CompilationInputs: Sendable {
     /// The decision-gated memory section (Phase 6), pre-rendered by the
     /// memory resolver. Empty keeps the pre-rework payload byte-identical.
     public var memorySection: String
+    /// The tracked conversation state (paths, URLs, store handles), pre-rendered
+    /// by ``ConversationState``. Empty keeps the payload unchanged.
+    public var state: String
+    /// Context the MCP apps pushed via `ui/update-model-context`, pre-rendered.
+    /// Empty keeps the payload unchanged.
+    public var appContext: String
     public var omittedNote: String?
     /// When the compiled request is stamped. Injected rather than read here so
     /// a fixture can pin the clock and the output is deterministic.
@@ -38,6 +44,8 @@ public struct CompilationInputs: Sendable {
         skillCatalogue: String,
         promotedSkills: [String],
         memorySection: String = "",
+        state: String = "",
+        appContext: String = "",
         omittedNote: String?,
         now: Date
     ) {
@@ -51,6 +59,8 @@ public struct CompilationInputs: Sendable {
         self.skillCatalogue = skillCatalogue
         self.promotedSkills = promotedSkills
         self.memorySection = memorySection
+        self.state = state
+        self.appContext = appContext
         self.omittedNote = omittedNote
         self.now = now
     }
@@ -134,6 +144,10 @@ public struct ContextCompiler: ContextCompiling {
         // what the planner held back this round.
         if !inputs.notes.isEmpty { text += "\n\n" + ToolProvenance.rememberedNotes(inputs.notes) }
         if !inputs.memorySection.isEmpty { text += "\n\n" + inputs.memorySection }
+        if !inputs.state.isEmpty { text += "\n\n" + inputs.state }
+        if !inputs.appContext.isEmpty {
+            text += "\n\n" + ToolProvenance.appDataPrefix + "\n" + inputs.appContext
+        }
         if !inputs.skillCatalogue.isEmpty { text += "\n\n" + inputs.skillCatalogue }
         if let omitted = inputs.omittedNote, !omitted.isEmpty {
             text += "\n\n" + omitted
@@ -147,7 +161,8 @@ public struct ContextCompiler: ContextCompiling {
         stamp.dateFormat = "EEEE, d MMMM yyyy, HH:mm"
         text += "\n\nCurrent time: \(stamp.string(from: inputs.now))."
 
-        let bounded = Self.bounded(inputs.history, budget: inputs.historyBudgetChars)
+        let distilled = Self.distillConsumed(inputs.history)
+        let bounded = Self.bounded(distilled.messages, budget: inputs.historyBudgetChars)
 
         let toolChars = inputs.tools.reduce(0) {
             $0 + $1.name.count + $1.description.count + $1.schema.stringContentLength
@@ -171,7 +186,7 @@ public struct ContextCompiler: ContextCompiling {
                 ledger: ledger,
                 notesCharacters: inputs.notes.count,
                 promotedSkills: inputs.promotedSkills,
-                droppedHistoryCharacters: bounded.dropped,
+                droppedHistoryCharacters: distilled.dropped + bounded.dropped,
                 offeredToolCount: inputs.tools.count
             )
         )
@@ -253,6 +268,48 @@ public struct ContextCompiler: ContextCompiling {
               let tokenRange = Range(match.range, in: content) else { return nil }
         let token = String(content[tokenRange]).lowercased()
         return FileManager.default.fileExists(atPath: StoredResults.url(for: token).path) ? token : nil
+    }
+
+    // MARK: - Consumed-result distillation
+
+    /// Tool results from turns the model has already answered are replaced with a
+    /// compact marker, so a later request carries the durable values (in the
+    /// conversation-state block) instead of re-reading every result it moved past.
+    ///
+    /// The cut is the most recent user message: everything the current question
+    /// produced is still active work and stays verbatim, while a result an
+    /// earlier turn already read and answered is only recoverable, not required,
+    /// on the next request. The call/result pairing is untouched — only the
+    /// content is replaced — and the transcript keeps the full text; only the
+    /// model is bounded.
+    static func distillConsumed(
+        _ messages: [ChatMessage]
+    ) -> (messages: [ChatMessage], dropped: Int) {
+        guard let lastUser = messages.lastIndex(where: {
+            $0.role == .user && !$0.content.hasPrefix(HistoryCompactor.summaryPrefix)
+        }) else { return (messages, 0) }
+
+        var out = messages
+        var dropped = 0
+        for index in out.indices where index < lastUser && out[index].role == .tool {
+            let content = out[index].content
+            guard content.count > dropThreshold else { continue }
+            let marker = consumedMarker(for: content)
+            guard marker.count < content.count else { continue }
+            dropped += content.count
+            out[index].content = marker
+        }
+        return (out, dropped)
+    }
+
+    /// The marker a consumed result leaves behind. Kept honest about how to get
+    /// the text back: a spilled result keeps its handle, anything else is a call
+    /// away.
+    private static func consumedMarker(for content: String) -> String {
+        if let handle = storedHandle(in: content) {
+            return "[Earlier result, stored as \(handle) — read_stored to retrieve.]"
+        }
+        return "[Earlier result, no longer carried — re-run the tool to see it again.]"
     }
 
     // MARK: - Memory ranking input

@@ -42,6 +42,15 @@ public final class AgentRuntime {
     /// last summary is stale; the actual summarisation runs after the turn.
     private var summarisationOwed = false
 
+    /// The tracked values this conversation has distilled from its tool results
+    /// and answers — paths, URLs, store handles — rendered into the prompt each
+    /// turn instead of re-sending the results they came from.
+    private var conversationState = ConversationState.empty
+
+    /// Context the MCP apps pushed via `ui/update-model-context`, keyed by server
+    /// and overwritten per update. Rendered into future turns as recorded data.
+    private var appModelContext: [String: String] = [:]
+
     /// Phase 1 of the context-harness rework: every round leaves a shadow
     /// ContextMap describing what the request path decided, without touching the
     /// payload. Kept as a bounded ring so a long conversation leaves its recent
@@ -170,6 +179,7 @@ public final class AgentRuntime {
         isStreaming = false
         summarisationOwed = false
         reestablishSummaryState()
+        conversationState = ConversationState.recovered(from: savedHistory)
     }
 
     // MARK: - Public control
@@ -184,6 +194,8 @@ public final class AgentRuntime {
         contextSummary = nil
         summaryAtMessageCount = nil
         summarisationOwed = false
+        conversationState = ConversationState.empty
+        appModelContext.removeAll()
         shadowMaps.removeAll()
         shadowDivergences.removeAll()
         shadowRound = 1
@@ -292,6 +304,7 @@ public final class AgentRuntime {
         lastRoundCount = 0
         summarisationOwed = false
         reestablishSummaryState()
+        conversationState = ConversationState.recovered(from: checkpoint.history)
     }
 
     // MARK: - Planning
@@ -700,6 +713,12 @@ public final class AgentRuntime {
                     // Framed, so text that came back from a page or a server is
                     // not read as something the user asked for.
                     history.append(.toolResult(call, result))
+                    // Distill the durable pointers out of the result now, while
+                    // the whole text is in hand — the state outlives the result
+                    // when the budget or a compaction empties it from history.
+                    conversationState.merge(
+                        ConversationState.extract(from: result.text, source: call.name)
+                    )
                 }
                 // This turn's last event is its final tool result landing, so its
                 // wall time includes the execution that fills in its tool segments.
@@ -729,6 +748,31 @@ public final class AgentRuntime {
         let answer = assistant.plainText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !answer.isEmpty, assistant.error == nil else { return }
         history.append(ChatMessage(role: .assistant, content: answer))
+        conversationState.merge(ConversationState.extract(from: answer, source: "answer"))
+    }
+
+    // MARK: - MCP app feedback
+
+    /// Stores context an MCP app pushed via `ui/update-model-context`, keyed by
+    /// server and overwriting the previous. Empty clears the slot.
+    public func setAppModelContext(server: String, content: String) {
+        if content.isEmpty {
+            appModelContext.removeValue(forKey: server)
+        } else {
+            appModelContext[server] = content
+        }
+    }
+
+    /// Records an action an MCP app took — a tool it called on its own server —
+    /// so the agent sees the outcome on its next turn instead of only the app's
+    /// iframe knowing. Framed as app data, never as the user's own words.
+    public func recordAppAction(server: String, tool: String, result: String) {
+        let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        history.append(ChatMessage(
+            role: .user,
+            content: ToolProvenance.appData(server, "\(tool) returned:\n\(trimmed)")
+        ))
     }
 
     private enum RoundOutcome {
@@ -1150,6 +1194,16 @@ public final class AgentRuntime {
         turn.segments = segments
     }
 
+    /// The app-pushed context as one compact block, servers ordered by name so
+    /// the payload is deterministic.
+    private func appContextBody() -> String {
+        guard !appModelContext.isEmpty else { return "" }
+        return appModelContext
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key): \($0.value)" }
+            .joined(separator: "\n\n")
+    }
+
     /// The compiler inputs one request needs: retrieval first, compilation
     /// second, so the compiler itself stays a pure transformation.
     ///
@@ -1189,6 +1243,8 @@ public final class AgentRuntime {
                     candidates: lastRetrieval
                 )
                 : "",
+            state: conversationState.render(),
+            appContext: appContextBody(),
             omittedNote: omittedNote,
             now: Date()
         )
